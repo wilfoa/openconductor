@@ -43,15 +43,16 @@ type SessionStateChangedMsg struct {
 	Detail      string
 }
 
-// AttentionMsg is sent when attention detection fires.
-type AttentionMsg struct {
-	ProjectName string
-	Type        string
-	Detail      string
+// TabClosedMsg is sent when a user clicks the close button on a tab.
+type TabClosedMsg struct {
+	Name string
 }
 
 // TickMsg triggers periodic checks (attention detection, etc).
 type TickMsg struct{}
+
+// AnimTickMsg triggers the working badge animation (~300ms).
+type AnimTickMsg struct{}
 
 // ProjectAddedMsg is sent when a new project is added via the form.
 type ProjectAddedMsg struct {

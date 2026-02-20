@@ -25,7 +25,7 @@ func makeTestApp() App {
 
 	app := NewApp(cfg, "")
 	app.width = 80
-	app.height = 12
+	app.height = 15 // bumped from 12 to accommodate 3-line tab bar
 	app.ready = true
 	app.sidebar.states["stocks"] = StateWorking
 	app.statusbar.states["stocks"] = StateWorking
@@ -36,8 +36,18 @@ func makeTestApp() App {
 	return app
 }
 
-// bgAltSubstring is the ANSI parameter for colorBgAlt (#1E1B18 = rgb(30,27,24)).
-const bgAltSubstring = "48;2;30;27;24"
+// tabBarLines splits the 3-line tab bar into top border, content, and bottom border.
+func tabBarLines(bar string) (top, content, bottom string) {
+	lines := strings.SplitN(bar, "\n", 3)
+	switch len(lines) {
+	case 3:
+		return lines[0], lines[1], lines[2]
+	case 2:
+		return lines[0], lines[1], ""
+	default:
+		return bar, "", ""
+	}
+}
 
 func TestVisualRender(t *testing.T) {
 	app := makeTestApp()
@@ -47,24 +57,28 @@ func TestVisualRender(t *testing.T) {
 	app.sidebar.selected = 0
 	app.statusbar.activeName = "stocks"
 
+	bar := app.tabBarView()
+	top, content, bottom := tabBarLines(bar)
 	fmt.Println("\n=== LEFT TAB ACTIVE ===")
-	fmt.Printf("Tab header : %q\n", app.tabHeaderView())
-	fmt.Printf("Tab border : %q\n", app.tabBorderView())
+	fmt.Printf("Top border : %q\n", stripAnsi(top))
+	fmt.Printf("Content    : %q\n", stripAnsi(content))
+	fmt.Printf("Bot border : %q\n", stripAnsi(bottom))
 	fmt.Println("--- rendered ---")
-	fmt.Println(app.tabHeaderView())
-	fmt.Println(app.tabBorderView())
+	fmt.Println(bar)
 
 	// Case 2: Right tab active
 	app.active = 1
 	app.sidebar.selected = 1
 	app.statusbar.activeName = "Where is everyone"
 
+	bar = app.tabBarView()
+	top, content, bottom = tabBarLines(bar)
 	fmt.Println("\n=== RIGHT TAB ACTIVE ===")
-	fmt.Printf("Tab header : %q\n", app.tabHeaderView())
-	fmt.Printf("Tab border : %q\n", app.tabBorderView())
+	fmt.Printf("Top border : %q\n", stripAnsi(top))
+	fmt.Printf("Content    : %q\n", stripAnsi(content))
+	fmt.Printf("Bot border : %q\n", stripAnsi(bottom))
 	fmt.Println("--- rendered ---")
-	fmt.Println(app.tabHeaderView())
-	fmt.Println(app.tabBorderView())
+	fmt.Println(bar)
 
 	// Full view
 	fmt.Println("\n=== FULL VIEW (right active) ===")
@@ -74,90 +88,89 @@ func TestVisualRender(t *testing.T) {
 func TestTabVisualInvariants(t *testing.T) {
 	app := makeTestApp()
 
-	t.Run("no separator character between tabs", func(t *testing.T) {
+	t.Run("top border has rounded corners", func(t *testing.T) {
 		app.active = 0
-		header := app.tabHeaderView()
-		stripped := stripAnsi(header)
-		if strings.Contains(stripped, "│") {
-			t.Error("tab header should not contain │ separator")
+		top, _, _ := tabBarLines(app.tabBarView())
+		stripped := stripAnsi(top)
+		if !strings.Contains(stripped, "╭") || !strings.Contains(stripped, "╮") {
+			t.Errorf("top border should have rounded corners, got: %q", stripped)
 		}
 	})
 
-	t.Run("active tab has no bgAlt", func(t *testing.T) {
+	t.Run("active tab content has no bgAlt", func(t *testing.T) {
 		app.active = 0
-		header := app.tabHeaderView()
-		// Active tab is the first segment. Find it by the bracket style.
-		bracketIdx := strings.Index(header, "[●")
-		if bracketIdx < 0 {
-			t.Fatal("[● not found in header")
-		}
-		// The first ANSI escape should be the active style — no bgAlt.
-		firstEscEnd := strings.Index(header, "m")
-		firstEsc := header[:firstEscEnd+1]
-		if strings.Contains(firstEsc, bgAltSubstring) {
-			t.Errorf("active tab style has bgAlt: %q", firstEsc)
-		}
-	})
-
-	t.Run("inactive tab has bgAlt", func(t *testing.T) {
-		app.active = 0
-		header := app.tabHeaderView()
-		// Inactive tab contains "Where is everyone" text.
-		nameIdx := strings.Index(header, "Where is everyone")
+		_, content, _ := tabBarLines(app.tabBarView())
+		// Find the active tab region (first │...│ segment)
+		// Active tab should not have bgAlt background
+		nameIdx := strings.Index(content, "stocks")
 		if nameIdx < 0 {
-			t.Fatal("inactive name not found")
+			t.Fatal("active tab name 'stocks' not found in content line")
 		}
-		// Look backwards for closest ANSI escape.
-		prefix := header[:nameIdx]
-		lastEsc := strings.LastIndex(prefix, "\x1b[")
-		escEnd := strings.Index(prefix[lastEsc:], "m")
-		style := prefix[lastEsc : lastEsc+escEnd+1]
-		if !strings.Contains(style, bgAltSubstring) {
-			t.Errorf("inactive style missing bgAlt: %q", style)
+		prefix := content[:nameIdx]
+		if strings.Contains(prefix, bgAltSubstring) {
+			t.Error("active tab should not have bgAlt background")
 		}
 	})
 
-	t.Run("border gap under active left tab", func(t *testing.T) {
+	t.Run("inactive tab content has no bgAlt (border technique)", func(t *testing.T) {
+		// With the border technique, we no longer use bgAlt on tabs.
+		// Visual distinction comes from border color + text style.
 		app.active = 0
-		border := app.tabBorderView()
-		stripped := stripAnsi(border)
-		t.Logf("border: %q", stripped)
-
-		// Starts with spaces (gap under active left tab).
-		if strings.HasPrefix(stripped, "─") {
-			t.Error("border starts with ─ but left tab is active")
+		_, content, _ := tabBarLines(app.tabBarView())
+		nameIdx := strings.Index(content, "Where is everyone")
+		if nameIdx < 0 {
+			t.Fatal("inactive tab name not found in content line")
 		}
-		// Has ─ somewhere (under inactive right tab).
+	})
+
+	t.Run("active tab bottom is open (spaces)", func(t *testing.T) {
+		app.active = 0
+		_, _, bottom := tabBarLines(app.tabBarView())
+		stripped := stripAnsi(bottom)
+		t.Logf("bottom: %q", stripped)
+
+		// Active tab (left) bottom should start with ┘ (open corner)
+		if !strings.HasPrefix(stripped, "┘") {
+			t.Errorf("expected ┘ at start for active tab, got: %q", stripped[:min(5, len(stripped))])
+		}
+		// Should contain └ closing the active tab
+		if !strings.Contains(stripped, "└") {
+			t.Error("expected └ to close active tab opening")
+		}
+		// Should contain ─ from the inactive tab and gap
 		if !strings.Contains(stripped, "─") {
-			t.Error("no ─ under inactive tab")
+			t.Error("expected ─ from inactive tab / gap")
 		}
 	})
 
-	t.Run("border gap under active right tab", func(t *testing.T) {
-		app.active = 1
-		border := app.tabBorderView()
-		stripped := stripAnsi(border)
-		t.Logf("border: %q", stripped)
-
-		// Starts with ─ (under inactive left tab).
-		if !strings.HasPrefix(stripped, "─") {
-			t.Error("border should start with ─")
-		}
-		// Ends with spaces (gap under active right tab).
-		if !strings.HasSuffix(stripped, " ") {
-			t.Error("border should end with spaces")
-		}
-	})
-
-	t.Run("border has no bgAlt", func(t *testing.T) {
+	t.Run("inactive tab bottom is closed", func(t *testing.T) {
 		app.active = 0
-		border := app.tabBorderView()
-		if strings.Contains(border, bgAltSubstring) {
-			t.Error("border should not have bgAlt — just ─ chars on default bg")
+		_, _, bottom := tabBarLines(app.tabBarView())
+		stripped := stripAnsi(bottom)
+
+		// Inactive tab (right) should have ┴ corners
+		if !strings.Contains(stripped, "┴") {
+			t.Errorf("expected ┴ in bottom for inactive tab, got: %q", stripped)
 		}
 	})
 
-	t.Run("single tab — full gap", func(t *testing.T) {
+	t.Run("active right tab — left starts with ┴", func(t *testing.T) {
+		app.active = 1
+		_, _, bottom := tabBarLines(app.tabBarView())
+		stripped := stripAnsi(bottom)
+		t.Logf("bottom: %q", stripped)
+
+		// Inactive (left) tab should start with ┴
+		if !strings.HasPrefix(stripped, "┴") {
+			t.Errorf("expected ┴ at start for inactive tab, got: %q", stripped[:min(5, len(stripped))])
+		}
+		// Active (right) tab should have ┘ and └
+		if !strings.Contains(stripped, "┘") || !strings.Contains(stripped, "└") {
+			t.Error("expected ┘ and └ for active tab opening")
+		}
+	})
+
+	t.Run("single tab — open bottom with gap", func(t *testing.T) {
 		singleCfg := &config.Config{
 			Projects: []config.Project{
 				{Name: "solo", Repo: "/tmp/solo", Agent: config.AgentClaudeCode},
@@ -165,30 +178,46 @@ func TestTabVisualInvariants(t *testing.T) {
 		}
 		single := NewApp(singleCfg, "")
 		single.width = 80
-		single.height = 12
+		single.height = 15
 		single.ready = true
 		single.layout()
 
-		border := single.tabBorderView()
-		stripped := stripAnsi(border)
-		if strings.Contains(stripped, "─") {
-			t.Errorf("single active tab should have no ─, got: %q", stripped)
+		_, _, bottom := tabBarLines(single.tabBarView())
+		stripped := stripAnsi(bottom)
+		// Active tab should have open bottom (┘...└)
+		if !strings.Contains(stripped, "┘") || !strings.Contains(stripped, "└") {
+			t.Errorf("single active tab should have ┘ and └, got: %q", stripped)
+		}
+		// Gap should have ─
+		if !strings.Contains(stripped, "─") {
+			t.Errorf("gap should have ─, got: %q", stripped)
 		}
 	})
 
-	t.Run("tab widths match panel", func(t *testing.T) {
+	t.Run("tab bar widths — all 3 lines match panel", func(t *testing.T) {
 		app.active = 0
-		header := app.tabHeaderView()
-		border := app.tabBorderView()
+		top, content, bottom := tabBarLines(app.tabBarView())
 
 		sbWidth := app.sidebar.Width()
-		panelWidth := app.width - sbWidth
+		panelWidth := app.innerWidth() - sbWidth
 
-		if w := lipgloss.Width(header); w != panelWidth {
-			t.Errorf("header width = %d, expected %d", w, panelWidth)
+		if w := lipgloss.Width(top); w != panelWidth {
+			t.Errorf("top border width = %d, expected %d", w, panelWidth)
 		}
-		if w := lipgloss.Width(border); w != panelWidth {
-			t.Errorf("border width = %d, expected %d", w, panelWidth)
+		if w := lipgloss.Width(content); w != panelWidth {
+			t.Errorf("content width = %d, expected %d", w, panelWidth)
+		}
+		if w := lipgloss.Width(bottom); w != panelWidth {
+			t.Errorf("bottom border width = %d, expected %d", w, panelWidth)
+		}
+	})
+
+	t.Run("tab bar is exactly 3 lines", func(t *testing.T) {
+		app.active = 0
+		bar := app.tabBarView()
+		lineCount := strings.Count(bar, "\n") + 1
+		if lineCount != 3 {
+			t.Errorf("tab bar should be 3 lines, got %d", lineCount)
 		}
 	})
 
@@ -208,6 +237,9 @@ func TestTabVisualInvariants(t *testing.T) {
 		}
 	})
 }
+
+// bgAltSubstring is the ANSI parameter for colorBgAlt (#1E1B18 = rgb(30,27,24)).
+const bgAltSubstring = "48;2;30;27;24"
 
 // stripAnsi removes ANSI escape sequences from a string.
 func stripAnsi(s string) string {

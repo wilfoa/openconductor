@@ -29,3 +29,9 @@ Thumbs.db
 
 # Build
 /dist/
+
+# Agent config
+.opencode/
+
+# VHS
+*.tape

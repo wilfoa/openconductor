@@ -14,13 +14,6 @@ type LaunchOptions struct {
 	Prompt string
 }
 
-// AttentionHint describes a detected attention condition from an agent's
-// terminal output.
-type AttentionHint struct {
-	Type   string // "needs_input", "needs_permission", "done", "error"
-	Detail string
-}
-
 // BootstrapFile represents a file that should be written into the repo before
 // launching the agent.
 type BootstrapFile struct {
@@ -35,11 +28,6 @@ type AgentAdapter interface {
 
 	// Command builds an *exec.Cmd ready to be started in the given repo path.
 	Command(repoPath string, opts LaunchOptions) *exec.Cmd
-
-	// AttentionHints inspects the last visible terminal lines and returns an
-	// AttentionHint if the agent appears to need user interaction, or nil
-	// otherwise.
-	AttentionHints(lastLines []string) *AttentionHint
 
 	// BootstrapFiles returns files that should be seeded into a repo before
 	// the agent is launched for the first time.

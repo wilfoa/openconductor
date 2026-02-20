@@ -15,13 +15,16 @@ type AnthropicClient struct {
 	model  string
 }
 
-// NewAnthropicClient creates a new AnthropicClient configured with the given API
-// key. It uses the claude-haiku-4-5-20251001 model by default.
-func NewAnthropicClient(apiKey string) *AnthropicClient {
+// NewAnthropicClient creates a new AnthropicClient configured with the given
+// API key. If model is empty, it defaults to claude-haiku-4-5-20251001.
+func NewAnthropicClient(apiKey, model string) *AnthropicClient {
+	if model == "" {
+		model = "claude-haiku-4-5-20251001"
+	}
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 	return &AnthropicClient{
 		client: client,
-		model:  "claude-haiku-4-5-20251001",
+		model:  model,
 	}
 }
 

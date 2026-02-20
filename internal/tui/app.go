@@ -1,14 +1,24 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/amir/maestro/internal/attention"
 	"github.com/amir/maestro/internal/config"
 	"github.com/amir/maestro/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// Notifier is the interface for sending desktop notifications on attention events.
+// This allows the App to use notification.Notifier without a hard import cycle,
+// and also makes testing easy with a nil or mock implementation.
+type Notifier interface {
+	Notify(project string, attnType string, detail string)
+}
 
 type focus int
 
@@ -35,6 +45,25 @@ type sessionExitedMsg struct {
 	ProjectName string
 }
 
+// stateStickDuration is the minimum time an attention state (NeedsAttention,
+// Error, Done) is held before it can be downgraded back to Working. This
+// prevents visual flicker when attention signals are transient.
+const stateStickDuration = 10 * time.Second
+
+// ctrlCWindow is the maximum time between two Ctrl+C presses for them to
+// count as a double-tap exit sequence.
+const ctrlCWindow = 1 * time.Second
+
+// scrollLinesPerTick is the number of arrow key presses sent per mouse wheel
+// tick to scroll the terminal. 3 lines matches standard terminal behavior.
+const scrollLinesPerTick = 3
+
+// Pre-built arrow key sequences for mouse wheel → PTY scroll forwarding.
+var (
+	scrollUpSeq   = buildScrollSeq("\x1b[A", scrollLinesPerTick)
+	scrollDownSeq = buildScrollSeq("\x1b[B", scrollLinesPerTick)
+)
+
 // App is the top-level bubbletea model for Maestro.
 type App struct {
 	cfg          *config.Config
@@ -48,9 +77,28 @@ type App struct {
 	ready        bool
 	active       int // index of active project
 	mgr          *session.Manager
+	detector     *attention.Detector
+	notifier     Notifier
 	sidebarWidth int      // content width of sidebar (excludes padding/border)
 	dragging     bool     // true during separator drag
 	openTabs     []string // project names of opened tabs, in visit order
+
+	// stateStickUntil records the earliest time each project's attention
+	// state can be downgraded to Working. Prevents flip-flop when
+	// transient signals scroll off screen between ticks.
+	stateStickUntil map[string]time.Time
+
+	// animFrame cycles 0..animFrameCount-1 every AnimTickMsg (~600ms) to
+	// drive the working badge breathing animation.
+	animFrame int
+
+	// lastCtrlC records when Ctrl+C was last pressed. A second press
+	// within ctrlCWindow exits Maestro; a single press forwards to PTY.
+	lastCtrlC time.Time
+	// ctrlCHint is true when the "press again to exit" hint should show
+	// in the status bar. Cleared on the next non-Ctrl+C key or after
+	// the window expires.
+	ctrlCHint bool
 }
 
 // NewApp creates the application model from a loaded configuration.
@@ -67,27 +115,50 @@ func NewApp(cfg *config.Config, configPath string) App {
 	}
 
 	return App{
-		cfg:          cfg,
-		configPath:   configPath,
-		sidebar:      newSidebarModel(cfg.Projects, defaultSidebarWidth),
-		terminal:     newTerminalModel(),
-		statusbar:    newStatusBarModel(cfg.Projects),
-		focus:        initialFocus,
-		active:       0,
-		mgr:          session.NewManager(),
-		sidebarWidth: defaultSidebarWidth,
-		openTabs:     openTabs,
+		cfg:             cfg,
+		configPath:      configPath,
+		sidebar:         newSidebarModel(cfg.Projects, defaultSidebarWidth),
+		terminal:        newTerminalModel(),
+		statusbar:       newStatusBarModel(cfg.Projects),
+		focus:           initialFocus,
+		active:          0,
+		mgr:             session.NewManager(),
+		detector:        attention.NewDetector(),
+		sidebarWidth:    defaultSidebarWidth,
+		openTabs:        openTabs,
+		stateStickUntil: make(map[string]time.Time),
 	}
+}
+
+// SetClassifier configures the L2 LLM classifier for attention detection.
+// Call this before starting the program if the config has LLM settings.
+func (a *App) SetClassifier(c *attention.Classifier) {
+	a.detector.SetClassifier(c)
+}
+
+// SetNotifier configures desktop notifications for attention events.
+func (a *App) SetNotifier(n Notifier) {
+	a.notifier = n
 }
 
 // Init returns the initial command for the bubbletea program.
 func (a App) Init() tea.Cmd {
-	return tickCmd()
+	return tea.Batch(tickCmd(), animTickCmd())
 }
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return TickMsg{}
+	})
+}
+
+// animFrameCount is the number of frames in the working badge breathing cycle.
+// The cycle is: ● bright → • mid → · dim → • mid → repeat.
+const animFrameCount = 4
+
+func animTickCmd() tea.Cmd {
+	return tea.Tick(600*time.Millisecond, func(t time.Time) tea.Msg {
+		return AnimTickMsg{}
 	})
 }
 
@@ -100,6 +171,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		a.height = msg.Height
 		a.ready = true
+
+		// When too small, skip layout and session resize — View()
+		// will show a placeholder overlay instead.
+		if a.tooSmall() {
+			return a, tea.Batch(cmds...)
+		}
+
 		// Re-clamp sidebar width for new terminal size.
 		a.clampAndSetSidebarWidth(a.sidebarWidth)
 		a.layout()
@@ -126,10 +204,46 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
+		// Ctrl+C double-tap: first press forwards to PTY and shows hint,
+		// second press within ctrlCWindow exits Maestro.
 		if isKey(msg, keys.Quit) {
-			a.mgr.Close()
-			a.terminal.Close()
-			return a, tea.Quit
+			now := time.Now()
+			if !a.lastCtrlC.IsZero() && now.Sub(a.lastCtrlC) < ctrlCWindow {
+				a.mgr.Close()
+				a.terminal.Close()
+				return a, tea.Quit
+			}
+			a.lastCtrlC = now
+			a.ctrlCHint = true
+			a.statusbar.ctrlCHint = true
+			// Forward Ctrl+C to the active PTY so the agent receives it.
+			if a.focus == focusTerminal {
+				if s := a.mgr.ActiveSession(); s != nil {
+					s.Write([]byte{0x03}) // ETX
+				}
+			}
+			return a, nil
+		}
+
+		// Any other key clears the Ctrl+C hint.
+		if a.ctrlCHint {
+			a.ctrlCHint = false
+			a.statusbar.ctrlCHint = false
+		}
+
+		// Ctrl+J / Ctrl+K: switch to next/prev tab.
+		// Works regardless of which panel is focused.
+		if isKey(msg, tea.KeyCtrlJ) {
+			if cmd := a.switchTab(1); cmd != nil {
+				return a, cmd
+			}
+			return a, nil
+		}
+		if isKey(msg, tea.KeyCtrlK) {
+			if cmd := a.switchTab(-1); cmd != nil {
+				return a, cmd
+			}
+			return a, nil
 		}
 
 		// Escape: toggle focus only when sidebar is in normal mode.
@@ -184,8 +298,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sbWidth := a.sidebar.Width()
 
 		// Detect click on border (±1 column of sidebar right edge).
+		// Account for screen padding offset.
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			borderX := sbWidth - 1
+			borderX := screenPadding + sbWidth - 1
 			if msg.X >= borderX-1 && msg.X <= borderX+1 {
 				a.dragging = true
 				a.sidebar.dragging = true
@@ -193,7 +308,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if msg.X < sbWidth {
+		if msg.X < screenPadding+sbWidth {
 			// Route to sidebar and focus it.
 			if a.focus != focusSidebar {
 				a.focus = focusSidebar
@@ -206,6 +321,43 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		} else {
+			// Right panel: check if click is in the tab bar (first 3 rows).
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && msg.Y < 3 {
+				localX := msg.X - screenPadding - sbWidth
+				if tabIdx, isClose := a.tabHitTest(localX); tabIdx >= 0 {
+					name := a.openTabs[tabIdx]
+					if isClose {
+						// Close the tab.
+						return a, a.closeTabCmd(name)
+					}
+					if projIdx := a.projectIndexByName(name); projIdx >= 0 {
+						// Reuse the ProjectSwitchedMsg path to switch project,
+						// update sidebar selection, and focus terminal.
+						a.sidebar.selected = projIdx
+						return a, func() tea.Msg {
+							return ProjectSwitchedMsg{
+								Index:   projIdx,
+								Project: a.cfg.Projects[projIdx],
+							}
+						}
+					}
+				}
+			}
+
+			// Mouse wheel in terminal area → forward to PTY as arrow
+			// key sequences. This lets agents handle scrolling natively
+			// (3 lines per tick matches standard terminal behavior).
+			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+				if s := a.mgr.ActiveSession(); s != nil {
+					seq := scrollUpSeq
+					if msg.Button == tea.MouseButtonWheelDown {
+						seq = scrollDownSeq
+					}
+					s.Write(seq)
+				}
+				return a, nil
+			}
+
 			// Click in terminal area — focus terminal.
 			if a.focus != focusTerminal {
 				a.focus = focusTerminal
@@ -220,6 +372,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		project := msg.Project
 		a.statusbar.activeName = project.Name
 		a.addTab(project.Name)
+
+		// Clear sticky timer — the user is acknowledging this project.
+		delete(a.stateStickUntil, project.Name)
 
 		// Focus terminal when switching projects.
 		a.focus = focusTerminal
@@ -352,6 +507,54 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusbar.states[msg.ProjectName] = msg.State
 		return a, nil
 
+	case TabClosedMsg:
+		name := msg.Name
+		a.removeTab(name)
+		delete(a.stateStickUntil, name)
+
+		// Terminate the session behind this tab (sends SIGINT, closes PTY).
+		a.mgr.StopSession(name)
+		a.sidebar.states[name] = StateIdle
+		a.statusbar.states[name] = StateIdle
+
+		// If the closed tab was the active project, switch to the nearest
+		// tab or deactivate the terminal if no tabs remain.
+		activeName := ""
+		if a.active >= 0 && a.active < len(a.cfg.Projects) {
+			activeName = a.cfg.Projects[a.active].Name
+		}
+		if name == activeName {
+			if len(a.openTabs) > 0 {
+				// Switch to the last tab in the list (most recently visited).
+				switchTo := a.openTabs[len(a.openTabs)-1]
+				if projIdx := a.projectIndexByName(switchTo); projIdx >= 0 {
+					a.sidebar.selected = projIdx
+					return a, func() tea.Msg {
+						return ProjectSwitchedMsg{
+							Index:   projIdx,
+							Project: a.cfg.Projects[projIdx],
+						}
+					}
+				}
+			} else {
+				// No tabs left — clear the terminal so it shows the
+				// empty placeholder instead of stale content.
+				a.clearTerminal()
+			}
+		}
+		return a, nil
+
+	case AnimTickMsg:
+		a.animFrame = (a.animFrame + 1) % animFrameCount
+		a.sidebar.animFrame = a.animFrame
+		// Expire Ctrl+C hint after the window passes.
+		if a.ctrlCHint && time.Since(a.lastCtrlC) >= ctrlCWindow {
+			a.ctrlCHint = false
+			a.statusbar.ctrlCHint = false
+		}
+		cmds = append(cmds, animTickCmd())
+		return a, tea.Batch(cmds...)
+
 	case TickMsg:
 		// Run attention detection on the active session.
 		a.checkAttention()
@@ -362,15 +565,42 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
+// tooSmall reports whether the host terminal is below the minimum usable
+// dimensions. When true, View() renders a placeholder instead of the UI.
+func (a App) tooSmall() bool {
+	return a.width < minAppWidth || a.height < minAppHeight
+}
+
+// buildScrollSeq concatenates n copies of a key sequence into a single
+// byte slice for efficient writes to the PTY.
+func buildScrollSeq(seq string, n int) []byte {
+	var b []byte
+	for range n {
+		b = append(b, seq...)
+	}
+	return b
+}
+
+// innerWidth returns the usable content width after screen padding.
+func (a App) innerWidth() int {
+	return a.width - 2*screenPadding
+}
+
 // View renders the complete TUI.
 func (a App) View() string {
 	if !a.ready {
 		return "Loading..."
 	}
 
+	if a.tooSmall() {
+		msg := fmt.Sprintf("Terminal too small (%d×%d)", a.width, a.height)
+		hint := fmt.Sprintf("Need at least %d×%d", minAppWidth, minAppHeight)
+		content := emptyHintStyle.Render(msg) + "\n" + emptyHintStyle.Render(hint)
+		return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, content)
+	}
+
 	sidebarView := a.sidebar.View()
-	tabHeader := a.tabHeaderView()
-	tabBorder := a.tabBorderView()
+	tabBar := a.tabBarView()
 
 	style := terminalStyle
 	if a.focus == focusTerminal {
@@ -378,14 +608,20 @@ func (a App) View() string {
 	}
 	terminalView := style.Render(a.terminal.View())
 
-	// Right panel: tab header + border (with active tab gap) + terminal.
-	rightPanel := lipgloss.JoinVertical(lipgloss.Left, tabHeader, tabBorder, terminalView)
+	// Right panel: tab bar (3-line bordered tabs) + terminal.
+	rightPanel := lipgloss.JoinVertical(lipgloss.Left, tabBar, terminalView)
 
 	a.statusbar.sidebarFocused = (a.focus == focusSidebar)
 	statusbarView := a.statusbar.View()
 
 	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, rightPanel)
-	return lipgloss.JoinVertical(lipgloss.Left, main, statusbarView)
+	content := lipgloss.JoinVertical(lipgloss.Left, main, statusbarView)
+
+	// Wrap with screen-level horizontal padding.
+	return lipgloss.NewStyle().
+		PaddingLeft(screenPadding).
+		PaddingRight(screenPadding).
+		Render(content)
 }
 
 func (a *App) toggleFocus() {
@@ -400,123 +636,98 @@ func (a *App) toggleFocus() {
 	}
 }
 
-// tabHeaderView renders the multi-tab bar above the terminal panel.
-// Active tab: bracket-highlight [● name] on default (terminal) bg.
-// Inactive tab: dim text on colorBgAlt bg.
-// No separator character — the background contrast IS the separator.
-func (a App) tabHeaderView() string {
-	sbWidth := a.sidebar.Width()
-	panelWidth := a.width - sbWidth
-
-	if len(a.openTabs) == 0 {
-		return tabHeaderStyle.Width(panelWidth).Render("")
+// inactiveTabStyle returns the appropriate inactive tab style based on the
+// project's current session state. Attention/error/done states get colored
+// borders and text; idle/working uses the default subtle style.
+func inactiveTabStyle(state SessionState) lipgloss.Style {
+	switch state {
+	case StateNeedsAttention:
+		return tabAttentionStyle
+	case StateError:
+		return tabErrorStyle
+	case StateDone:
+		return tabDoneStyle
+	default:
+		return tabStyle
 	}
-
-	activeName := ""
-	if a.active >= 0 && a.active < len(a.cfg.Projects) {
-		activeName = a.cfg.Projects[a.active].Name
-	}
-
-	tabCount := len(a.openTabs)
-	tabWidth := panelWidth / tabCount
-	remainder := panelWidth % tabCount
-
-	var sb strings.Builder
-	for i, name := range a.openTabs {
-		w := tabWidth
-		if i < remainder {
-			w++
-		}
-
-		state := a.sidebar.states[name]
-		char := badgeChar(state)
-
-		if name == activeName {
-			label := " [" + char + " " + name + "]"
-			sb.WriteString(tabActiveStyle.Width(w).Render(label))
-		} else {
-			label := " " + char + " " + name
-			sb.WriteString(tabInactiveStyle.Width(w).Render(label))
-		}
-	}
-
-	return sb.String()
 }
 
-// tabBorderView renders the border line between tabs and terminal.
-// Under inactive tabs: visible ─── line.
-// Under active tab: blank (default bg — merges into terminal).
-// No bgAlt on the border — just the ─ character vs empty space.
-func (a App) tabBorderView() string {
+// tabBarView renders the tab bar using the lipgloss border technique.
+// Each tab is a bordered box (3 lines: top border, content, bottom border).
+// Active tab: open bottom (space) merges into terminal, gold border.
+// Inactive tab: closed bottom (─) with subtle/state-colored border.
+// A gap element fills remaining width with ─ to complete the line.
+// See .opencode/skills/lipgloss-guide/SKILL.md for the technique reference.
+func (a App) tabBarView() string {
 	sbWidth := a.sidebar.Width()
-	panelWidth := a.width - sbWidth
-
-	if len(a.openTabs) == 0 {
-		return lipgloss.NewStyle().Foreground(colorMuted).
-			Render(strings.Repeat("─", panelWidth))
-	}
+	panelWidth := a.innerWidth() - sbWidth
 
 	activeName := ""
 	if a.active >= 0 && a.active < len(a.cfg.Projects) {
 		activeName = a.cfg.Projects[a.active].Name
 	}
 
-	tabCount := len(a.openTabs)
-	tabWidth := panelWidth / tabCount
-	remainder := panelWidth % tabCount
+	// Render each tab as a bordered box. All tabs show a close button ✕.
+	var renderedTabs []string
+	for _, name := range a.openTabs {
+		state := a.sidebar.states[name]
+		char := badgeChar(state, a.animFrame)
+		label := char + " " + name + " ✕"
 
-	// Find active tab's column span.
-	activeStart, activeEnd := 0, 0
-	col := 0
-	for i, name := range a.openTabs {
-		w := tabWidth
-		if i < remainder {
-			w++
-		}
 		if name == activeName {
-			activeStart = col
-			activeEnd = col + w
+			renderedTabs = append(renderedTabs, tabActiveStyle.Render(label))
+		} else {
+			renderedTabs = append(renderedTabs, inactiveTabStyle(state).Render(label))
 		}
-		col += w
 	}
 
-	// Use colorMuted for the ─ so it's clearly visible.
-	borderStyle := lipgloss.NewStyle().Foreground(colorMuted)
-
-	var border strings.Builder
-	leftLen := activeStart
-	gapLen := activeEnd - activeStart
-	rightLen := panelWidth - activeEnd
-
-	if leftLen > 0 {
-		border.WriteString(borderStyle.Render(strings.Repeat("─", leftLen)))
-	}
-	if gapLen > 0 {
-		border.WriteString(strings.Repeat(" ", gapLen))
-	}
-	if rightLen > 0 {
-		border.WriteString(borderStyle.Render(strings.Repeat("─", rightLen)))
+	// Join tabs side by side (aligned at top).
+	var row string
+	if len(renderedTabs) > 0 {
+		row = lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
 	}
 
-	return border.String()
+	// Fill remaining width with ─ border (the gap).
+	rowWidth := lipgloss.Width(row)
+	gapWidth := panelWidth - rowWidth
+	if gapWidth < 0 {
+		gapWidth = 0
+	}
+	gap := tabGapStyle.Render(strings.Repeat(" ", gapWidth))
+
+	// Join row + gap with bottom alignment so ─ lines connect.
+	if row != "" {
+		return lipgloss.JoinHorizontal(lipgloss.Bottom, row, gap)
+	}
+	// No tabs: pad gap to 3 lines for consistent layout.
+	blank := strings.Repeat(" ", panelWidth)
+	return blank + "\n" + gap
 }
 
 func (a *App) layout() {
-	sbWidth := a.sidebar.Width()
-	termWidth := a.width - sbWidth - 1 // -1 for terminal PaddingLeft(1)
-	panelHeight := a.height - 1        // -1 for status bar
-	termHeight := panelHeight - 2      // -2 for tab header + border
+	termW, termH := a.termDimensions()
+	panelHeight := a.height - 1 // -1 for status bar
 
 	a.sidebar.height = panelHeight
-	a.terminal.SetSize(termWidth, termHeight)
-	a.statusbar.width = a.width
+	a.terminal.SetSize(termW, termH)
+	a.statusbar.width = a.innerWidth()
 }
 
-// termDimensions returns the terminal panel width and height.
+// termDimensions returns the terminal panel width and height, clamped to
+// at least 1 in each dimension to prevent negative/zero sizes when the
+// host terminal is very small.
 func (a *App) termDimensions() (int, int) {
+	inner := a.innerWidth()
 	sbWidth := a.sidebar.Width()
-	termWidth := a.width - sbWidth - 1 // -1 for terminal PaddingLeft(1)
-	termHeight := a.height - 3         // -1 status bar, -2 tab header + border
+	termWidth := inner - sbWidth - 1 // -1 for terminal PaddingLeft(1)
+	termHeight := a.height - 4       // -1 status bar, -3 tab bar
+
+	if termWidth < 1 {
+		termWidth = 1
+	}
+	if termHeight < 1 {
+		termHeight = 1
+	}
 	return termWidth, termHeight
 }
 
@@ -604,15 +815,24 @@ func (a *App) syncTerminalFromSession() {
 	a.terminal.mu.Unlock()
 }
 
+// clearTerminal deactivates the terminal widget so it shows the empty
+// placeholder. Called when all tabs are closed and there is nothing to display.
+func (a *App) clearTerminal() {
+	a.terminal.mu.Lock()
+	a.terminal.vt = nil
+	a.terminal.active = false
+	a.terminal.mu.Unlock()
+}
+
 // clampAndSetSidebarWidth sets the sidebar content width from a mouse X
 // position, clamping between minSidebarWidth and half the terminal width.
 // The border is at column contentWidth (0-indexed), so mouse X maps directly.
 func (a *App) clampAndSetSidebarWidth(x int) {
-	contentWidth := x
+	contentWidth := x - screenPadding // adjust for left screen padding
 	if contentWidth < minSidebarWidth {
 		contentWidth = minSidebarWidth
 	}
-	maxWidth := a.width / 2
+	maxWidth := a.innerWidth() / 2
 	if contentWidth > maxWidth {
 		contentWidth = maxWidth
 	}
@@ -628,6 +848,91 @@ func (a *App) resizeAllSessions() {
 			s.Resize(termW, termH)
 		}
 	}
+}
+
+// tabHitTest returns the index into openTabs for a mouse X position relative
+// to the tab bar start (i.e. after screenPadding + sidebar). Returns
+// (tabIndex, isClose). tabIndex is -1 if the click falls outside any tab.
+// isClose is true if the click landed on the close button region (✕) of any tab.
+func (a App) tabHitTest(localX int) (int, bool) {
+	activeName := ""
+	if a.active >= 0 && a.active < len(a.cfg.Projects) {
+		activeName = a.cfg.Projects[a.active].Name
+	}
+
+	offset := 0
+	for i, name := range a.openTabs {
+		state := a.sidebar.states[name]
+		char := badgeChar(state, a.animFrame)
+		label := char + " " + name + " ✕"
+
+		var w int
+		if name == activeName {
+			w = lipgloss.Width(tabActiveStyle.Render(label))
+		} else {
+			w = lipgloss.Width(inactiveTabStyle(state).Render(label))
+		}
+
+		if localX >= offset && localX < offset+w {
+			// Check if the click is in the close region
+			// (last 4 columns: space + ✕ + padding).
+			closeRegionStart := offset + w - 4
+			if localX >= closeRegionStart {
+				return i, true
+			}
+			return i, false
+		}
+		offset += w
+	}
+	return -1, false
+}
+
+// switchTab returns a command to switch to the tab at offset delta from the
+// current active tab in the openTabs list. delta=+1 for next, -1 for prev.
+// Wraps around. Returns nil if there are fewer than 2 open tabs.
+func (a App) switchTab(delta int) tea.Cmd {
+	if len(a.openTabs) < 2 {
+		return nil
+	}
+
+	// Find current tab index in openTabs.
+	activeName := ""
+	if a.active >= 0 && a.active < len(a.cfg.Projects) {
+		activeName = a.cfg.Projects[a.active].Name
+	}
+	cur := -1
+	for i, name := range a.openTabs {
+		if name == activeName {
+			cur = i
+			break
+		}
+	}
+	if cur < 0 {
+		return nil
+	}
+
+	next := (cur + delta + len(a.openTabs)) % len(a.openTabs)
+	targetName := a.openTabs[next]
+	projIdx := a.projectIndexByName(targetName)
+	if projIdx < 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		return ProjectSwitchedMsg{
+			Index:   projIdx,
+			Project: a.cfg.Projects[projIdx],
+		}
+	}
+}
+
+// projectIndexByName returns the index of the project with the given name, or -1.
+func (a App) projectIndexByName(name string) int {
+	for i, p := range a.cfg.Projects {
+		if p.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // addTab appends a project name to the open tabs list if not already present.
@@ -650,9 +955,32 @@ func (a *App) removeTab(name string) {
 	}
 }
 
+// closeTabCmd returns a tea.Cmd that produces a TabClosedMsg. The actual tab
+// removal and potential project switch happen in the Update handler.
+func (a App) closeTabCmd(name string) tea.Cmd {
+	return func() tea.Msg {
+		return TabClosedMsg{Name: name}
+	}
+}
+
+// isAttentionState returns true for states that should be sticky (not
+// immediately downgraded to Working).
+func isAttentionState(s SessionState) bool {
+	return s == StateNeedsAttention || s == StateError || s == StateDone
+}
+
 // checkAttention runs attention detection on ALL sessions (not just the
-// active one) and updates sidebar/statusbar state accordingly.
+// active one) using the L1 heuristic detector with optional L2 LLM
+// escalation. Updates sidebar/statusbar state accordingly.
+//
+// Sticky logic: when a project enters an attention state, it is held for at
+// least stateStickDuration before being downgraded back to Working. This
+// prevents visual flicker when transient signals scroll off screen between
+// ticks.
 func (a *App) checkAttention() {
+	ctx := context.Background()
+	now := time.Now()
+
 	for _, p := range a.cfg.Projects {
 		s := a.mgr.GetSession(p.Name)
 		if s == nil {
@@ -665,25 +993,71 @@ func (a *App) checkAttention() {
 		}
 
 		name := p.Name
-		hint := s.Agent.AttentionHints(lines)
-		if hint != nil {
-			switch hint.Type {
-			case "needs_input", "needs_permission":
-				a.sidebar.states[name] = StateNeedsAttention
-				a.statusbar.states[name] = StateNeedsAttention
-			case "error":
-				a.sidebar.states[name] = StateError
-				a.statusbar.states[name] = StateError
-			case "done":
-				a.sidebar.states[name] = StateDone
-				a.statusbar.states[name] = StateDone
+
+		// Get the process PID for liveness checking.
+		pid := 0
+		if s.Cmd != nil {
+			pid = s.Cmd.Pid
+		}
+
+		prevState := a.sidebar.states[name]
+
+		event, isWorking := a.detector.Check(ctx, name, lines, pid, string(p.Agent))
+		if event != nil {
+			state := attentionEventToState(event)
+			if state != prevState {
+				// State transition — apply sticky timer for attention states.
+				if isAttentionState(state) {
+					a.stateStickUntil[name] = now.Add(stateStickDuration)
+
+					// Send desktop notification on entering attention/error.
+					if a.notifier != nil && (state == StateNeedsAttention || state == StateError) {
+						a.notifier.Notify(name, event.Type.String(), event.Detail)
+					}
+				}
 			}
-		} else {
-			// If running and no hint, show as working.
+			a.sidebar.states[name] = state
+			a.statusbar.states[name] = state
+		} else if isWorking {
+			// Positive working signal (agent-specific: spinner, progress
+			// bar, etc). Only upgrade to Working; respect sticky attention
+			// states.
 			if s.State == session.StateRunning {
+				if isAttentionState(prevState) {
+					if deadline, ok := a.stateStickUntil[name]; ok && now.Before(deadline) {
+						continue
+					}
+				}
 				a.sidebar.states[name] = StateWorking
 				a.statusbar.states[name] = StateWorking
+				delete(a.stateStickUntil, name)
+			}
+		} else {
+			// No signal — keep current state. Only expire sticky attention
+			// states back to Idle (not Working) once the timer lapses.
+			if s.State == session.StateRunning && isAttentionState(prevState) {
+				if deadline, ok := a.stateStickUntil[name]; ok && now.Before(deadline) {
+					continue
+				}
+				// Sticky expired — return to Idle, not Working.
+				a.sidebar.states[name] = StateIdle
+				a.statusbar.states[name] = StateIdle
+				delete(a.stateStickUntil, name)
 			}
 		}
+	}
+}
+
+// attentionEventToState maps an attention.AttentionEvent to a TUI SessionState.
+func attentionEventToState(event *attention.AttentionEvent) SessionState {
+	switch event.Type {
+	case attention.NeedsInput, attention.NeedsPermission:
+		return StateNeedsAttention
+	case attention.HitError, attention.Stuck:
+		return StateError
+	case attention.NeedsReview:
+		return StateDone
+	default:
+		return StateWorking
 	}
 }

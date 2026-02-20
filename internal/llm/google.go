@@ -14,9 +14,12 @@ type GoogleClient struct {
 	model  string
 }
 
-// NewGoogleClient creates a new GoogleClient configured with the given API key.
-// It uses the gemini-2.0-flash model by default.
-func NewGoogleClient(ctx context.Context, apiKey string) (*GoogleClient, error) {
+// NewGoogleClient creates a new GoogleClient configured with the given API
+// key. If model is empty, it defaults to gemini-2.0-flash.
+func NewGoogleClient(ctx context.Context, apiKey, model string) (*GoogleClient, error) {
+	if model == "" {
+		model = "gemini-2.0-flash"
+	}
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
@@ -26,7 +29,7 @@ func NewGoogleClient(ctx context.Context, apiKey string) (*GoogleClient, error) 
 	}
 	return &GoogleClient{
 		client: client,
-		model:  "gemini-2.0-flash",
+		model:  model,
 	}, nil
 }
 

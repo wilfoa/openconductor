@@ -25,6 +25,14 @@ var (
 
 	defaultSidebarWidth = 24
 	minSidebarWidth     = 20
+	screenPadding       = 1 // horizontal padding on each side of the screen
+
+	// Minimum host terminal dimensions below which the app shows a
+	// "terminal too small" overlay instead of the normal UI. These are
+	// the outer dimensions (the full terminal window), not the inner
+	// content area.
+	minAppWidth  = 60
+	minAppHeight = 10
 
 	// ── Sidebar ───────────────────────────────────────────────────
 
@@ -58,29 +66,117 @@ var (
 
 	// ── Project Items ─────────────────────────────────────────────
 
-	projectItemStyle   = lipgloss.NewStyle().Foreground(colorDimFg)
-	projectActiveStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Background(colorHighlight)
-	projectAgentStyle  = lipgloss.NewStyle().PaddingLeft(3).Foreground(colorMuted)
+	projectItemStyle  = lipgloss.NewStyle().Foreground(colorDimFg)
+	projectAgentStyle = lipgloss.NewStyle().PaddingLeft(3).Foreground(colorMuted)
+
+	// Selected project: gold ▎ left accent bar with highlight background.
+	// Both name and agent lines render as a single block so the accent
+	// spans the full item height. Content uses colorFg (off-white) for
+	// readability; the gold accent bar provides the selection signal.
+	projectAccentBorder = lipgloss.Border{
+		Left: "▎",
+	}
+
+	projectActiveStyle = lipgloss.NewStyle().
+				Border(projectAccentBorder, false, false, false, true).
+				BorderForeground(colorPrimary).
+				Foreground(colorFg).
+				Bold(true).
+				Background(colorHighlight)
 
 	// ── Status Badges ─────────────────────────────────────────────
-	// Distinct shapes for accessibility (not just color).
+	// Green ● = online (steady idle, breathing working).
+	// Red ● = error / attention analysis issue.
+	// Gold ◆ = needs user attention.
+	// Blue ✓ = task done.
 
-	badgeWorking   = lipgloss.NewStyle().Foreground(colorSuccess).SetString("●")
+	colorSuccessMid = lipgloss.Color("#5E9A78") // mid green for breathing mid-frame
+
+	badgeOnline    = lipgloss.NewStyle().Foreground(colorSuccess).SetString("●") // green: agent online
 	badgeAttention = lipgloss.NewStyle().Foreground(colorWarning).SetString("◆")
 	badgeError     = lipgloss.NewStyle().Foreground(colorDanger).SetString("●")
-	badgeIdle      = lipgloss.NewStyle().Foreground(colorMuted).SetString("○")
 	badgeDone      = lipgloss.NewStyle().Foreground(colorInfo).SetString("✓")
 
-	// ── Tab Header (above terminal panel) ─────────────────────────
+	// Breathing cycle for StateWorking: ● bright → • mid → · dim → • mid.
+	// Each frame is 600ms, full cycle is 2.4s.
+	breathingBadgeStyles = [4]lipgloss.Style{
+		lipgloss.NewStyle().Foreground(colorSuccess).SetString("●"),    // frame 0: full, bright
+		lipgloss.NewStyle().Foreground(colorSuccessMid).SetString("•"), // frame 1: shrinking, mid
+		lipgloss.NewStyle().Foreground(colorMuted).SetString("·"),      // frame 2: smallest, dim
+		lipgloss.NewStyle().Foreground(colorSuccessMid).SetString("•"), // frame 3: growing, mid
+	}
 
-	tabHeaderStyle = lipgloss.NewStyle().
-			Background(colorBgAlt).
+	// ── Tab Bar (lipgloss border technique) ──────────────────────
+	// Inspired by github.com/charmbracelet/lipgloss/examples/layout/main.go
+	// See .opencode/skills/lipgloss-guide/SKILL.md for details.
+	//
+	// Active tab:   open bottom (space) merges into terminal below, gold border.
+	// Inactive tab: closed bottom (─) forms continuous border line, subtle border.
+	// Gap:          bottom-only border fills remaining width with ─.
+
+	activeTabBorder = lipgloss.Border{
+		Top:         "─",
+		Bottom:      " ",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┘",
+		BottomRight: "└",
+	}
+
+	inactiveTabBorder = lipgloss.Border{
+		Top:         "─",
+		Bottom:      "─",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "┴",
+		BottomRight: "┴",
+	}
+
+	tabStyle = lipgloss.NewStyle().
+			Border(inactiveTabBorder, true).
+			BorderForeground(colorSubtle).
 			Foreground(colorDimFg).
 			Padding(0, 1)
-	tabActiveStyle   = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true) // no bg — blends into terminal
-	tabInactiveStyle = lipgloss.NewStyle().Foreground(colorDimFg).Background(colorBgAlt)
-	tabSepStyle      = lipgloss.NewStyle() // unused — bg contrast is the separator
-	tabDimStyle      = lipgloss.NewStyle().Foreground(colorMuted)
+
+	tabActiveStyle = lipgloss.NewStyle().
+			Border(activeTabBorder, true).
+			BorderForeground(colorPrimary).
+			Foreground(colorPrimary).
+			Bold(true).
+			Padding(0, 1)
+
+	// State-specific inactive tab styles: same structure as tabStyle but
+	// with colored borders and text to signal attention/error/done.
+	tabAttentionStyle = lipgloss.NewStyle().
+				Border(inactiveTabBorder, true).
+				BorderForeground(colorWarning).
+				Foreground(colorWarning).
+				Bold(true).
+				Padding(0, 1)
+
+	tabErrorStyle = lipgloss.NewStyle().
+			Border(inactiveTabBorder, true).
+			BorderForeground(colorDanger).
+			Foreground(colorDanger).
+			Bold(true).
+			Padding(0, 1)
+
+	tabDoneStyle = lipgloss.NewStyle().
+			Border(inactiveTabBorder, true).
+			BorderForeground(colorInfo).
+			Foreground(colorInfo).
+			Padding(0, 1)
+
+	tabGapStyle = lipgloss.NewStyle().
+			Border(inactiveTabBorder, true).
+			BorderTop(false).
+			BorderLeft(false).
+			BorderRight(false).
+			BorderForeground(colorSubtle)
 
 	// ── Terminal Panel ────────────────────────────────────────────
 
@@ -89,10 +185,11 @@ var (
 
 	// ── Status Bar ────────────────────────────────────────────────
 
-	statusBarStyle    = lipgloss.NewStyle().Background(colorBgAlt).Foreground(colorDimFg).Padding(0, 1)
-	statusKeyStyle    = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
-	statusDimStyle    = lipgloss.NewStyle().Foreground(colorMuted)
-	statusAccentStyle = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+	statusBarStyle      = lipgloss.NewStyle().Background(colorBgAlt).Foreground(colorDimFg).Padding(0, 1)
+	statusKeyStyle      = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	statusDimStyle      = lipgloss.NewStyle().Foreground(colorMuted)
+	statusAccentStyle   = lipgloss.NewStyle().Foreground(colorFg).Bold(true)
+	statusExitHintStyle = lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
 
 	// ── Forms ─────────────────────────────────────────────────────
 

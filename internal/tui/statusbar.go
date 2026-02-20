@@ -14,6 +14,7 @@ type statusBarModel struct {
 	width          int
 	activeName     string
 	sidebarFocused bool
+	ctrlCHint      bool // show "press Ctrl+C again to exit" hint
 }
 
 func newStatusBarModel(projects []config.Project) statusBarModel {
@@ -30,16 +31,24 @@ func newStatusBarModel(projects []config.Project) statusBarModel {
 func (m statusBarModel) View() string {
 	// Left: context-sensitive keybind hints.
 	var hints []struct{ key, label string }
-	if m.sidebarFocused {
+	if m.ctrlCHint {
+		hints = []struct{ key, label string }{
+			{"Ctrl+C", "again to exit"},
+		}
+	} else if m.sidebarFocused {
 		hints = []struct{ key, label string }{
 			{"Esc", "terminal"},
 			{"j/k", "navigate"},
+			{"^j/k", "tab"},
 			{"a", "add"},
 			{"d", "delete"},
+			{"Ctrl+C", "exit"},
 		}
 	} else {
 		hints = []struct{ key, label string }{
 			{"Esc", "sidebar"},
+			{"^j/k", "tab"},
+			{"Ctrl+C", "exit"},
 		}
 	}
 
@@ -48,8 +57,13 @@ func (m statusBarModel) View() string {
 		if i > 0 {
 			left.WriteString(statusDimStyle.Render("  "))
 		}
-		left.WriteString(statusKeyStyle.Render(h.key))
-		left.WriteString(statusDimStyle.Render(" " + h.label))
+		if m.ctrlCHint && h.key == "Ctrl+C" {
+			// Highlight the exit hint in danger color.
+			left.WriteString(statusExitHintStyle.Render(h.key + " " + h.label))
+		} else {
+			left.WriteString(statusKeyStyle.Render(h.key))
+			left.WriteString(statusDimStyle.Render(" " + h.label))
+		}
 	}
 
 	// Right: active project + state + aggregate health.

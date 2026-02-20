@@ -25,3 +25,8 @@ func isKey(msg tea.KeyMsg, k tea.KeyType) bool {
 func isRuneKey(msg tea.KeyMsg, r rune) bool {
 	return msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == r
 }
+
+// isAltRune returns true if the key is Alt+<r> (Cmd+<r> on macOS terminals).
+func isAltRune(msg tea.KeyMsg, r rune) bool {
+	return msg.Alt && msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == r
+}

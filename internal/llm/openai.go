@@ -16,13 +16,17 @@ type OpenAIClient struct {
 	model  shared.ChatModel
 }
 
-// NewOpenAIClient creates a new OpenAIClient configured with the given API key.
-// It uses the gpt-4o-mini model by default.
-func NewOpenAIClient(apiKey string) *OpenAIClient {
+// NewOpenAIClient creates a new OpenAIClient configured with the given API
+// key. If model is empty, it defaults to gpt-4o-mini.
+func NewOpenAIClient(apiKey, model string) *OpenAIClient {
+	m := shared.ChatModel(model)
+	if model == "" {
+		m = shared.ChatModelGPT4oMini
+	}
 	client := openai.NewClient(option.WithAPIKey(apiKey))
 	return &OpenAIClient{
 		client: client,
-		model:  shared.ChatModelGPT4oMini,
+		model:  m,
 	}
 }
 

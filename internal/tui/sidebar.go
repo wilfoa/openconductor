@@ -36,6 +36,7 @@ type sidebarModel struct {
 	dragging     bool
 	mode         sidebarMode
 	form         formModel
+	animFrame    int // cycles 0..animFrameCount-1 for working badge breathing
 }
 
 func newSidebarModel(projects []config.Project, contentWidth int) sidebarModel {
@@ -246,19 +247,21 @@ func (m sidebarModel) View() string {
 				name := p.Name
 
 				if i == m.selected {
-					// Bracket-highlighted: [● name] — single style, no nested ANSI.
-					char := badgeChar(state)
-					label := "[" + char + " " + name + "]"
-					b.WriteString(projectActiveStyle.Width(innerWidth).Render(label))
-					b.WriteString("\n")
-					agentStyle := lipgloss.NewStyle().
-						Foreground(colorMuted).
-						Background(colorHighlight).
-						PaddingLeft(3).
-						Width(innerWidth)
-					b.WriteString(agentStyle.Render(agentDisplayName(p.Agent)))
+					// Left accent bar: ▎ in gold with highlight background.
+					// Render name + agent as a single block so the accent
+					// spans both lines. Width = innerWidth - 1 because the
+					// border consumes 1 column.
+					char := badgeChar(state, m.animFrame)
+					nameLine := char + " " + name
+					agentLine := "  " + agentDisplayName(p.Agent)
+					content := nameLine + "\n" + agentLine
+					b.WriteString(projectActiveStyle.
+						Width(innerWidth - 1).
+						Render(content))
 				} else {
 					// Aligned: " ● name" — badge at col 1, name at col 3.
+					// Leading space occupies the same column as the accent
+					// border on selected items.
 					badge := m.statusBadge(p.Name)
 					label := " " + badge + " " + name
 					b.WriteString(projectItemStyle.Render(label))
@@ -298,7 +301,7 @@ func (m sidebarModel) statusBadge(projectName string) string {
 
 	switch state {
 	case StateWorking:
-		return badgeWorking.String()
+		return breathingBadgeStyles[m.animFrame].String()
 	case StateNeedsAttention:
 		return badgeAttention.String()
 	case StateError:
@@ -306,15 +309,22 @@ func (m sidebarModel) statusBadge(projectName string) string {
 	case StateDone:
 		return badgeDone.String()
 	default:
-		return badgeIdle.String()
+		// Idle = steady green ● (agent is online).
+		return badgeOnline.String()
 	}
 }
 
+// breathingChars maps animation frame → badge character for the breathing
+// cycle: ● → • → · → • → ●  (shrink then grow).
+var breathingChars = [animFrameCount]string{"●", "•", "·", "•"}
+
 // badgeChar returns the raw badge character for a session state (no ANSI codes).
-func badgeChar(state SessionState) string {
+// For StateWorking, animFrame selects a frame from the breathing cycle.
+// For StateIdle, always returns ● (steady online indicator).
+func badgeChar(state SessionState, animFrame int) string {
 	switch state {
 	case StateWorking:
-		return "●"
+		return breathingChars[animFrame]
 	case StateNeedsAttention:
 		return "◆"
 	case StateError:
@@ -322,7 +332,7 @@ func badgeChar(state SessionState) string {
 	case StateDone:
 		return "✓"
 	default:
-		return "○"
+		return "●"
 	}
 }
 

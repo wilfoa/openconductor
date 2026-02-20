@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/amir/maestro/internal/attention"
 	"github.com/amir/maestro/internal/bootstrap"
 	"github.com/amir/maestro/internal/config"
+	"github.com/amir/maestro/internal/llm"
+	"github.com/amir/maestro/internal/notification"
 	"github.com/amir/maestro/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -79,11 +83,53 @@ func runBootstrap(args []string) {
 	fmt.Println("Done.")
 }
 
+// newLLMClient creates an LLM client from the config if provider and API key
+// are configured. Returns nil if not configured or if the API key env var is
+// empty.
+func newLLMClient(cfg *config.Config) llm.Client {
+	if cfg.LLM.Provider == "" || cfg.LLM.APIKey == "" {
+		return nil
+	}
+
+	apiKey := os.Getenv(cfg.LLM.APIKey)
+	if apiKey == "" {
+		return nil
+	}
+
+	model := cfg.LLM.Model
+
+	switch cfg.LLM.Provider {
+	case "anthropic":
+		return llm.NewAnthropicClient(apiKey, model)
+	case "openai":
+		return llm.NewOpenAIClient(apiKey, model)
+	case "google":
+		client, err := llm.NewGoogleClient(context.Background(), apiKey, model)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create Google LLM client: %v\n", err)
+			return nil
+		}
+		return client
+	default:
+		fmt.Fprintf(os.Stderr, "Warning: unknown LLM provider %q\n", cfg.LLM.Provider)
+		return nil
+	}
+}
+
 func runTUI() {
 	configPath := config.DefaultConfigPath()
 	cfg := config.LoadOrDefault(configPath)
 
 	app := tui.NewApp(cfg, configPath)
+
+	// Wire L2 LLM classifier if configured.
+	if client := newLLMClient(cfg); client != nil {
+		app.SetClassifier(attention.NewClassifier(client))
+	}
+
+	// Wire desktop notifications.
+	app.SetNotifier(notification.New(cfg.Notifications.Enabled, cfg.Notifications.Cooldown))
+
 	p := tea.NewProgram(app,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),

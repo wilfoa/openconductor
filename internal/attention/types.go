@@ -58,6 +58,10 @@ const (
 	Uncertain
 	// No indicates no attention-worthy pattern was detected.
 	No
+	// Working indicates the agent is definitely working (agent-specific
+	// signal). This suppresses generic pattern checks to avoid false
+	// positives and is treated the same as No by the caller.
+	Working
 )
 
 // AttentionEvent represents a detected event that requires user attention.
