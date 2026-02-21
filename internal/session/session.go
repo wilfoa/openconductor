@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 The OpenConductor Authors.
+
 // Package session manages agent process lifecycles, wrapping each agent in a
 // PTY with vt10x terminal emulation.
 package session

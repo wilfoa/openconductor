@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 The OpenConductor Authors.
+
 // Package attention provides LLM-based classification of terminal output to
 // detect agent states that require user attention.
 package attention

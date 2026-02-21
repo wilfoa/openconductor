@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 The OpenConductor Authors.
+
 // Package logging provides a file-based structured logger for OpenConductor.
 //
 // Since the TUI owns stdout/stderr, all diagnostic output goes to a log file

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 The OpenConductor Authors.
+
 package attention
 
 // AttentionType categorizes the kind of attention a project needs from the user.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 The OpenConductor Authors.
+
 // Package llm provides a unified interface for interacting with LLM providers.
 package llm
 

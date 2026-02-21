@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 The OpenConductor Authors.
+
 // Package agent defines the AgentAdapter interface and a registry for
 // supported coding-agent CLIs.
 package agent

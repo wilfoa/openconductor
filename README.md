@@ -228,4 +228,4 @@ attention detection heuristics, TUI layout logic, and the LLM classifier.
 
 ## License
 
-MIT
+[MIT](LICENSE) - Copyright (c) 2025 The OpenConductor Authors
