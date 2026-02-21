@@ -1,8 +1,8 @@
-// Package logging provides a file-based structured logger for Maestro.
+// Package logging provides a file-based structured logger for OpenConductor.
 //
 // Since the TUI owns stdout/stderr, all diagnostic output goes to a log file
-// at ~/.maestro/maestro.log. The package uses stdlib log/slog for zero-dep
-// structured logging with JSON output.
+// at ~/.openconductor/openconductor.log. The package uses stdlib log/slog for
+// zero-dep structured logging with JSON output.
 //
 // Usage:
 //
@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	// defaultLogFile is the log filename within the maestro config dir.
-	defaultLogFile = "maestro.log"
+	// defaultLogFile is the log filename within the openconductor config dir.
+	defaultLogFile = "openconductor.log"
 
 	// maxLogSize is the approximate max size before rotation (5 MB).
 	maxLogSize = 5 * 1024 * 1024
@@ -37,7 +37,7 @@ type Options struct {
 	// Debug enables debug-level messages. Default is info-level.
 	Debug bool
 
-	// Dir overrides the log directory. Defaults to ~/.maestro.
+	// Dir overrides the log directory. Defaults to ~/.openconductor.
 	Dir string
 }
 
@@ -58,7 +58,7 @@ func Init(opts Options) error {
 		if err != nil {
 			return fmt.Errorf("logging: cannot determine home dir: %w", err)
 		}
-		dir = filepath.Join(home, ".maestro")
+		dir = filepath.Join(home, ".openconductor")
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -92,7 +92,7 @@ func Init(opts Options) error {
 	logger = slog.New(handler)
 
 	// Write a startup marker.
-	logger.Info("maestro starting",
+	logger.Info("openconductor starting",
 		"pid", os.Getpid(),
 		"debug", opts.Debug,
 		"log_path", logPath,

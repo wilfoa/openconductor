@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/amir/maestro/internal/config"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 // Manager holds all active sessions and tracks which one is currently

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amir/maestro/internal/llm"
+	"github.com/openconductorhq/openconductor/internal/llm"
 )
 
 // Integration tests for the L2 LLM classifier with real provider APIs.

@@ -43,9 +43,9 @@ type Config struct {
 func DefaultConfigDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".maestro"
+		return ".openconductor"
 	}
-	return filepath.Join(home, ".maestro")
+	return filepath.Join(home, ".openconductor")
 }
 
 func DefaultConfigPath() string {

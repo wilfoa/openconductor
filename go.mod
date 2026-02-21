@@ -1,4 +1,4 @@
-module github.com/amir/maestro
+module github.com/openconductorhq/openconductor
 
 go 1.24.2
 

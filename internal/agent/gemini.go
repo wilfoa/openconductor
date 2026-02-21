@@ -3,7 +3,7 @@ package agent
 import (
 	"os/exec"
 
-	"github.com/amir/maestro/internal/config"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 // geminiAdapter implements AgentAdapter for the Gemini CLI.

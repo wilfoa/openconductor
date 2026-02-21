@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"github.com/amir/maestro/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 func sendKey(t *testing.T, m formModel, k tea.KeyType) (formModel, tea.Cmd) {

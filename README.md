@@ -1,9 +1,9 @@
-# Maestro
+# OpenConductor
 
 A terminal multiplexer for AI coding agents. Run Claude Code, OpenCode, Codex,
 and Gemini CLI side by side — one terminal, all your projects.
 
-Maestro embeds each agent in its own PTY with full vt10x terminal emulation,
+OpenConductor embeds each agent in its own PTY with full vt10x terminal emulation,
 watches for moments the agent needs you (input prompts, permission requests,
 errors), and pings you with a desktop notification so you can context-switch
 only when it matters.
@@ -21,22 +21,27 @@ only when it matters.
 - **Agent-specific heuristics** — Recognizes Claude Code's spinner
   (`✦ Thinking…`) and OpenCode's `esc interrupt` indicator to distinguish
   "working" from "idle" states, eliminating false positives.
-- **Mouse support** — Click tabs and sidebar items. Scroll wheel navigates
-  terminal output.
-- **Bootstrap CLI** — `maestro bootstrap <repo>` seeds agent config files
+- **Scrollback buffer** — Scroll up through agent output history with the
+  mouse wheel. Smart pinning keeps your position when new output arrives.
+- **Mouse support** — Click tabs and sidebar items. Drag the sidebar border
+  to resize. Scroll wheel navigates terminal scrollback.
+- **File logging** — All diagnostics go to `~/.openconductor/openconductor.log`.
+  Crash recovery with full stack traces. Use `--debug` for verbose output.
+- **Bootstrap CLI** — `openconductor bootstrap <repo>` seeds agent config files
   (CLAUDE.md, .codex/instructions.md, GEMINI.md) into your repo with
   auto-detected language context.
 
 ## Architecture
 
 ```
-cmd/maestro/          Entry point, wiring
+cmd/openconductor/    Entry point, CLI flags, wiring
 internal/
   agent/              AgentAdapter interface + per-agent CLI wrappers
   attention/          Two-layer attention detection (heuristics + LLM)
   bootstrap/          Repo scaffolding with embedded Go templates
   config/             YAML config loader + validation
   llm/                LLM client abstraction (Anthropic, OpenAI, Google)
+  logging/            File-based structured logger (slog + JSON)
   notification/       Desktop notifications via beeep (macOS/Linux/Windows)
   session/            Agent process lifecycle, PTY management, vt10x state
   tui/                Bubble Tea app — tabs, sidebar, terminal, status bar
@@ -54,7 +59,7 @@ internal/
 
 ### Attention detection
 
-Maestro continuously reads the embedded terminal screen and runs a detection
+OpenConductor continuously reads the embedded terminal screen and runs a detection
 pipeline on each tick:
 
 ```
@@ -100,20 +105,20 @@ Throttled to max once per 5 seconds with backoff when the agent is working.
 ### Install
 
 ```bash
-go install github.com/amir/maestro/cmd/maestro@latest
+go install github.com/openconductorhq/openconductor/cmd/openconductor@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/amir/maestro.git
-cd maestro
+git clone https://github.com/openconductorhq/openconductor.git
+cd openconductor
 make build
 ```
 
 ### Configure
 
-Create `~/.maestro/config.yaml`:
+Create `~/.openconductor/config.yaml`:
 
 ```yaml
 projects:
@@ -141,7 +146,8 @@ notifications:
 ### Run
 
 ```bash
-maestro
+openconductor            # normal mode
+openconductor --debug    # verbose logging to ~/.openconductor/openconductor.log
 ```
 
 ### Bootstrap agent configs
@@ -149,7 +155,7 @@ maestro
 Seed agent-specific configuration files into a repository:
 
 ```bash
-maestro bootstrap ~/code/my-project --agent claude-code
+openconductor bootstrap ~/code/my-project --agent claude-code
 ```
 
 This creates `CLAUDE.md` and `.mcp.json` with project context auto-detected
@@ -160,15 +166,16 @@ from the repo (language, build system, etc.). Also supports `codex` and
 
 | Key | Action |
 |---|---|
+| `Ctrl+S` | Toggle sidebar / terminal focus |
 | `Ctrl+J` / `Ctrl+K` | Next / previous tab |
-| `Esc` | Toggle sidebar / terminal focus |
 | `j` / `k` | Navigate sidebar (when focused) |
 | `Enter` | Select project |
 | `a` | Add project |
 | `d` | Delete project |
 | `Ctrl+C` | Press twice to exit |
 
-Mouse: click tabs and sidebar items. Scroll wheel in terminal area.
+Mouse: click tabs and sidebar items. Drag sidebar border to resize.
+Scroll wheel in terminal area navigates scrollback history.
 
 ## Configuration reference
 

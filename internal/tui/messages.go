@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/amir/maestro/internal/config"
+import "github.com/openconductorhq/openconductor/internal/config"
 
 // SessionState represents the state of an agent session.
 type SessionState int

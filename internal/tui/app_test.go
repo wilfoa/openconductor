@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amir/maestro/internal/config"
-	"github.com/amir/maestro/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hinshun/vt10x"
+	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/session"
 )
 
 func emptyConfig() *config.Config {

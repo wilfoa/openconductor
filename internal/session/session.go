@@ -8,10 +8,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/amir/maestro/internal/agent"
-	"github.com/amir/maestro/internal/config"
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
+	"github.com/openconductorhq/openconductor/internal/agent"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 // State represents the lifecycle state of a session.

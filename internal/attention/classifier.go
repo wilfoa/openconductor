@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amir/maestro/internal/llm"
+	"github.com/openconductorhq/openconductor/internal/llm"
 )
 
 // validStates is the set of valid classification results.

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amir/maestro/internal/config"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 func init() {

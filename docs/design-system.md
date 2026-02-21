@@ -1,10 +1,10 @@
-# Maestro Design System
+# OpenConductor Design System
 
 ## 1. Brand Identity
 
 ### Philosophy
 
-Maestro is a conductor. A conductor does not play instruments -- they bring
+OpenConductor is a conductor. A conductor does not play instruments -- they bring
 clarity, timing, and cohesion to an ensemble. The visual language should
 reflect this: **confident authority with graceful restraint**. Not flashy,
 not minimal to the point of emptiness. Think of the difference between a
@@ -39,7 +39,7 @@ which means the dark violet highlight and alt-bg feel disconnected.
 ### New Palette: "Concert Hall"
 
 The new palette is built around a warm-toned dark background with a
-signature gold accent that nods to the Maestro metaphor -- brass
+signature gold accent that nods to the OpenConductor metaphor -- brass
 instruments, warm stage lighting, gilded concert halls.
 
 #### Foundation Colors
@@ -74,7 +74,7 @@ and feels less clinical.
 #### Brand Accent
 
 ```
-colorAccent    = "#D4A84B"  // Gold -- the Maestro signature
+colorAccent    = "#D4A84B"  // Gold -- the OpenConductor signature
 colorAccentDim = "#8B7A3A"  // Muted gold for subtle uses
 colorAccentBg  = "#2A2415"  // Gold-tinted surface (selected item bg)
 ```
@@ -450,7 +450,7 @@ When no sessions exist, the sidebar shows an inviting empty state:
                               .
 ```
 
-The music note (U+266A) reinforces the Maestro brand without being
+The music note (U+266A) reinforces the OpenConductor brand without being
 heavy-handed.
 
 ### Add Button

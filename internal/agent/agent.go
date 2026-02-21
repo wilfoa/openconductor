@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/amir/maestro/internal/config"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 // LaunchOptions holds parameters passed when launching an agent.

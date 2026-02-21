@@ -3,7 +3,7 @@ package agent
 import (
 	"os/exec"
 
-	"github.com/amir/maestro/internal/config"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 // opencodeAdapter implements AgentAdapter for the OpenCode CLI.

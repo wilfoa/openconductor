@@ -1,10 +1,10 @@
-# Maestro — Design Document
+# OpenConductor — Design Document
 
-## What is Maestro?
+## What is OpenConductor?
 
-A terminal multiplexer purpose-built for coding agents. Like tmux is to shell sessions, Maestro is to agent sessions.
+A terminal multiplexer purpose-built for coding agents. Like tmux is to shell sessions, OpenConductor is to agent sessions.
 
-Maestro is the **executor** that manages agent **workers**. It does NOT replace any agent CLI — it wraps them, manages them, and provides a better UX for working with multiple agents in parallel.
+OpenConductor is the **executor** that manages agent **workers**. It does NOT replace any agent CLI — it wraps them, manages them, and provides a better UX for working with multiple agents in parallel.
 
 ### The Problem
 
@@ -12,17 +12,17 @@ Today, developers working with multiple coding agents (Claude Code, Codex, Gemin
 
 ### The Solution
 
-Maestro gives users:
+OpenConductor gives users:
 
 1. **Awareness** — stop tab-cycling. A sidebar shows which agents need you NOW.
-2. **Agent bootstrapping** — when setting up a project, Maestro offers to configure the agent's repo with recommended workflows (CLAUDE.md, MCP servers for Linear/JIRA, planning-first instructions).
+2. **Agent bootstrapping** — when setting up a project, OpenConductor offers to configure the agent's repo with recommended workflows (CLAUDE.md, MCP servers for Linear/JIRA, planning-first instructions).
 3. **Workflow templates** — opinionated but optional. Suggest a 70/30 planning/implementation ratio. Help users be better "conductors" of their agent orchestra.
 
 ### The Metaphor
 
-| Concept        | Executor world               | Maestro world                            |
+| Concept        | Executor world               | OpenConductor world                            |
 |----------------|------------------------------|------------------------------------------|
-| Executor       | Celery / Temporal / k8s      | Maestro                                  |
+| Conductor      | Celery / Temporal / k8s      | OpenConductor                                  |
 | Worker         | Python process / container   | Claude Code / Codex / Gemini CLI         |
 | Job            | Task payload                 | Project + prompt                         |
 | Job status     | pending / running / complete | idle / working / needs-attention          |
@@ -33,7 +33,7 @@ Maestro gives users:
 
 ## Supported Agents
 
-Maestro is agent-agnostic. It manages any CLI-based coding agent via PTY.
+OpenConductor is agent-agnostic. It manages any CLI-based coding agent via PTY.
 
 ### Licensing Summary
 
@@ -46,7 +46,7 @@ Maestro is agent-agnostic. It manages any CLI-based coding agent via PTY.
 | **Commercial use?**         | Via Agent SDK only       | Yes                  | Yes (paid tier for EU users)    |
 | **Anti-competition clause** | Can't build competing AI | Can't build competing AI | Can't build competing AI    |
 
-**Maestro's legal position:** Maestro is a terminal manager, not a harness. The user runs their own agent CLI with their own credentials. Maestro allocates a PTY and provides a better window manager. This is analogous to iTerm2 or tmux — not a third-party harness.
+**OpenConductor's legal position:** OpenConductor is a terminal manager, not a harness. The user runs their own agent CLI with their own credentials. OpenConductor allocates a PTY and provides a better window manager. This is analogous to iTerm2 or tmux — not a third-party harness.
 
 ---
 
@@ -54,23 +54,23 @@ Maestro is agent-agnostic. It manages any CLI-based coding agent via PTY.
 
 ### The 70/30 Planning/Implementation Ratio
 
-The key insight: the quality of task descriptions determines whether an agent can work autonomously. Maestro encourages users to invest 70% of effort in meticulous planning with the agent, then let the agent execute the remaining 30%.
+The key insight: the quality of task descriptions determines whether an agent can work autonomously. OpenConductor encourages users to invest 70% of effort in meticulous planning with the agent, then let the agent execute the remaining 30%.
 
 ### Workflow Steps
 
-1. User opens Maestro, sees their projects in the sidebar
+1. User opens OpenConductor, sees their projects in the sidebar
 2. User activates a project — this spawns (or resumes) the agent CLI in a managed PTY
 3. User and agent **plan together** interactively (the 70%)
 4. Plan gets broken into tasks, persisted to Linear/JIRA
 5. User **approves** the plan
 6. User tells the agent to **start working** on the tasks (the 30%)
 7. User switches to another project while this agent works
-8. Maestro **notifies** the user when the agent finishes or needs input
+8. OpenConductor **notifies** the user when the agent finishes or needs input
 9. User reviews, approves, and the agent picks up the next task
 
 ### Important: Human is Always the Trigger
 
-Maestro does NOT autonomously run agents. The human activates a project, chooses to plan or execute, and reviews results. The agent never acts without human initiation.
+OpenConductor does NOT autonomously run agents. The human activates a project, chooses to plan or execute, and reviews results. The agent never acts without human initiation.
 
 ---
 
@@ -84,7 +84,7 @@ Tasks are the **contract between planning-phase and execution-phase**.
 
 ### Backend Adapter Pattern
 
-Maestro supports a closed set of task management backends through an adapter interface:
+OpenConductor supports a closed set of task management backends through an adapter interface:
 
 ```
 Task Service (normalized model)
@@ -109,7 +109,7 @@ Every backend maps to/from this normalized set:
 
 ### Status Sniffer-and-Mapper
 
-Instead of asking users to manually map statuses, Maestro:
+Instead of asking users to manually map statuses, OpenConductor:
 
 1. Fetches workflow states from the backend (e.g., Linear team states)
 2. Sends them to a small LLM with the normalized status set
@@ -126,7 +126,7 @@ Runs once on project setup. No user intervention needed.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    Maestro TUI                       │
+│                    OpenConductor TUI                       │
 │                                                      │
 │  ┌───────────┐  ┌────────────────────────────────┐  │
 │  │ Projects  │  │                                │  │

@@ -132,8 +132,8 @@ func (m *terminalModel) readLoop() tea.Cmd {
 	}
 }
 
-// Update handles terminal-level messages. In the maestro app flow, this
-// method is NOT called — the App handles session I/O at a higher level
+// Update handles terminal-level messages. In the OpenConductor app flow,
+// this method is NOT called — the App handles session I/O at a higher level
 // (sessionOutputMsg + timer-based runScrollCheck). This Update path exists
 // for standalone terminalModel use (StartShell/StartCommand) and is
 // exercised by scrollback_test.go.

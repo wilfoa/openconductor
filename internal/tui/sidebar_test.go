@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amir/maestro/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 func sidebarSendKey(t *testing.T, m sidebarModel, k tea.KeyType) (sidebarModel, tea.Cmd) {

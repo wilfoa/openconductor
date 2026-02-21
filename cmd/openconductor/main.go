@@ -7,14 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/amir/maestro/internal/attention"
-	"github.com/amir/maestro/internal/bootstrap"
-	"github.com/amir/maestro/internal/config"
-	"github.com/amir/maestro/internal/llm"
-	"github.com/amir/maestro/internal/logging"
-	"github.com/amir/maestro/internal/notification"
-	"github.com/amir/maestro/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/openconductorhq/openconductor/internal/attention"
+	"github.com/openconductorhq/openconductor/internal/bootstrap"
+	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/llm"
+	"github.com/openconductorhq/openconductor/internal/logging"
+	"github.com/openconductorhq/openconductor/internal/notification"
+	"github.com/openconductorhq/openconductor/internal/tui"
 )
 
 func main() {
@@ -48,17 +48,17 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: maestro [flags] [command]")
+	fmt.Println("Usage: openconductor [flags] [command]")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  (no command)    Launch the TUI")
 	fmt.Println("  bootstrap       Bootstrap agent config files for a repository")
 	fmt.Println()
 	fmt.Println("Global flags:")
-	fmt.Println("  --debug    Enable verbose debug logging to ~/.maestro/maestro.log")
+	fmt.Println("  --debug    Enable verbose debug logging to ~/.openconductor/openconductor.log")
 	fmt.Println()
 	fmt.Println("Bootstrap usage:")
-	fmt.Println("  maestro bootstrap <repo-path> [--agent <type>]")
+	fmt.Println("  openconductor bootstrap <repo-path> [--agent <type>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  --agent    Agent type: claude-code (default), codex, gemini")
@@ -67,7 +67,7 @@ func printUsage() {
 func runBootstrap(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: missing repository path")
-		fmt.Fprintln(os.Stderr, "Usage: maestro bootstrap <repo-path> [--agent <type>]")
+		fmt.Fprintln(os.Stderr, "Usage: openconductor bootstrap <repo-path> [--agent <type>]")
 		os.Exit(1)
 	}
 
@@ -133,7 +133,7 @@ func newLLMClient(cfg *config.Config) llm.Client {
 
 func runTUI(debug bool) {
 	// Initialize file logger. Always logs at info level; --debug adds
-	// verbose debug messages. Log file: ~/.maestro/maestro.log.
+	// verbose debug messages. Log file: ~/.openconductor/openconductor.log.
 	if err := logging.Init(logging.Options{Debug: debug}); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
@@ -178,5 +178,5 @@ func runTUI(debug bool) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	logging.Info("maestro exited cleanly")
+	logging.Info("openconductor exited cleanly")
 }

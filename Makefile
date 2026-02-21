@@ -1,7 +1,7 @@
 .PHONY: build run clean test lint
 
-BINARY := maestro
-PKG := ./cmd/maestro
+BINARY := openconductor
+PKG := ./cmd/openconductor
 
 build:
 	go build -o $(BINARY) $(PKG)

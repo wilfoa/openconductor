@@ -1,12 +1,12 @@
-# Maestro — Attention Detection System
+# OpenConductor — Attention Detection System
 
 ## Overview
 
-The core innovation of Maestro: **agent-agnostic attention detection**. Determines when a coding agent needs human input without understanding each agent's internal protocol.
+The core innovation of OpenConductor: **agent-agnostic attention detection**. Determines when a coding agent needs human input without understanding each agent's internal protocol.
 
 ## Why Not Screenshots?
 
-The initial instinct is to screenshot the terminal and use a vision model. But since Maestro owns the PTY, it already has the terminal output. A VT100 emulator renders raw ANSI output into clean text — giving the same information at a fraction of the cost.
+The initial instinct is to screenshot the terminal and use a vision model. But since OpenConductor owns the PTY, it already has the terminal output. A VT100 emulator renders raw ANSI output into clean text — giving the same information at a fraction of the cost.
 
 | Approach                        | Model needed              | Cost per check  | Latency   |
 |---------------------------------|---------------------------|-----------------|-----------|

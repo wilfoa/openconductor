@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/amir/maestro/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 type sidebarMode int

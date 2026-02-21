@@ -3,7 +3,7 @@ package agent
 import (
 	"os/exec"
 
-	"github.com/amir/maestro/internal/config"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 // codexAdapter implements AgentAdapter for the Codex CLI.

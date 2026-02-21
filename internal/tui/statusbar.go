@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/amir/maestro/internal/config"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/openconductorhq/openconductor/internal/config"
 )
 
 type statusBarModel struct {

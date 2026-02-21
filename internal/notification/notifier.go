@@ -49,7 +49,7 @@ func (n *Notifier) Notify(project string, attnType string, detail string) {
 	n.lastSent[project] = now
 	n.mu.Unlock()
 
-	title := fmt.Sprintf("Maestro: %s", project)
+	title := fmt.Sprintf("OpenConductor: %s", project)
 	message := fmt.Sprintf("[%s] %s", attnType, detail)
 
 	// Best-effort notification; errors are intentionally discarded since

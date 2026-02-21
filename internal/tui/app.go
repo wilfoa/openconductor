@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/amir/maestro/internal/attention"
-	"github.com/amir/maestro/internal/config"
-	"github.com/amir/maestro/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/openconductorhq/openconductor/internal/attention"
+	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/session"
 )
 
 // Notifier is the interface for sending desktop notifications on attention events.
@@ -58,7 +58,7 @@ const ctrlCWindow = 1 * time.Second
 // in the scrollback buffer. 3 lines matches standard terminal behavior.
 const scrollLinesPerTick = 3
 
-// App is the top-level bubbletea model for Maestro.
+// App is the top-level bubbletea model for OpenConductor.
 type App struct {
 	cfg          *config.Config
 	configPath   string
@@ -87,7 +87,7 @@ type App struct {
 	animFrame int
 
 	// lastCtrlC records when Ctrl+C was last pressed. A second press
-	// within ctrlCWindow exits Maestro; a single press forwards to PTY.
+	// within ctrlCWindow exits OpenConductor; a single press forwards to PTY.
 	lastCtrlC time.Time
 	// ctrlCHint is true when the "press again to exit" hint should show
 	// in the status bar. Cleared on the next non-Ctrl+C key or after
@@ -233,7 +233,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		// Ctrl+C double-tap: first press forwards to PTY and shows hint,
-		// second press within ctrlCWindow exits Maestro.
+		// second press within ctrlCWindow exits OpenConductor.
 		if isKey(msg, keys.Quit) {
 			now := time.Now()
 			if !a.lastCtrlC.IsZero() && now.Sub(a.lastCtrlC) < ctrlCWindow {

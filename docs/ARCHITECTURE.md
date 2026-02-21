@@ -1,10 +1,10 @@
-# Maestro — Architecture
+# OpenConductor — Architecture
 
 ## System Overview
 
 ```
 ┌─────────────────────────────────────────┐
-│              Maestro                     │
+│              OpenConductor                     │
 │                                          │
 │  ┌──────────────┐  ┌────────────────┐   │
 │  │  TUI Layer   │  │  Notification  │   │
@@ -37,7 +37,7 @@
 | Language       | Go                                  | Best PTY support, single binary, great TUI ecosystem |
 | TUI framework  | Bubble Tea (charmbracelet)          | Mature, Elm-architecture, large community            |
 | PTY management | creack/pty                          | Standard Go PTY library                              |
-| Config         | YAML files in ~/.maestro/           | Simple, human-editable                               |
+| Config         | YAML files in ~/.openconductor/     | Simple, human-editable                               |
 | Notifications  | gen2brain/beeep or native osascript | Cross-platform desktop notifications                 |
 | Persistence    | SQLite via modernc.org/sqlite       | Project state, session history                       |
 
@@ -138,7 +138,7 @@ Two-layer pipeline:
 ### 5. Configuration System
 
 ```
-~/.maestro/
+~/.openconductor/
 ├── config.yaml              # global settings
 └── projects/
     ├── my-saas-app.yaml     # per-project config
@@ -181,7 +181,7 @@ type NotificationService struct {
 }
 
 func (n *NotificationService) Notify(project string, attention AttentionType) {
-    title := fmt.Sprintf("Maestro: %s", project)
+    title := fmt.Sprintf("OpenConductor: %s", project)
     body := attentionMessage(attention)
     // e.g., "Agent finished task, ready for review"
     // e.g., "Agent is asking a question"
