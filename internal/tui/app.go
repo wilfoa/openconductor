@@ -54,15 +54,9 @@ const stateStickDuration = 10 * time.Second
 // count as a double-tap exit sequence.
 const ctrlCWindow = 1 * time.Second
 
-// scrollLinesPerTick is the number of arrow key presses sent per mouse wheel
-// tick to scroll the terminal. 3 lines matches standard terminal behavior.
+// scrollLinesPerTick is the number of lines scrolled per mouse wheel tick
+// in the scrollback buffer. 3 lines matches standard terminal behavior.
 const scrollLinesPerTick = 3
-
-// Pre-built arrow key sequences for mouse wheel → PTY scroll forwarding.
-var (
-	scrollUpSeq   = buildScrollSeq("\x1b[A", scrollLinesPerTick)
-	scrollDownSeq = buildScrollSeq("\x1b[B", scrollLinesPerTick)
-)
 
 // App is the top-level bubbletea model for Maestro.
 type App struct {
@@ -99,6 +93,23 @@ type App struct {
 	// in the status bar. Cleared on the next non-Ctrl+C key or after
 	// the window expires.
 	ctrlCHint bool
+
+	// scrollbacks maps project names to their scrollback buffers.
+	// Each session gets its own buffer so scrollback is preserved
+	// when switching between tabs.
+	scrollbacks map[string]*scrollbackBuffer
+
+	// scrollSnapshots stores the last-known screen per project (text for
+	// shift detection, glyphs for scrollback capture). The scroll-check
+	// tick compares the current VT screen against these to detect lines
+	// that scrolled off. This decouples detection from individual PTY
+	// writes (which arrive in arbitrary chunks).
+	scrollSnapshots      map[string][]string
+	scrollGlyphSnapshots map[string][]scrollbackLine
+
+	// scrollDirty tracks which projects received new PTY output since
+	// the last scroll check. Only dirty projects are checked on tick.
+	scrollDirty map[string]bool
 }
 
 // NewApp creates the application model from a loaded configuration.
@@ -115,18 +126,22 @@ func NewApp(cfg *config.Config, configPath string) App {
 	}
 
 	return App{
-		cfg:             cfg,
-		configPath:      configPath,
-		sidebar:         newSidebarModel(cfg.Projects, defaultSidebarWidth),
-		terminal:        newTerminalModel(),
-		statusbar:       newStatusBarModel(cfg.Projects),
-		focus:           initialFocus,
-		active:          0,
-		mgr:             session.NewManager(),
-		detector:        attention.NewDetector(),
-		sidebarWidth:    defaultSidebarWidth,
-		openTabs:        openTabs,
-		stateStickUntil: make(map[string]time.Time),
+		cfg:                  cfg,
+		configPath:           configPath,
+		sidebar:              newSidebarModel(cfg.Projects, defaultSidebarWidth),
+		terminal:             newTerminalModel(),
+		statusbar:            newStatusBarModel(cfg.Projects),
+		focus:                initialFocus,
+		active:               0,
+		mgr:                  session.NewManager(),
+		detector:             attention.NewDetector(),
+		sidebarWidth:         defaultSidebarWidth,
+		openTabs:             openTabs,
+		stateStickUntil:      make(map[string]time.Time),
+		scrollbacks:          make(map[string]*scrollbackBuffer),
+		scrollSnapshots:      make(map[string][]string),
+		scrollGlyphSnapshots: make(map[string][]scrollbackLine),
+		scrollDirty:          make(map[string]bool),
 	}
 }
 
@@ -143,7 +158,7 @@ func (a *App) SetNotifier(n Notifier) {
 
 // Init returns the initial command for the bubbletea program.
 func (a App) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), animTickCmd())
+	return tea.Batch(tickCmd(), animTickCmd(), scrollCheckTickCmd())
 }
 
 func tickCmd() tea.Cmd {
@@ -159,6 +174,19 @@ const animFrameCount = 4
 func animTickCmd() tea.Cmd {
 	return tea.Tick(600*time.Millisecond, func(t time.Time) tea.Msg {
 		return AnimTickMsg{}
+	})
+}
+
+// scrollCheckInterval is how often we compare screen snapshots to detect
+// lines that scrolled off. 100ms is fast enough to catch most scrolling
+// while ensuring the VT has a complete screen after PTY chunk reassembly.
+const scrollCheckInterval = 100 * time.Millisecond
+
+type scrollCheckTickMsg struct{}
+
+func scrollCheckTickCmd() tea.Cmd {
+	return tea.Tick(scrollCheckInterval, func(t time.Time) tea.Msg {
+		return scrollCheckTickMsg{}
 	})
 }
 
@@ -246,8 +274,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Escape: toggle focus only when sidebar is in normal mode.
-		// When the sidebar has a form or confirm dialog, let it handle Escape.
+		// Ctrl+S: toggle focus only when sidebar is in normal mode.
+		// When the sidebar has a form or confirm dialog, ignore (user must
+		// Esc out of the form first).
 		if isKey(msg, keys.ToggleFocus) {
 			if a.focus == focusSidebar && a.sidebar.mode != sidebarNormal {
 				// Pass through to sidebar.
@@ -269,6 +298,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 			return a, tea.Batch(cmds...)
+		}
+
+		// Any keyboard input snaps the terminal back to live view.
+		if a.terminal.InScrollMode() {
+			a.terminal.ScrollToBottom()
 		}
 
 		// Terminal focused — send keystrokes to the active session's PTY.
@@ -344,16 +378,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Mouse wheel in terminal area → forward to PTY as arrow
-			// key sequences. This lets agents handle scrolling natively
-			// (3 lines per tick matches standard terminal behavior).
+			// Mouse wheel in terminal area → navigate scrollback buffer.
 			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-				if s := a.mgr.ActiveSession(); s != nil {
-					seq := scrollUpSeq
-					if msg.Button == tea.MouseButtonWheelDown {
-						seq = scrollDownSeq
-					}
-					s.Write(seq)
+				if msg.Button == tea.MouseButtonWheelUp {
+					a.terminal.ScrollBy(scrollLinesPerTick)
+				} else {
+					a.terminal.ScrollBy(-scrollLinesPerTick)
 				}
 				return a, nil
 			}
@@ -487,6 +517,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 
 	case sessionOutputMsg:
+		// VT is already written by the session's ReadLoop (no DeferVTWrite).
+		// Mark this project as dirty so the next scroll-check tick will
+		// compare screen snapshots and capture any scrolled-off lines.
+		a.scrollDirty[msg.ProjectName] = true
 		if msg.ProjectName == a.mgr.ActiveName() {
 			a.syncTerminalFromSession()
 		}
@@ -555,6 +589,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, animTickCmd())
 		return a, tea.Batch(cmds...)
 
+	case scrollCheckTickMsg:
+		a.runScrollCheck()
+		cmds = append(cmds, scrollCheckTickCmd())
+		return a, tea.Batch(cmds...)
+
 	case TickMsg:
 		// Run attention detection on the active session.
 		a.checkAttention()
@@ -569,16 +608,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // dimensions. When true, View() renders a placeholder instead of the UI.
 func (a App) tooSmall() bool {
 	return a.width < minAppWidth || a.height < minAppHeight
-}
-
-// buildScrollSeq concatenates n copies of a key sequence into a single
-// byte slice for efficient writes to the PTY.
-func buildScrollSeq(seq string, n int) []byte {
-	var b []byte
-	for range n {
-		b = append(b, seq...)
-	}
-	return b
 }
 
 // innerWidth returns the usable content width after screen padding.
@@ -612,6 +641,10 @@ func (a App) View() string {
 	rightPanel := lipgloss.JoinVertical(lipgloss.Left, tabBar, terminalView)
 
 	a.statusbar.sidebarFocused = (a.focus == focusSidebar)
+	a.statusbar.scrollOffset = a.terminal.scrollOffset
+	if a.sidebar.selected >= 0 && a.sidebar.selected < len(a.cfg.Projects) {
+		a.statusbar.selectedName = a.cfg.Projects[a.sidebar.selected].Name
+	}
 	statusbarView := a.statusbar.View()
 
 	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, rightPanel)
@@ -813,6 +846,115 @@ func (a *App) syncTerminalFromSession() {
 	a.terminal.height = h
 	a.terminal.active = true
 	a.terminal.mu.Unlock()
+
+	// Point the terminal at this project's scrollback buffer.
+	name := s.Project.Name
+	sb := a.scrollbacks[name]
+	if sb == nil {
+		sb = newScrollbackBuffer(defaultScrollbackCapacity)
+		a.scrollbacks[name] = sb
+	}
+	a.terminal.scrollback = sb
+}
+
+// runScrollCheck iterates over dirty projects and compares the current VT
+// screen against the last-known snapshot to detect lines that scrolled off.
+// This runs on a 100ms tick — by then the VT has a stable screen regardless
+// of how PTY data was chunked across reads.
+func (a *App) runScrollCheck() {
+	for name, dirty := range a.scrollDirty {
+		if !dirty {
+			continue
+		}
+		a.scrollDirty[name] = false
+
+		s := a.mgr.GetSession(name)
+		if s == nil {
+			continue
+		}
+
+		pushed := a.checkScrollback(s, name)
+
+		// If the user is scrolled up AND pinned (scrolled up into history,
+		// not scrolling back down), bump the offset so the view stays on
+		// the same content. When not pinned (user is scrolling down toward
+		// live), skip adjustment so they can reach offset 0.
+		if name == a.mgr.ActiveName() && a.terminal.scrollOffset > 0 && pushed > 0 && a.terminal.scrollPinned {
+			a.terminal.scrollOffset += pushed
+		}
+	}
+}
+
+// checkScrollback compares the current VT screen against the stored snapshot
+// for this project, detects scroll shifts, and pushes scrolled-off rows (as
+// glyph data) to the project's scrollback buffer. Returns the number of
+// lines pushed.
+func (a *App) checkScrollback(s *session.Session, projectName string) int {
+	sb := a.scrollbacks[projectName]
+	if sb == nil {
+		sb = newScrollbackBuffer(defaultScrollbackCapacity)
+		a.scrollbacks[projectName] = sb
+	}
+
+	s.Mu.RLock()
+	defer s.Mu.RUnlock()
+
+	if s.VT == nil {
+		return 0
+	}
+
+	w, h := s.Width, s.Height
+
+	// Build current screen snapshot (text + glyphs).
+	curTexts := make([]string, h)
+	curGlyphs := make([]scrollbackLine, h)
+	for row := 0; row < h; row++ {
+		glyphs := make(scrollbackLine, w)
+		for col := 0; col < w; col++ {
+			glyphs[col] = s.VT.Cell(col, row)
+		}
+		curGlyphs[row] = glyphs
+		curTexts[row] = glyphsToText(glyphs)
+	}
+
+	oldTexts := a.scrollSnapshots[projectName]
+	oldGlyphs := a.scrollGlyphSnapshots[projectName]
+
+	// First snapshot — just store it, nothing to compare.
+	if oldTexts == nil {
+		a.scrollSnapshots[projectName] = curTexts
+		a.scrollGlyphSnapshots[projectName] = curGlyphs
+		return 0
+	}
+
+	// Detect scroll shift between last snapshot and current screen.
+	shift := detectScrollShift(oldTexts, curTexts)
+	pushed := 0
+	if shift > 0 && oldGlyphs != nil {
+		// Find the first row that changed — skip fixed headers in TUI apps.
+		firstDiff := 0
+		for firstDiff < len(oldTexts) && firstDiff < len(curTexts) && oldTexts[firstDiff] == curTexts[firstDiff] {
+			firstDiff++
+		}
+
+		end := firstDiff + shift
+		if end > len(oldGlyphs) {
+			end = len(oldGlyphs)
+		}
+
+		// Push scrolled-off rows using the PREVIOUS snapshot's glyph data.
+		// These rows have been destroyed in the current VT by scrollUp(),
+		// but we preserved them in the last glyph snapshot.
+		for i := firstDiff; i < end; i++ {
+			sb.Push(oldGlyphs[i])
+			pushed++
+		}
+	}
+
+	// Store current snapshot for next comparison.
+	a.scrollSnapshots[projectName] = curTexts
+	a.scrollGlyphSnapshots[projectName] = curGlyphs
+	return pushed
 }
 
 // clearTerminal deactivates the terminal widget so it shows the empty

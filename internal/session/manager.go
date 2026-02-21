@@ -102,6 +102,17 @@ func (m *Manager) SetActive(name string) error {
 	return nil
 }
 
+// InjectSession inserts a pre-built session into the manager, useful for
+// testing without starting a real process.
+func (m *Manager) InjectSession(name string, s *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[name] = s
+	if m.active == "" {
+		m.active = name
+	}
+}
+
 // Close stops all sessions and clears the manager.
 func (m *Manager) Close() {
 	m.mu.Lock()

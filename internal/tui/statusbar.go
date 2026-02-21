@@ -13,8 +13,10 @@ type statusBarModel struct {
 	states         map[string]SessionState
 	width          int
 	activeName     string
+	selectedName   string // sidebar-highlighted project (may differ from active tab)
 	sidebarFocused bool
 	ctrlCHint      bool // show "press Ctrl+C again to exit" hint
+	scrollOffset   int  // >0 when terminal is in scrollback mode
 }
 
 func newStatusBarModel(projects []config.Project) statusBarModel {
@@ -37,7 +39,7 @@ func (m statusBarModel) View() string {
 		}
 	} else if m.sidebarFocused {
 		hints = []struct{ key, label string }{
-			{"Esc", "terminal"},
+			{"^S", "terminal"},
 			{"j/k", "navigate"},
 			{"^j/k", "tab"},
 			{"a", "add"},
@@ -46,7 +48,7 @@ func (m statusBarModel) View() string {
 		}
 	} else {
 		hints = []struct{ key, label string }{
-			{"Esc", "sidebar"},
+			{"^S", "sidebar"},
 			{"^j/k", "tab"},
 			{"Ctrl+C", "exit"},
 		}
@@ -69,7 +71,13 @@ func (m statusBarModel) View() string {
 	// Right: active project + state + aggregate health.
 	var rightParts []string
 
-	if m.activeName != "" {
+	// When sidebar is focused, show the selected project's state description.
+	// Otherwise show the active tab's state.
+	if m.sidebarFocused && m.selectedName != "" {
+		state := m.states[m.selectedName]
+		rightParts = append(rightParts,
+			statusAccentStyle.Render(m.selectedName)+" "+stateStyle(state).Render(state.Description()))
+	} else if m.activeName != "" {
 		state := m.states[m.activeName]
 		rightParts = append(rightParts,
 			statusAccentStyle.Render(m.activeName)+" "+stateStyle(state).Render(state.String()))
@@ -85,6 +93,11 @@ func (m statusBarModel) View() string {
 	if attentionCount > 0 {
 		badge := lipgloss.NewStyle().Foreground(colorWarning)
 		rightParts = append(rightParts, badge.Render("◆ "+strconv.Itoa(attentionCount)+" need attention"))
+	}
+
+	if m.scrollOffset > 0 {
+		scrollStyle := lipgloss.NewStyle().Foreground(colorInfo)
+		rightParts = append(rightParts, scrollStyle.Render("SCROLL ↑"+strconv.Itoa(m.scrollOffset)))
 	}
 
 	right := strings.Join(rightParts, statusDimStyle.Render("  "))

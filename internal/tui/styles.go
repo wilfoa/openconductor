@@ -23,7 +23,7 @@ var (
 
 	// ── Layout ────────────────────────────────────────────────────
 
-	defaultSidebarWidth = 24
+	defaultSidebarWidth = 26
 	minSidebarWidth     = 20
 	screenPadding       = 1 // horizontal padding on each side of the screen
 

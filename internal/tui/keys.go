@@ -12,7 +12,7 @@ type keyMap struct {
 
 var keys = keyMap{
 	Quit:        tea.KeyCtrlC,
-	ToggleFocus: tea.KeyEscape,
+	ToggleFocus: tea.KeyCtrlS,
 	Up:          tea.KeyUp,
 	Down:        tea.KeyDown,
 	Select:      tea.KeyEnter,

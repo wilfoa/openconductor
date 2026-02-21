@@ -30,6 +30,25 @@ func (s SessionState) String() string {
 	}
 }
 
+// Description returns a human-readable explanation of the state,
+// suitable for the status bar when the sidebar item is focused.
+func (s SessionState) Description() string {
+	switch s {
+	case StateIdle:
+		return "waiting for prompt"
+	case StateWorking:
+		return "agent is working"
+	case StateNeedsAttention:
+		return "needs your input"
+	case StateError:
+		return "agent error"
+	case StateDone:
+		return "task completed"
+	default:
+		return ""
+	}
+}
+
 // ProjectSwitchedMsg is sent when the user selects a different project.
 type ProjectSwitchedMsg struct {
 	Index   int

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/amir/maestro/internal/config"
@@ -243,7 +244,6 @@ func (m sidebarModel) View() string {
 				innerWidth = 0
 			}
 			for i, p := range m.projects {
-				state := m.states[p.Name]
 				name := p.Name
 
 				if i == m.selected {
@@ -251,9 +251,17 @@ func (m sidebarModel) View() string {
 					// Render name + agent as a single block so the accent
 					// spans both lines. Width = innerWidth - 1 because the
 					// border consumes 1 column.
+					//
+					// The badge icon is colored inline using a raw ANSI
+					// foreground escape (no reset) so the surrounding
+					// projectActiveStyle (bold + fg + bg) stays intact
+					// for the project name that follows.
+					state := m.states[p.Name]
 					char := badgeChar(state, m.animFrame)
-					nameLine := char + " " + name
-					agentLine := "  " + agentDisplayName(p.Agent)
+					badgeFG := rawFG(stateBadgeColor(state, m.animFrame))
+					restoreFG := rawFG(colorFg)
+					nameLine := badgeFG + char + restoreFG + " " + name
+					agentLine := "  " + agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
 					content := nameLine + "\n" + agentLine
 					b.WriteString(projectActiveStyle.
 						Width(innerWidth - 1).
@@ -334,6 +342,52 @@ func badgeChar(state SessionState, animFrame int) string {
 	default:
 		return "●"
 	}
+}
+
+// stateLabel returns a short state label for inline display next to the agent name.
+func (m sidebarModel) stateLabel(projectName string) string {
+	state, ok := m.states[projectName]
+	if !ok {
+		state = StateIdle
+	}
+	return state.String()
+}
+
+// stateBadgeColor returns the foreground color for a state badge icon.
+func stateBadgeColor(state SessionState, animFrame int) lipgloss.Color {
+	switch state {
+	case StateNeedsAttention:
+		return colorWarning
+	case StateError:
+		return colorDanger
+	case StateDone:
+		return colorInfo
+	case StateWorking:
+		switch animFrame {
+		case 1, 3:
+			return colorSuccessMid
+		case 2:
+			return colorMuted
+		}
+		return colorSuccess
+	default:
+		return colorSuccess
+	}
+}
+
+// rawFG returns a bare ANSI SGR sequence that sets the foreground to the
+// given hex color (e.g. "#E5C07B") without a trailing reset. This allows
+// coloring a single character inline without breaking a surrounding
+// lipgloss-styled block.
+func rawFG(c lipgloss.Color) string {
+	hex := string(c)
+	if len(hex) != 7 || hex[0] != '#' {
+		return ""
+	}
+	r, _ := strconv.ParseUint(hex[1:3], 16, 8)
+	g, _ := strconv.ParseUint(hex[3:5], 16, 8)
+	b, _ := strconv.ParseUint(hex[5:7], 16, 8)
+	return "\x1b[38;2;" + strconv.Itoa(int(r)) + ";" + strconv.Itoa(int(g)) + ";" + strconv.Itoa(int(b)) + "m"
 }
 
 // agentDisplayName returns a compact name for sidebar rendering.

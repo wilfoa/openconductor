@@ -11,36 +11,51 @@ import (
 	"github.com/amir/maestro/internal/bootstrap"
 	"github.com/amir/maestro/internal/config"
 	"github.com/amir/maestro/internal/llm"
+	"github.com/amir/maestro/internal/logging"
 	"github.com/amir/maestro/internal/notification"
 	"github.com/amir/maestro/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
+	// Parse global flags before subcommands.
+	debug := false
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--debug" {
+			debug = true
+			args = append(args[:i], args[i+1:]...)
+			i--
+		}
+	}
+
+	if len(args) > 0 {
+		switch args[0] {
 		case "bootstrap":
-			runBootstrap(os.Args[2:])
+			runBootstrap(args[1:])
 			return
 		case "--help", "-h":
 			printUsage()
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", args[0])
 			printUsage()
 			os.Exit(1)
 		}
 	}
 
-	runTUI()
+	runTUI(debug)
 }
 
 func printUsage() {
-	fmt.Println("Usage: maestro [command]")
+	fmt.Println("Usage: maestro [flags] [command]")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  (no command)    Launch the TUI")
 	fmt.Println("  bootstrap       Bootstrap agent config files for a repository")
+	fmt.Println()
+	fmt.Println("Global flags:")
+	fmt.Println("  --debug    Enable verbose debug logging to ~/.maestro/maestro.log")
 	fmt.Println()
 	fmt.Println("Bootstrap usage:")
 	fmt.Println("  maestro bootstrap <repo-path> [--agent <type>]")
@@ -116,15 +131,28 @@ func newLLMClient(cfg *config.Config) llm.Client {
 	}
 }
 
-func runTUI() {
+func runTUI(debug bool) {
+	// Initialize file logger. Always logs at info level; --debug adds
+	// verbose debug messages. Log file: ~/.maestro/maestro.log.
+	if err := logging.Init(logging.Options{Debug: debug}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
+	}
+	defer logging.Close()
+	defer logging.RecoverPanic()
+
 	configPath := config.DefaultConfigPath()
 	cfg := config.LoadOrDefault(configPath)
+	logging.Info("config loaded",
+		"path", configPath,
+		"projects", len(cfg.Projects),
+	)
 
 	app := tui.NewApp(cfg, configPath)
 
 	// Wire L2 LLM classifier if configured.
 	if client := newLLMClient(cfg); client != nil {
 		app.SetClassifier(attention.NewClassifier(client))
+		logging.Info("LLM classifier enabled", "provider", cfg.LLM.Provider)
 	}
 
 	// Wire desktop notifications.
@@ -139,12 +167,16 @@ func runTUI() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
+		sig := <-sigCh
+		logging.Info("received signal, shutting down", "signal", sig.String())
 		p.Send(tea.Quit())
 	}()
 
+	logging.Info("starting TUI")
 	if _, err := p.Run(); err != nil {
+		logging.Error("TUI exited with error", "err", err)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	logging.Info("maestro exited cleanly")
 }

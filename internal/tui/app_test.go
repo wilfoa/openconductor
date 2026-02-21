@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/amir/maestro/internal/config"
+	"github.com/amir/maestro/internal/session"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hinshun/vt10x"
 )
 
 func emptyConfig() *config.Config {
@@ -37,17 +39,17 @@ func TestNewAppFocusesTerminalWithProjects(t *testing.T) {
 	}
 }
 
-func TestAppEscapeTogglesFocus(t *testing.T) {
+func TestCtrlSTogglesFocus(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
 	if app.focus != focusTerminal {
 		t.Fatal("precondition: expected focusTerminal")
 	}
 
-	msg := tea.KeyMsg{Type: tea.KeyEscape}
+	msg := tea.KeyMsg{Type: tea.KeyCtrlS}
 	model, _ := app.Update(msg)
 	app = model.(App)
 	if app.focus != focusSidebar {
-		t.Fatalf("expected focusSidebar after Escape, got %d", app.focus)
+		t.Fatalf("expected focusSidebar after Ctrl+S, got %d", app.focus)
 	}
 	if !app.sidebar.focused {
 		t.Fatal("expected sidebar.focused=true")
@@ -56,17 +58,17 @@ func TestAppEscapeTogglesFocus(t *testing.T) {
 	model, _ = app.Update(msg)
 	app = model.(App)
 	if app.focus != focusTerminal {
-		t.Fatalf("expected focusTerminal after second Escape, got %d", app.focus)
+		t.Fatalf("expected focusTerminal after second Ctrl+S, got %d", app.focus)
 	}
 }
 
-func TestAppEscapePassesToSidebarInFormMode(t *testing.T) {
+func TestCtrlSIgnoredInSidebarFormMode(t *testing.T) {
 	app := NewApp(emptyConfig(), "")
 	app.focus = focusSidebar
 	app.sidebar.focused = true
 	app.sidebar.mode = sidebarForm
 
-	msg := tea.KeyMsg{Type: tea.KeyEscape}
+	msg := tea.KeyMsg{Type: tea.KeyCtrlS}
 	model, cmd := app.Update(msg)
 	app = model.(App)
 
@@ -75,13 +77,10 @@ func TestAppEscapePassesToSidebarInFormMode(t *testing.T) {
 		t.Fatalf("expected focus to stay on sidebar, got %d", app.focus)
 	}
 
-	// The cmd should produce a FormCancelledMsg (from the form's Escape handler).
-	if cmd == nil {
-		t.Fatal("expected a command from form Escape")
-	}
-	result := cmd()
-	if _, ok := result.(FormCancelledMsg); !ok {
-		t.Fatalf("expected FormCancelledMsg, got %T", result)
+	// Ctrl+S is not handled by the form (it handles Esc), so cmd should be nil.
+	// The form stays open — user must Esc out of the form first.
+	if cmd != nil {
+		t.Fatal("expected nil cmd from Ctrl+S in form mode")
 	}
 }
 
@@ -713,41 +712,22 @@ func TestTabClickBelowTabBarNoSwitch(t *testing.T) {
 	}
 }
 
-// ── Scroll forwarding tests ─────────────────────────────────────
+// ── Scrollback tests ────────────────────────────────────────────
 
-func TestBuildScrollSeq(t *testing.T) {
-	seq := buildScrollSeq("\x1b[A", 3)
-	expected := "\x1b[A\x1b[A\x1b[A"
-	if string(seq) != expected {
-		t.Fatalf("expected %q, got %q", expected, string(seq))
-	}
-}
-
-func TestScrollSeqsPrebuilt(t *testing.T) {
-	// Verify the pre-built sequences have the right length.
-	upLen := len(scrollUpSeq)
-	downLen := len(scrollDownSeq)
-
-	expectedLen := scrollLinesPerTick * 3 // "\x1b[A" or "\x1b[B" = 3 bytes each
-	if upLen != expectedLen {
-		t.Fatalf("scrollUpSeq length: expected %d, got %d", expectedLen, upLen)
-	}
-	if downLen != expectedLen {
-		t.Fatalf("scrollDownSeq length: expected %d, got %d", expectedLen, downLen)
-	}
-}
-
-func TestMouseWheelInTerminalArea(t *testing.T) {
+func TestMouseWheelScrollsBackBuffer(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
 
+	// Seed some scrollback lines so ScrollBy has room.
+	for i := 0; i < 20; i++ {
+		app.terminal.scrollback.Push(nil)
+	}
+
 	sbWidth := app.sidebar.Width()
 	termX := screenPadding + sbWidth + 10
 
-	// Mouse wheel in terminal area should not produce a command
-	// (the scroll is forwarded directly via Write, not via tea.Cmd).
 	msg := tea.MouseMsg{
 		X:      termX,
 		Y:      10,
@@ -759,12 +739,299 @@ func TestMouseWheelInTerminalArea(t *testing.T) {
 	app = model.(App)
 
 	if cmd != nil {
-		t.Error("expected nil cmd from scroll (write is direct, not via cmd)")
+		t.Error("expected nil cmd from scroll")
 	}
-	// Focus should stay on terminal.
-	if app.focus != focusTerminal {
-		t.Fatalf("expected focusTerminal after scroll, got %d", app.focus)
+	if app.terminal.scrollOffset != scrollLinesPerTick {
+		t.Fatalf("expected scrollOffset=%d after wheel up, got %d", scrollLinesPerTick, app.terminal.scrollOffset)
 	}
+
+	// Wheel down should decrease offset.
+	msg.Button = tea.MouseButtonWheelDown
+	model, _ = app.Update(msg)
+	app = model.(App)
+
+	if app.terminal.scrollOffset != 0 {
+		t.Fatalf("expected scrollOffset=0 after wheel down, got %d", app.terminal.scrollOffset)
+	}
+}
+
+func TestKeyboardSnapsToLiveView(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusTerminal
+	app.terminal.scrollOffset = 10
+
+	// Simulate a regular keypress.
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}
+	model, _ := app.Update(msg)
+	app = model.(App)
+
+	if app.terminal.scrollOffset != 0 {
+		t.Fatalf("expected scrollOffset=0 after keypress, got %d", app.terminal.scrollOffset)
+	}
+}
+
+func TestScrollOffsetWiredToStatusBar(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	app.width = 160
+	app.height = 40
+	app.ready = true
+	app.terminal.scrollOffset = 42
+
+	// View() wires scrollOffset into statusbar — verify the rendered
+	// output contains the scroll indicator.
+	view := app.View()
+
+	if !strings.Contains(view, "SCROLL") {
+		t.Fatal("expected SCROLL indicator in status bar when scrollOffset > 0")
+	}
+}
+
+// ── E2E scrollback scenario ─────────────────────────────────────
+//
+// Simulates the full user flow:
+//  1. Project "stocks" running OpenCode (60×14 VT)
+//  2. Agent prints 500 lines of output (scrolling content area)
+//  3. User scrolls up to first printed line, then scrolls back down
+//  4. Agent prints 30 more lines — verify scrollback still works
+
+func TestScrollbackE2EOpenCodeScenario(t *testing.T) {
+	cfg := &config.Config{
+		Projects: []config.Project{
+			{Name: "stocks", Repo: "/tmp/stocks", Agent: config.AgentOpenCode},
+		},
+	}
+	app := NewApp(cfg, "")
+	app.width = 120
+	app.height = 30
+	app.ready = true
+	app.focus = focusTerminal
+	app.layout()
+
+	// ── Step 1: Set up a fake session with a VT ──────────────────
+	const vtW, vtH = 80, 20
+	vt := vt10x.New(vt10x.WithSize(vtW, vtH))
+	sess := &session.Session{
+		Project: cfg.Projects[0],
+		VT:      vt,
+		State:   session.StateRunning,
+		Width:   vtW,
+		Height:  vtH,
+	}
+	app.mgr.InjectSession("stocks", sess)
+	app.syncTerminalFromSession()
+
+	header := "  opencode v1.0"
+	footer := "  > _                                               esc exit"
+	contentRows := vtH - 2 // rows 1..(vtH-2), row 0=header, last=footer
+
+	// Helper: simulate an OpenCode full-screen redraw.
+	renderFrame := func(startLine, endLine int) {
+		frame := buildTUIFrame(vtW, header, footer, startLine, endLine)
+		sess.Mu.Lock()
+		sess.VT.Write([]byte(frame))
+		sess.Mu.Unlock()
+		app.scrollDirty["stocks"] = true
+	}
+
+	// ── Step 2: Agent prints 500 lines ───────────────────────────
+	// Initial frame: lines 1..contentRows.
+	renderFrame(1, contentRows)
+	app.runScrollCheck() // first snapshot — establishes baseline
+
+	// Scroll through 500 lines, 1 line at a time.
+	totalLines := 500
+	for startLine := 2; startLine <= totalLines-contentRows+1; startLine++ {
+		endLine := startLine + contentRows - 1
+		renderFrame(startLine, endLine)
+		app.runScrollCheck()
+	}
+
+	capturedLines := app.scrollbacks["stocks"].Len()
+	t.Logf("captured %d scrollback lines from %d scroll events", capturedLines, totalLines-contentRows)
+
+	// Should have captured a substantial portion. Each scroll-check sees
+	// one complete redraw (no chunking issue in this test).
+	if capturedLines < 300 {
+		t.Fatalf("expected at least 300 scrollback lines, got %d", capturedLines)
+	}
+
+	// Verify the earliest captured line contains the expected content.
+	oldest := glyphsToText(app.scrollbacks["stocks"].Line(0))
+	if !strings.Contains(oldest, "Line") {
+		t.Fatalf("expected oldest scrollback line to contain 'Line', got %q", oldest)
+	}
+
+	// ── Step 3: Scroll up to first line, then back down ──────────
+	sbWidth := app.sidebar.Width()
+	termX := screenPadding + sbWidth + 10
+
+	// Scroll up far enough to see the oldest scrollback lines.
+	scrollsNeeded := capturedLines / scrollLinesPerTick
+	for i := 0; i < scrollsNeeded; i++ {
+		msg := tea.MouseMsg{
+			X: termX, Y: 10,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonWheelUp,
+		}
+		model, _ := app.Update(msg)
+		app = model.(App)
+	}
+
+	if app.terminal.scrollOffset == 0 {
+		t.Fatal("expected scrollOffset > 0 after scrolling up")
+	}
+	if app.terminal.scrollOffset > capturedLines {
+		t.Fatalf("scrollOffset %d should be clamped to buffer len %d",
+			app.terminal.scrollOffset, capturedLines)
+	}
+
+	// View should contain SCROLL indicator.
+	view := app.View()
+	if !strings.Contains(view, "SCROLL") {
+		t.Fatal("expected SCROLL indicator in view when scrolled up")
+	}
+
+	// Scroll back down to live view.
+	for app.terminal.scrollOffset > 0 {
+		msg := tea.MouseMsg{
+			X: termX, Y: 10,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonWheelDown,
+		}
+		model, _ := app.Update(msg)
+		app = model.(App)
+	}
+
+	if app.terminal.scrollOffset != 0 {
+		t.Fatalf("expected scrollOffset=0 after scrolling back down, got %d", app.terminal.scrollOffset)
+	}
+
+	// ── Step 4: Agent prints 30 more lines ───────────────────────
+	prevCaptured := app.scrollbacks["stocks"].Len()
+	base := totalLines - contentRows + 2
+	for startLine := base; startLine < base+30; startLine++ {
+		endLine := startLine + contentRows - 1
+		renderFrame(startLine, endLine)
+		app.runScrollCheck()
+	}
+
+	newCaptured := app.scrollbacks["stocks"].Len()
+	added := newCaptured - prevCaptured
+	t.Logf("captured %d more scrollback lines from 30 additional scroll events", added)
+
+	if added < 20 {
+		t.Fatalf("expected at least 20 new scrollback lines from 30 scrolls, got %d", added)
+	}
+
+	// ── Step 5: Verify keyboard snaps to live ────────────────────
+	// Scroll up again.
+	for i := 0; i < 5; i++ {
+		msg := tea.MouseMsg{
+			X: termX, Y: 10,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonWheelUp,
+		}
+		model, _ := app.Update(msg)
+		app = model.(App)
+	}
+	if app.terminal.scrollOffset == 0 {
+		t.Fatal("expected scrollOffset > 0 before keypress test")
+	}
+
+	// Any keypress should snap back to live.
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	app = model.(App)
+	if app.terminal.scrollOffset != 0 {
+		t.Fatalf("expected scrollOffset=0 after keypress, got %d", app.terminal.scrollOffset)
+	}
+}
+
+// TestScrollbackOffsetAdjustsOnNewData verifies that when the user is
+// scrolled up and new output arrives, the offset bumps so the view stays
+// pinned to the same content.
+func TestScrollbackOffsetAdjustsOnNewData(t *testing.T) {
+	cfg := &config.Config{
+		Projects: []config.Project{
+			{Name: "p1", Repo: "/tmp/p1", Agent: config.AgentOpenCode},
+		},
+	}
+	app := NewApp(cfg, "")
+	app.width = 120
+	app.height = 30
+	app.ready = true
+	app.focus = focusTerminal
+	app.layout()
+
+	const vtW, vtH = 80, 14
+	vt := vt10x.New(vt10x.WithSize(vtW, vtH))
+	sess := &session.Session{
+		Project: cfg.Projects[0],
+		VT:      vt,
+		State:   session.StateRunning,
+		Width:   vtW,
+		Height:  vtH,
+	}
+	app.mgr.InjectSession("p1", sess)
+	app.syncTerminalFromSession()
+
+	header := "  header"
+	footer := "  footer"
+	contentRows := vtH - 2
+
+	writeFrame := func(start int) {
+		frame := buildTUIFrame(vtW, header, footer, start, start+contentRows-1)
+		sess.Mu.Lock()
+		sess.VT.Write([]byte(frame))
+		sess.Mu.Unlock()
+		app.scrollDirty["p1"] = true
+	}
+
+	// Build up scrollback.
+	writeFrame(1)
+	app.runScrollCheck()
+	for i := 2; i <= 50; i++ {
+		writeFrame(i)
+		app.runScrollCheck()
+	}
+
+	// User scrolls up (via ScrollBy, which sets scrollPinned = true).
+	app.terminal.ScrollBy(10)
+	savedOffset := app.terminal.scrollOffset
+
+	// New data arrives while scrolled up and pinned.
+	for i := 51; i <= 55; i++ {
+		writeFrame(i)
+		app.runScrollCheck()
+	}
+
+	// Offset should have increased to keep view pinned.
+	if app.terminal.scrollOffset <= savedOffset {
+		t.Fatalf("expected scrollOffset > %d after new data (pinned), got %d",
+			savedOffset, app.terminal.scrollOffset)
+	}
+
+	// Now simulate the user scrolling DOWN (unpins).
+	beforeDown := app.terminal.scrollOffset
+	app.terminal.ScrollBy(-3) // scrollPinned becomes false
+	if app.terminal.scrollPinned {
+		t.Fatal("expected scrollPinned = false after scrolling down")
+	}
+
+	offsetAfterDown := app.terminal.scrollOffset
+
+	// More data arrives — offset should NOT auto-adjust since unpinned.
+	for i := 56; i <= 60; i++ {
+		writeFrame(i)
+		app.runScrollCheck()
+	}
+
+	if app.terminal.scrollOffset != offsetAfterDown {
+		t.Fatalf("expected scrollOffset to stay at %d when unpinned, got %d",
+			offsetAfterDown, app.terminal.scrollOffset)
+	}
+	_ = beforeDown // suppress unused warning
 }
 
 // ── Sticky state tests ──────────────────────────────────────────
@@ -914,9 +1181,9 @@ func TestTermDimensionsNormalSize(t *testing.T) {
 
 	w, h := app.termDimensions()
 	// innerWidth = 120 - 2 = 118
-	// sidebar = 24 + 1(border) = 25
-	// termWidth = 118 - 25 - 1(padding) = 92
-	expectedW := 92
+	// sidebar = 26 + 1(border) = 27
+	// termWidth = 118 - 27 - 1(padding) = 90
+	expectedW := 90
 	// termHeight = 40 - 4 = 36
 	expectedH := 36
 
