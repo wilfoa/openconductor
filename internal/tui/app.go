@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hinshun/vt10x"
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
@@ -389,6 +390,32 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.terminal.ScrollBy(-scrollLinesPerTick)
 				}
 				return a, nil
+			}
+
+			// Forward non-wheel mouse events to the child PTY when the
+			// child process has requested mouse tracking. This enables
+			// text selection, cursor positioning, and click interactions
+			// inside the embedded agent (e.g., OpenCode's input field).
+			if s := a.mgr.ActiveSession(); s != nil {
+				s.Mu.RLock()
+				var vtMode vt10x.ModeFlag
+				if s.VT != nil {
+					vtMode = s.VT.Mode()
+				}
+				s.Mu.RUnlock()
+
+				if vtMode&vt10x.ModeMouseMask != 0 {
+					localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
+					localY := msg.Y - 3                           // -3 for tab bar height
+					termW, termH := a.termDimensions()
+					if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
+						sgrMode := vtMode&vt10x.ModeMouseSgr != 0
+						motionMode := vtMode&(vt10x.ModeMouseMotion|vt10x.ModeMouseMany) != 0
+						if seq := mouseToBytes(msg, localX, localY, sgrMode, motionMode); seq != nil {
+							s.Write(seq)
+						}
+					}
+				}
 			}
 
 			// Click in terminal area — focus terminal.

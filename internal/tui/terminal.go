@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -192,9 +193,21 @@ func (m terminalModel) View() string {
 
 // viewLive renders the current vt10x viewport (scrollOffset == 0).
 func (m terminalModel) viewLive() string {
+	// Read the cursor position so we can render a visible block cursor.
+	cursorCol, cursorRow := -1, -1
+	if m.vt.CursorVisible() {
+		cur := m.vt.Cursor()
+		cursorCol = cur.X
+		cursorRow = cur.Y
+	}
+
 	var sb strings.Builder
 	for row := 0; row < m.height; row++ {
-		m.renderViewportRow(&sb, row)
+		cc := -1
+		if row == cursorRow {
+			cc = cursorCol
+		}
+		m.renderViewportRow(&sb, row, cc)
 		if row < m.height-1 {
 			sb.WriteRune('\n')
 		}
@@ -230,9 +243,9 @@ func (m terminalModel) viewScrollback() string {
 		}
 	}
 
-	// Render live viewport rows from the top.
+	// Render live viewport rows from the top (no cursor in scrollback view).
 	for row := 0; row < fromViewport; row++ {
-		m.renderViewportRow(&sb, row)
+		m.renderViewportRow(&sb, row, -1)
 		rendered++
 		if rendered < m.height {
 			sb.WriteRune('\n')
@@ -243,8 +256,10 @@ func (m terminalModel) viewScrollback() string {
 }
 
 // renderViewportRow writes one row from the live vt10x grid into sb,
-// including SGR escape sequences for color and attributes.
-func (m terminalModel) renderViewportRow(sb *strings.Builder, row int) {
+// including SGR escape sequences for color and attributes. cursorCol is
+// the column where the cursor should be drawn (with reverse video);
+// pass -1 when no cursor should appear on this row.
+func (m terminalModel) renderViewportRow(sb *strings.Builder, row int, cursorCol int) {
 	var curFG vt10x.Color = vt10x.DefaultFG
 	var curBG vt10x.Color = vt10x.DefaultBG
 	var curMode int16
@@ -255,6 +270,13 @@ func (m terminalModel) renderViewportRow(sb *strings.Builder, row int) {
 		if ch == 0 {
 			ch = ' '
 		}
+
+		// At the cursor position, toggle reverse video so the cell
+		// appears as a visible block cursor (swapped FG/BG).
+		if col == cursorCol {
+			g.Mode ^= int16(vtAttrReverse)
+		}
+
 		if g.FG != curFG || g.BG != curBG || g.Mode != curMode {
 			sb.WriteString(glyphSGR(g))
 			curFG = g.FG
@@ -262,6 +284,14 @@ func (m terminalModel) renderViewportRow(sb *strings.Builder, row int) {
 			curMode = g.Mode
 		}
 		sb.WriteRune(ch)
+
+		// After drawing the cursor cell, force a fresh SGR on the next
+		// cell so the reverse doesn't bleed.
+		if col == cursorCol {
+			curFG = vt10x.Color(0xFFFFFFFF)
+			curBG = vt10x.Color(0xFFFFFFFF)
+			curMode = -1
+		}
 	}
 
 	if curFG != vt10x.DefaultFG || curBG != vt10x.DefaultBG || curMode != 0 {
@@ -332,6 +362,9 @@ func glyphSGR(g vt10x.Glyph) string {
 	}
 	if g.Mode&vtAttrBlink != 0 {
 		sb.WriteString(";5")
+	}
+	if g.Mode&vtAttrReverse != 0 {
+		sb.WriteString(";7")
 	}
 
 	if g.FG != vt10x.DefaultFG {
@@ -567,28 +600,65 @@ func (m *terminalModel) Close() {
 }
 
 func keyToBytes(msg tea.KeyMsg) []byte {
+	// ── Bracketed paste ────────────────────────────────────────────
+	// When Bubble Tea detects bracketed paste, it strips the markers
+	// and sets Paste=true. Re-wrap the content so the child process
+	// sees a proper paste event (critical for image path drag-and-drop).
+	if msg.Paste {
+		content := []byte(string(msg.Runes))
+		buf := make([]byte, 0, len(content)+12)
+		buf = append(buf, "\x1b[200~"...)
+		buf = append(buf, content...)
+		buf = append(buf, "\x1b[201~"...)
+		return buf
+	}
+
+	// ── Simple byte keys (may have Alt modifier) ───────────────────
+	var raw []byte
 	switch msg.Type {
 	case tea.KeyRunes:
-		return []byte(string(msg.Runes))
+		raw = []byte(string(msg.Runes))
 	case tea.KeyEnter:
-		return []byte{'\r'}
+		raw = []byte{'\r'}
 	case tea.KeyBackspace:
-		return []byte{0x7f}
+		raw = []byte{0x7f}
 	case tea.KeyTab:
-		return []byte{'\t'}
+		raw = []byte{'\t'}
 	case tea.KeySpace:
-		return []byte{' '}
+		raw = []byte{' '}
+	case tea.KeyEscape:
+		return []byte{0x1b}
+
+	// ── Navigation keys (Alt → xterm modifier param ;3) ────────────
 	case tea.KeyUp:
+		if msg.Alt {
+			return []byte("\x1b[1;3A")
+		}
 		return []byte("\x1b[A")
 	case tea.KeyDown:
+		if msg.Alt {
+			return []byte("\x1b[1;3B")
+		}
 		return []byte("\x1b[B")
 	case tea.KeyRight:
+		if msg.Alt {
+			return []byte("\x1b[1;3C")
+		}
 		return []byte("\x1b[C")
 	case tea.KeyLeft:
+		if msg.Alt {
+			return []byte("\x1b[1;3D")
+		}
 		return []byte("\x1b[D")
 	case tea.KeyHome:
+		if msg.Alt {
+			return []byte("\x1b[1;3H")
+		}
 		return []byte("\x1b[H")
 	case tea.KeyEnd:
+		if msg.Alt {
+			return []byte("\x1b[1;3F")
+		}
 		return []byte("\x1b[F")
 	case tea.KeyDelete:
 		return []byte("\x1b[3~")
@@ -596,6 +666,38 @@ func keyToBytes(msg tea.KeyMsg) []byte {
 		return []byte("\x1b[5~")
 	case tea.KeyPgDown:
 		return []byte("\x1b[6~")
+
+	// ── Shift+key combinations ─────────────────────────────────────
+	case tea.KeyShiftTab:
+		return []byte("\x1b[Z")
+	case tea.KeyShiftUp:
+		return []byte("\x1b[1;2A")
+	case tea.KeyShiftDown:
+		return []byte("\x1b[1;2B")
+	case tea.KeyShiftRight:
+		return []byte("\x1b[1;2C")
+	case tea.KeyShiftLeft:
+		return []byte("\x1b[1;2D")
+	case tea.KeyShiftHome:
+		return []byte("\x1b[1;2H")
+	case tea.KeyShiftEnd:
+		return []byte("\x1b[1;2F")
+
+	// ── Ctrl+Shift+key combinations ────────────────────────────────
+	case tea.KeyCtrlShiftUp:
+		return []byte("\x1b[1;6A")
+	case tea.KeyCtrlShiftDown:
+		return []byte("\x1b[1;6B")
+	case tea.KeyCtrlShiftRight:
+		return []byte("\x1b[1;6C")
+	case tea.KeyCtrlShiftLeft:
+		return []byte("\x1b[1;6D")
+	case tea.KeyCtrlShiftHome:
+		return []byte("\x1b[1;6H")
+	case tea.KeyCtrlShiftEnd:
+		return []byte("\x1b[1;6F")
+
+	// ── Control keys ───────────────────────────────────────────────
 	case tea.KeyCtrlA:
 		return []byte{0x01}
 	case tea.KeyCtrlB:
@@ -606,25 +708,130 @@ func keyToBytes(msg tea.KeyMsg) []byte {
 		return []byte{0x05}
 	case tea.KeyCtrlF:
 		return []byte{0x06}
+	case tea.KeyCtrlG:
+		return []byte{0x07}
+	case tea.KeyCtrlH:
+		return []byte{0x08}
 	case tea.KeyCtrlK:
 		return []byte{0x0b}
 	case tea.KeyCtrlL:
 		return []byte{0x0c}
 	case tea.KeyCtrlN:
 		return []byte{0x0e}
+	case tea.KeyCtrlO:
+		return []byte{0x0f}
 	case tea.KeyCtrlP:
 		return []byte{0x10}
+	case tea.KeyCtrlQ:
+		return []byte{0x11}
 	case tea.KeyCtrlR:
 		return []byte{0x12}
+	case tea.KeyCtrlT:
+		return []byte{0x14}
 	case tea.KeyCtrlU:
 		return []byte{0x15}
+	case tea.KeyCtrlV:
+		return []byte{0x16}
 	case tea.KeyCtrlW:
 		return []byte{0x17}
+	case tea.KeyCtrlX:
+		return []byte{0x18}
+	case tea.KeyCtrlY:
+		return []byte{0x19}
+	case tea.KeyCtrlZ:
+		return []byte{0x1a}
+
 	default:
 		s := msg.String()
-		if s != "" && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+") {
+		if s != "" &&
+			!strings.HasPrefix(s, "ctrl+") &&
+			!strings.HasPrefix(s, "alt+") &&
+			!strings.HasPrefix(s, "shift+") {
 			return []byte(s)
 		}
 		return nil
 	}
+
+	// For simple byte keys (Runes, Enter, Backspace, Tab, Space),
+	// prepend ESC when the Alt modifier is active.
+	if msg.Alt && raw != nil {
+		return append([]byte{0x1b}, raw...)
+	}
+	return raw
+}
+
+// mouseToBytes encodes a Bubble Tea mouse event as an xterm mouse escape
+// sequence for forwarding to a child PTY. x and y are 0-indexed coordinates
+// relative to the child terminal area. sgrMode and motionMode indicate which
+// encoding and event types the child requested. Returns nil if the event
+// should not be forwarded.
+func mouseToBytes(msg tea.MouseMsg, x, y int, sgrMode, motionMode bool) []byte {
+	col := x + 1 // SGR uses 1-indexed coordinates
+	row := y + 1
+
+	btn := -1
+	suffix := byte('M') // 'M' for press/motion, 'm' for release
+
+	switch msg.Action {
+	case tea.MouseActionPress:
+		switch msg.Button {
+		case tea.MouseButtonLeft:
+			btn = 0
+		case tea.MouseButtonMiddle:
+			btn = 1
+		case tea.MouseButtonRight:
+			btn = 2
+		case tea.MouseButtonWheelUp:
+			btn = 64
+		case tea.MouseButtonWheelDown:
+			btn = 65
+		default:
+			return nil
+		}
+	case tea.MouseActionRelease:
+		switch msg.Button {
+		case tea.MouseButtonLeft:
+			btn = 0
+		case tea.MouseButtonMiddle:
+			btn = 1
+		case tea.MouseButtonRight:
+			btn = 2
+		default:
+			btn = 0
+		}
+		suffix = 'm'
+	case tea.MouseActionMotion:
+		if !motionMode {
+			return nil
+		}
+		switch msg.Button {
+		case tea.MouseButtonLeft:
+			btn = 32
+		case tea.MouseButtonMiddle:
+			btn = 33
+		case tea.MouseButtonRight:
+			btn = 34
+		default:
+			btn = 35
+		}
+	default:
+		return nil
+	}
+
+	if btn < 0 {
+		return nil
+	}
+
+	if sgrMode {
+		return []byte(fmt.Sprintf("\x1b[<%d;%d;%d%c", btn, col, row, suffix))
+	}
+
+	// X10/normal encoding: \x1b[M<button+32><col+32><row+32>
+	if col+32 > 255 || row+32 > 255 {
+		return nil
+	}
+	if msg.Action == tea.MouseActionRelease {
+		btn = 3
+	}
+	return []byte{'\x1b', '[', 'M', byte(btn + 32), byte(col + 32), byte(row + 32)}
 }
