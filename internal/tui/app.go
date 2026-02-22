@@ -943,6 +943,12 @@ func (a *App) runScrollCheck() {
 // for this project, detects scroll shifts, and pushes scrolled-off rows (as
 // glyph data) to the project's scrollback buffer. Returns the number of
 // lines pushed.
+//
+// For sessions running in alternate screen mode (TUI apps like OpenCode),
+// traditional scroll-shift detection doesn't work because the app redraws
+// the entire screen on every update. In that case, we fall back to pushing
+// all old non-blank rows that disappeared from the new screen, giving the
+// user access to previous screen content when scrolling back.
 func (a *App) checkScrollback(s *session.Session, projectName string) int {
 	sb := a.scrollbacks[projectName]
 	if sb == nil {
@@ -958,6 +964,7 @@ func (a *App) checkScrollback(s *session.Session, projectName string) int {
 	}
 
 	w, h := s.Width, s.Height
+	altScreen := s.VT.Mode()&vt10x.ModeAltScreen != 0
 
 	// Build current screen snapshot (text + glyphs).
 	curTexts := make([]string, h)
@@ -984,7 +991,9 @@ func (a *App) checkScrollback(s *session.Session, projectName string) int {
 	// Detect scroll shift between last snapshot and current screen.
 	shift := detectScrollShift(oldTexts, curTexts)
 	pushed := 0
+
 	if shift > 0 && oldGlyphs != nil {
+		// Traditional scroll detected — push scrolled-off rows.
 		// Find the first row that changed — skip fixed headers in TUI apps.
 		firstDiff := 0
 		for firstDiff < len(oldTexts) && firstDiff < len(curTexts) && oldTexts[firstDiff] == curTexts[firstDiff] {
@@ -996,19 +1005,75 @@ func (a *App) checkScrollback(s *session.Session, projectName string) int {
 			end = len(oldGlyphs)
 		}
 
-		// Push scrolled-off rows using the PREVIOUS snapshot's glyph data.
-		// These rows have been destroyed in the current VT by scrollUp(),
-		// but we preserved them in the last glyph snapshot.
 		for i := firstDiff; i < end; i++ {
 			sb.Push(oldGlyphs[i])
 			pushed++
 		}
+	} else if shift == 0 && altScreen && oldGlyphs != nil {
+		// Alt-screen TUI app: no traditional scroll, but the screen may have
+		// been fully repainted. Push old non-blank rows that disappeared from
+		// the new screen, so the user can scroll back to see previous content.
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
 	}
 
 	// Store current snapshot for next comparison.
 	a.scrollSnapshots[projectName] = curTexts
 	a.scrollGlyphSnapshots[projectName] = curGlyphs
 	return pushed
+}
+
+// pushAltScreenDiff pushes old screen rows that are non-blank and no longer
+// present in the new screen. This captures content that disappeared during a
+// TUI app full-screen repaint. Returns the number of lines pushed.
+//
+// To avoid flooding scrollback with identical TUI frames (headers, footers,
+// status bars), a row is only pushed if it:
+//   - is non-blank in the old screen
+//   - does NOT appear at the same position in the new screen
+//   - does NOT appear ANYWHERE in the new screen (dedup against full content)
+//
+// At least minAltDiffRows rows must qualify — small diffs (1-2 rows) are
+// typically just cursor blinks or status updates, not meaningful content loss.
+func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scrollbackLine, curTexts []string) int {
+	const minAltDiffRows = 3
+
+	// Build a set of all current screen text for dedup.
+	curSet := make(map[string]struct{}, len(curTexts))
+	for _, t := range curTexts {
+		if t != "" {
+			curSet[t] = struct{}{}
+		}
+	}
+
+	// Collect old rows that disappeared.
+	type candidate struct {
+		row    int
+		glyphs scrollbackLine
+	}
+	var candidates []candidate
+	for i, oldText := range oldTexts {
+		if oldText == "" {
+			continue
+		}
+		// Skip if the row is unchanged at the same position.
+		if i < len(curTexts) && oldText == curTexts[i] {
+			continue
+		}
+		// Skip if the row still appears anywhere on the new screen.
+		if _, exists := curSet[oldText]; exists {
+			continue
+		}
+		candidates = append(candidates, candidate{row: i, glyphs: oldGlyphs[i]})
+	}
+
+	if len(candidates) < minAltDiffRows {
+		return 0
+	}
+
+	for _, c := range candidates {
+		sb.Push(c.glyphs)
+	}
+	return len(candidates)
 }
 
 // clearTerminal deactivates the terminal widget so it shows the empty

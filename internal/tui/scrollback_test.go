@@ -603,3 +603,155 @@ func makeGlyphsWidth(text string, width int) scrollbackLine {
 	}
 	return glyphs
 }
+
+// ── Alt-screen diff capture tests ───────────────────────────────
+
+func TestPushAltScreenDiff_BasicCapture(t *testing.T) {
+	// Simulate a TUI app full-screen repaint where content rows disappear.
+	sb := newScrollbackBuffer(100)
+
+	oldTexts := []string{
+		"header", // row 0 — stays
+		"old content line1",
+		"old content line2",
+		"old content line3",
+		"old content line4",
+		"footer", // row 5 — stays
+	}
+	oldGlyphs := make([]scrollbackLine, len(oldTexts))
+	for i, t := range oldTexts {
+		oldGlyphs[i] = makeGlyphs("%s", t)
+	}
+
+	curTexts := []string{
+		"header", // same as old
+		"new content line1",
+		"new content line2",
+		"new content line3",
+		"new content line4",
+		"footer", // same as old
+	}
+
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+
+	// 4 old content rows disappeared (not in curTexts, not at same position).
+	if pushed != 4 {
+		t.Fatalf("expected 4 pushed rows, got %d", pushed)
+	}
+	if sb.Len() != 4 {
+		t.Fatalf("expected scrollback len=4, got %d", sb.Len())
+	}
+
+	// Verify correct content was captured.
+	for i := 0; i < 4; i++ {
+		got := glyphsToText(sb.Line(i))
+		expected := fmt.Sprintf("old content line%d", i+1)
+		if got != expected {
+			t.Errorf("line %d: got %q, want %q", i, got, expected)
+		}
+	}
+}
+
+func TestPushAltScreenDiff_SkipSmallDiff(t *testing.T) {
+	// Only 2 rows changed — below minAltDiffRows threshold.
+	sb := newScrollbackBuffer(100)
+
+	oldTexts := []string{
+		"header",
+		"old content 1",
+		"old content 2",
+		"same row",
+		"footer",
+	}
+	oldGlyphs := make([]scrollbackLine, len(oldTexts))
+	for i, t := range oldTexts {
+		oldGlyphs[i] = makeGlyphs("%s", t)
+	}
+
+	curTexts := []string{
+		"header",
+		"new content 1",
+		"new content 2",
+		"same row",
+		"footer",
+	}
+
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+
+	// Only 2 rows changed — below threshold of 3, so nothing pushed.
+	if pushed != 0 {
+		t.Fatalf("expected 0 pushed (below threshold), got %d", pushed)
+	}
+}
+
+func TestPushAltScreenDiff_SkipRowsPresentElsewhere(t *testing.T) {
+	// An old row that moved to a different position should NOT be pushed.
+	sb := newScrollbackBuffer(100)
+
+	oldTexts := []string{
+		"header",
+		"content A",
+		"content B",
+		"content C",
+		"content D",
+		"content E",
+		"footer",
+	}
+	oldGlyphs := make([]scrollbackLine, len(oldTexts))
+	for i, t := range oldTexts {
+		oldGlyphs[i] = makeGlyphs("%s", t)
+	}
+
+	curTexts := []string{
+		"header",
+		"content B", // moved up from row 2 to row 1
+		"content C", // moved up from row 3 to row 2
+		"content D", // moved up
+		"content E", // moved up
+		"content F", // new
+		"footer",
+	}
+
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+
+	// Only "content A" truly disappeared (not anywhere in curTexts).
+	// That's 1 row — below minAltDiffRows, so nothing pushed.
+	if pushed != 0 {
+		t.Fatalf("expected 0 pushed (only 1 unique disappeared row), got %d", pushed)
+	}
+}
+
+func TestPushAltScreenDiff_BlankRowsIgnored(t *testing.T) {
+	sb := newScrollbackBuffer(100)
+
+	oldTexts := []string{
+		"header",
+		"", // blank — should be skipped
+		"old line 1",
+		"old line 2",
+		"old line 3",
+		"", // blank
+		"footer",
+	}
+	oldGlyphs := make([]scrollbackLine, len(oldTexts))
+	for i, t := range oldTexts {
+		oldGlyphs[i] = makeGlyphs("%s", t)
+	}
+
+	curTexts := []string{
+		"header",
+		"",
+		"new line 1",
+		"new line 2",
+		"new line 3",
+		"",
+		"footer",
+	}
+
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+
+	// 3 old content rows disappeared (blank rows skipped).
+	if pushed != 3 {
+		t.Fatalf("expected 3 pushed rows, got %d", pushed)
+	}
+}
