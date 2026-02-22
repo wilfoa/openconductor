@@ -17,6 +17,7 @@ import (
 	"github.com/openconductorhq/openconductor/internal/llm"
 	"github.com/openconductorhq/openconductor/internal/logging"
 	"github.com/openconductorhq/openconductor/internal/notification"
+	"github.com/openconductorhq/openconductor/internal/permission"
 	"github.com/openconductorhq/openconductor/internal/tui"
 )
 
@@ -152,10 +153,23 @@ func runTUI(debug bool) {
 
 	app := tui.NewApp(cfg, configPath)
 
-	// Wire L2 LLM classifier if configured.
+	// Wire L2 LLM classifier and auto-approver if an LLM is configured.
+	// Both the attention classifier and permission classifier share the same
+	// underlying LLM client to avoid redundant provider setup.
 	if client := newLLMClient(cfg); client != nil {
 		app.SetClassifier(attention.NewClassifier(client))
 		logging.Info("LLM classifier enabled", "provider", cfg.LLM.Provider)
+
+		// Build the permission detector (L1 + L2) and wire the auto-approver.
+		permClassifier := permission.NewClassifier(client)
+		permDetector := permission.NewDetector(permClassifier)
+		app.SetAutoApprover(attention.NewAutoApprover(permDetector))
+		logging.Info("auto-approver enabled")
+	} else {
+		// No LLM configured: still enable the auto-approver with L1-only
+		// detection so pattern-matched permissions can be auto-approved.
+		permDetector := permission.NewDetector(nil)
+		app.SetAutoApprover(attention.NewAutoApprover(permDetector))
 	}
 
 	// Wire desktop notifications.

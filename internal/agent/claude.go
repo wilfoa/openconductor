@@ -34,6 +34,15 @@ func (a *claudeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
 	return cmd
 }
 
+// ApproveKeystroke returns "y\n" — Claude Code uses y/n prompts.
+func (a *claudeAdapter) ApproveKeystroke() []byte { return []byte("y\n") }
+
+// ApproveSessionKeystroke returns nil — Claude Code has no session-wide approval.
+func (a *claudeAdapter) ApproveSessionKeystroke() []byte { return nil }
+
+// DenyKeystroke returns "n\n".
+func (a *claudeAdapter) DenyKeystroke() []byte { return []byte("n\n") }
+
 // BootstrapFiles returns a placeholder CLAUDE.md for the repository.
 func (a *claudeAdapter) BootstrapFiles() []BootstrapFile {
 	return []BootstrapFile{

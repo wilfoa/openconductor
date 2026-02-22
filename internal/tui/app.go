@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hinshun/vt10x"
+	"github.com/openconductorhq/openconductor/internal/agent"
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
@@ -76,6 +77,7 @@ type App struct {
 	active       int // index of active project
 	mgr          *session.Manager
 	detector     *attention.Detector
+	autoApprover *attention.AutoApprover
 	notifier     Notifier
 	sidebarWidth int      // content width of sidebar (excludes padding/border)
 	dragging     bool     // true during separator drag
@@ -153,6 +155,13 @@ func NewApp(cfg *config.Config, configPath string) App {
 // Call this before starting the program if the config has LLM settings.
 func (a *App) SetClassifier(c *attention.Classifier) {
 	a.detector.SetClassifier(c)
+}
+
+// SetAutoApprover configures automatic permission approval. When set,
+// permission events are classified and, if within the project's ApprovalLevel,
+// auto-approved by sending the appropriate keystroke to the PTY.
+func (a *App) SetAutoApprover(aa *attention.AutoApprover) {
+	a.autoApprover = aa
 }
 
 // SetNotifier configures desktop notifications for attention events.
@@ -1176,6 +1185,26 @@ func (a *App) checkAttention() {
 
 		event, isWorking := a.detector.Check(ctx, name, lines, pid, string(p.Agent))
 		if event != nil {
+			// Auto-approve permission requests when the project is configured
+			// to do so and the classifier identifies the category as allowed.
+			if event.Type == attention.NeedsPermission && a.autoApprover != nil {
+				adapter, adapterErr := agent.Get(p.Agent)
+				if adapterErr == nil {
+					result := a.autoApprover.CheckAndApprove(ctx, p, lines, adapter)
+					if result.ShouldApprove {
+						// Send the approval keystroke to the PTY and treat
+						// the session as Working — no notification needed.
+						if s := a.mgr.GetSession(name); s != nil {
+							s.Write(result.Keystroke)
+						}
+						a.sidebar.states[name] = StateWorking
+						a.statusbar.states[name] = StateWorking
+						delete(a.stateStickUntil, name)
+						continue
+					}
+				}
+			}
+
 			state := attentionEventToState(event)
 			if state != prevState {
 				// State transition — apply sticky timer for attention states.

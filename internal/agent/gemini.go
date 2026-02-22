@@ -34,6 +34,15 @@ func (a *geminiAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
 	return cmd
 }
 
+// ApproveKeystroke returns "y\n" — Gemini CLI uses y/n prompts.
+func (a *geminiAdapter) ApproveKeystroke() []byte { return []byte("y\n") }
+
+// ApproveSessionKeystroke returns nil — Gemini CLI has no session-wide approval.
+func (a *geminiAdapter) ApproveSessionKeystroke() []byte { return nil }
+
+// DenyKeystroke returns "n\n".
+func (a *geminiAdapter) DenyKeystroke() []byte { return []byte("n\n") }
+
 // BootstrapFiles returns no bootstrap files for Gemini.
 func (a *geminiAdapter) BootstrapFiles() []BootstrapFile {
 	return nil

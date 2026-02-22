@@ -29,6 +29,15 @@ func (a *opencodeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd
 	return cmd
 }
 
+// ApproveKeystroke returns "a" — OpenCode uses single-key permission dialog.
+func (a *opencodeAdapter) ApproveKeystroke() []byte { return []byte("a") }
+
+// ApproveSessionKeystroke returns "A" — OpenCode supports session-wide approval.
+func (a *opencodeAdapter) ApproveSessionKeystroke() []byte { return []byte("A") }
+
+// DenyKeystroke returns "d".
+func (a *opencodeAdapter) DenyKeystroke() []byte { return []byte("d") }
+
 // BootstrapFiles returns no bootstrap files for OpenCode.
 func (a *opencodeAdapter) BootstrapFiles() []BootstrapFile {
 	return nil

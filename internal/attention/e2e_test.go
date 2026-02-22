@@ -173,17 +173,35 @@ func TestE2E_OpenCode_Idle(t *testing.T) {
 	t.Logf("OpenCode idle → %s: %s (source: %s)", event.Type, event.Detail, event.Source)
 }
 
+func TestE2E_OpenCode_PermissionDialog(t *testing.T) {
+	d := NewDetector()
+	lines := simulateOpenCodeExternalDirPermission()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+
+	if isWorking {
+		t.Error("expected isWorking=false for permission dialog")
+	}
+	if event == nil {
+		t.Fatal("expected attention event for permission dialog, got nil")
+	}
+	if event.Type != NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event.Type)
+	}
+	t.Logf("OpenCode permission dialog → %s: %s (source: %s)", event.Type, event.Detail, event.Source)
+}
+
 func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 	d := NewDetector()
 	ctx := context.Background()
 
-	// Phase 1: Idle
+	// Phase 1: Idle → NeedsInput
 	event, _ := d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), AgentOpenCode)
 	if event == nil || event.Type != NeedsInput {
 		t.Fatalf("phase 1 (idle): expected NeedsInput, got %v", event)
 	}
 
-	// Phase 2: Working
+	// Phase 2: Working → isWorking=true
 	event, isWorking := d.Check(ctx, "proj1", simulateOpenCodeWorking(), livePID(), AgentOpenCode)
 	if event != nil {
 		t.Errorf("phase 2 (working): expected nil event, got %v", event)
@@ -192,10 +210,16 @@ func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 		t.Error("phase 2: expected isWorking=true")
 	}
 
-	// Phase 3: Back to idle
+	// Phase 3: Permission dialog → NeedsPermission
+	event, _ = d.Check(ctx, "proj1", simulateOpenCodeExternalDirPermission(), livePID(), AgentOpenCode)
+	if event == nil || event.Type != NeedsPermission {
+		t.Fatalf("phase 3 (permission): expected NeedsPermission, got %v", event)
+	}
+
+	// Phase 4: Back to idle
 	event, _ = d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), AgentOpenCode)
 	if event == nil || event.Type != NeedsInput {
-		t.Fatalf("phase 3 (idle again): expected NeedsInput, got %v", event)
+		t.Fatalf("phase 4 (idle again): expected NeedsInput, got %v", event)
 	}
 }
 
@@ -298,6 +322,52 @@ func simulateClaudeCodeFixingErrors() []string {
 	lines[2] = ""
 	lines[3] = "✦ Fixing…"
 	for i := 4; i < 24; i++ {
+		lines[i] = ""
+	}
+	return lines
+}
+
+// ── OpenCode Permission Scenario ────────────────────────────────────────────
+//
+// Reconstructed from a real terminal capture (screenshot confirmed):
+//
+//	⚠ Permission required
+//	← Access external directory ~/Downloads/drive/users/amir/Development/parlibot/rebuilding-bots
+//	Patterns
+//	- /Users/amir/Downloads/.../rebuilding-bots/*
+//	Allow once  Allow always  Reject    ctrl+f fullscreen  ⌘ select  enter confirm
+//
+// The modal overlays existing output. The full visible screen looks like:
+//
+//	lines 0-4:  previous bash output (cp commands)
+//	line  5:    ■ Build · claude-opus-4-6
+//	line  6:    (blank)
+//	line  7:    ⚠ Permission required
+//	line  8:    ← Access external directory ~/Downloads/.../rebuilding-bots
+//	line  9:    (blank)
+//	line 10:    Patterns
+//	line 11:    - /Users/amir/Downloads/.../rebuilding-bots/*
+//	line 12:    (blank)
+//	line 13:    Allow once  Allow always  Reject    ctrl+f fullscreen  ⌘ select  enter confirm
+
+func simulateOpenCodeExternalDirPermission() []string {
+	lines := make([]string, 24)
+	// Prior output still visible above the dialog.
+	lines[0] = "Found 5 .env files. Let me copy each one to the corresponding location in your current project:"
+	lines[1] = "$ cp /Users/amir/Downloads/drive/users/amir/Development/parlibot/rebuilding-bots/.env.sample /Users/amir/Development/parlibot/rebuilding-bots/.env.sample"
+	lines[2] = "$ cp /Users/amir/Downloads/drive/users/amir/Development/parlibot/rebuilding-bots/backend/es/.env /Users/amir/Development/parlibot/rebuilding-bots/backend/es/.env"
+	lines[3] = ""
+	lines[4] = "■ Build · claude-opus-4-6"
+	lines[5] = ""
+	// Permission dialog modal.
+	lines[6] = "⚠ Permission required"
+	lines[7] = "← Access external directory ~/Downloads/drive/users/amir/Development/parlibot/rebuilding-bots"
+	lines[8] = ""
+	lines[9] = "Patterns"
+	lines[10] = "- /Users/amir/Downloads/drive/users/amir/Development/parlibot/rebuilding-bots/*"
+	lines[11] = ""
+	lines[12] = "Allow once  Allow always  Reject    ctrl+f fullscreen  ⌘ select  enter confirm"
+	for i := 13; i < 24; i++ {
 		lines[i] = ""
 	}
 	return lines

@@ -266,10 +266,23 @@ func isVerbEllipsis(s string) bool {
 	return strings.HasSuffix(s, "…") || strings.HasSuffix(s, "...")
 }
 
-// checkOpenCode detects OpenCode's working/idle state from its terminal output.
+// checkOpenCode detects OpenCode's working/idle/permission state from its
+// terminal output.
 //
 // Working: OpenCode shows a progress bar with "esc interrupt" at the bottom
 // while an LLM is actively generating a response.
+//
+// Permission dialog: OpenCode overlays a modal with the header
+// "Permission required" (with a ⚠ prefix) and buttons
+// "Allow once  Allow always  Reject" at the bottom. The action being
+// requested appears as "← <Action> <detail>" inside the modal.
+// Example screenshot content:
+//
+//	⚠ Permission required
+//	← Access external directory ~/Downloads/...
+//	Patterns
+//	- /path/to/glob/*
+//	Allow once  Allow always  Reject    ctrl+f fullscreen  ⌘ select  enter confirm
 //
 // Idle/done: The progress bar disappears and the bottom shows keyboard
 // shortcuts like "ctrl+t variants  tab agents  ctrl+p commands" without
@@ -278,14 +291,18 @@ func isVerbEllipsis(s string) bool {
 func checkOpenCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 	hasEscInterrupt := false
 	hasIdleShortcuts := false
-	scanned := 0
+	hasPermissionRequired := false
+	hasAllowOnce := false
 
-	for i := len(lastLines) - 1; i >= 0 && scanned < maxScanLines; i-- {
-		lower := strings.ToLower(strings.TrimSpace(lastLines[i]))
-		if lower == "" {
+	// Scan all visible lines (not just maxScanLines) because the permission
+	// dialog spans multiple rows and "Permission required" may appear higher
+	// up the screen while the button row is at the bottom.
+	for i := len(lastLines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lastLines[i])
+		if trimmed == "" {
 			continue
 		}
-		scanned++
+		lower := strings.ToLower(trimmed)
 
 		if strings.Contains(lower, "esc interrupt") {
 			hasEscInterrupt = true
@@ -293,11 +310,27 @@ func checkOpenCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 		if strings.Contains(lower, "ctrl+p commands") || strings.Contains(lower, "ctrl+t variants") {
 			hasIdleShortcuts = true
 		}
+		if strings.Contains(lower, "permission required") {
+			hasPermissionRequired = true
+		}
+		// "Allow once" appears in the button row of the permission dialog.
+		if strings.Contains(lower, "allow once") || strings.Contains(lower, "allow always") {
+			hasAllowOnce = true
+		}
 	}
 
 	if hasEscInterrupt {
 		// Agent is actively working — suppress generic patterns.
 		return Working, nil
+	}
+
+	if hasPermissionRequired || hasAllowOnce {
+		// Permission dialog is visible.
+		return Certain, &AttentionEvent{
+			Type:   NeedsPermission,
+			Detail: "opencode permission dialog detected",
+			Source: "heuristic",
+		}
 	}
 
 	if hasIdleShortcuts {

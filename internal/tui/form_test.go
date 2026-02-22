@@ -164,12 +164,63 @@ func TestFormEscapeCancels(t *testing.T) {
 	}
 }
 
-func TestFormSubmit(t *testing.T) {
+func TestFormAdvanceToAutoApprove(t *testing.T) {
 	m := newTestForm()
 	m.step = stepAgent
+	m.agentIndex = 0
+
+	m, cmd := sendKey(t, m, tea.KeyEnter)
+	if cmd != nil {
+		t.Fatal("expected no command on stepAgent→stepAutoApprove transition")
+	}
+	if m.step != stepAutoApprove {
+		t.Fatalf("expected stepAutoApprove, got %d", m.step)
+	}
+}
+
+func TestFormAutoApproveJKNavigation(t *testing.T) {
+	m := newTestForm()
+	m.step = stepAutoApprove
+	m.approvalIndex = 0 // Off
+
+	// j moves down to Safe
+	m, _ = sendRune(t, m, 'j')
+	if m.approvalIndex != 1 {
+		t.Fatalf("expected approvalIndex 1 (Safe), got %d", m.approvalIndex)
+	}
+	// j moves down to Full
+	m, _ = sendRune(t, m, 'j')
+	if m.approvalIndex != 2 {
+		t.Fatalf("expected approvalIndex 2 (Full), got %d", m.approvalIndex)
+	}
+	// j at bottom stays
+	m, _ = sendRune(t, m, 'j')
+	if m.approvalIndex != 2 {
+		t.Fatalf("expected approvalIndex 2 (clamped), got %d", m.approvalIndex)
+	}
+	// k moves up
+	m, _ = sendRune(t, m, 'k')
+	if m.approvalIndex != 1 {
+		t.Fatalf("expected approvalIndex 1, got %d", m.approvalIndex)
+	}
+	m, _ = sendRune(t, m, 'k')
+	if m.approvalIndex != 0 {
+		t.Fatalf("expected approvalIndex 0, got %d", m.approvalIndex)
+	}
+	// k at top stays
+	m, _ = sendRune(t, m, 'k')
+	if m.approvalIndex != 0 {
+		t.Fatalf("expected approvalIndex 0 (clamped), got %d", m.approvalIndex)
+	}
+}
+
+func TestFormSubmit(t *testing.T) {
+	m := newTestForm()
+	m.step = stepAutoApprove
 	m.nameInput.SetValue("myproject")
 	m.repoInput.SetValue("/tmp")
-	m.agentIndex = 1 // codex
+	m.agentIndex = 1    // codex
+	m.approvalIndex = 1 // safe
 
 	_, cmd := sendKey(t, m, tea.KeyEnter)
 	if cmd == nil {
@@ -185,5 +236,8 @@ func TestFormSubmit(t *testing.T) {
 	}
 	if added.Project.Agent != config.AgentCodex {
 		t.Fatalf("expected agent codex, got %q", added.Project.Agent)
+	}
+	if added.Project.AutoApprove != config.ApprovalSafe {
+		t.Fatalf("expected auto_approve 'safe', got %q", added.Project.AutoApprove)
 	}
 }

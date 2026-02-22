@@ -196,6 +196,16 @@ func (m sidebarModel) handleClick(x, y int) (sidebarModel, tea.Cmd) {
 				}
 			}
 		}
+		// In form step 4, clicking an approval level option selects it.
+		if m.form.step == stepAutoApprove {
+			for i := range approvalOptions {
+				optionY := sidebarTopPad + formApprovalOptionContentStart + i
+				if y == optionY {
+					m.form.selectApproval(i)
+					return m, nil
+				}
+			}
+		}
 	}
 
 	return m, nil

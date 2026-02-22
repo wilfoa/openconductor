@@ -35,6 +35,19 @@ type AgentAdapter interface {
 	// BootstrapFiles returns files that should be seeded into a repo before
 	// the agent is launched for the first time.
 	BootstrapFiles() []BootstrapFile
+
+	// ApproveKeystroke returns the raw bytes to send to the PTY to approve a
+	// permission request (e.g. "y\n" for Claude Code, "a" for OpenCode).
+	ApproveKeystroke() []byte
+
+	// ApproveSessionKeystroke returns bytes that approve the permission for the
+	// entire session (e.g. "A" for OpenCode). Returns nil if the agent does not
+	// support session-wide approval.
+	ApproveSessionKeystroke() []byte
+
+	// DenyKeystroke returns the raw bytes to send to the PTY to deny a
+	// permission request.
+	DenyKeystroke() []byte
 }
 
 // registry maps agent type identifiers to their adapter implementations.

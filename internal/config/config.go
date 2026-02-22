@@ -20,10 +20,26 @@ const (
 	AgentOpenCode   AgentType = "opencode"
 )
 
+// ApprovalLevel controls which permission requests are auto-approved for a
+// project without requiring user interaction.
+type ApprovalLevel string
+
+const (
+	// ApprovalOff disables auto-approve; all permission requests notify the user.
+	ApprovalOff ApprovalLevel = "off"
+	// ApprovalSafe auto-approves low-to-medium risk operations: file reads,
+	// file edits, file creation, safe shell commands, and MCP tool calls.
+	ApprovalSafe ApprovalLevel = "safe"
+	// ApprovalFull auto-approves all operations including file deletion, any
+	// shell command, and network requests. Use with caution.
+	ApprovalFull ApprovalLevel = "full"
+)
+
 type Project struct {
-	Name  string    `yaml:"name"`
-	Repo  string    `yaml:"repo"`
-	Agent AgentType `yaml:"agent"`
+	Name        string        `yaml:"name"`
+	Repo        string        `yaml:"repo"`
+	Agent       AgentType     `yaml:"agent"`
+	AutoApprove ApprovalLevel `yaml:"auto_approve,omitempty"`
 }
 
 type LLMConfig struct {
@@ -86,6 +102,12 @@ func (c *Config) validate() error {
 			// valid
 		default:
 			return fmt.Errorf("project %q: unknown agent type %q", p.Name, p.Agent)
+		}
+		switch p.AutoApprove {
+		case ApprovalOff, ApprovalSafe, ApprovalFull, "":
+			// valid (empty defaults to off)
+		default:
+			return fmt.Errorf("project %q: unknown auto_approve level %q", p.Name, p.AutoApprove)
 		}
 	}
 	return nil

@@ -34,6 +34,15 @@ func (a *codexAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
 	return cmd
 }
 
+// ApproveKeystroke returns "y\n" — Codex uses y/n prompts.
+func (a *codexAdapter) ApproveKeystroke() []byte { return []byte("y\n") }
+
+// ApproveSessionKeystroke returns nil — Codex has no session-wide approval.
+func (a *codexAdapter) ApproveSessionKeystroke() []byte { return nil }
+
+// DenyKeystroke returns "n\n".
+func (a *codexAdapter) DenyKeystroke() []byte { return []byte("n\n") }
+
 // BootstrapFiles returns no bootstrap files for Codex.
 func (a *codexAdapter) BootstrapFiles() []BootstrapFile {
 	return nil

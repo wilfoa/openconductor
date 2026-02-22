@@ -14,12 +14,38 @@ import (
 	"github.com/openconductorhq/openconductor/internal/config"
 )
 
+// approvalOption pairs a display label with a description and the config value.
+type approvalOption struct {
+	label       string
+	description string
+	level       config.ApprovalLevel
+}
+
+var approvalOptions = []approvalOption{
+	{
+		label:       "Off",
+		description: "Notify me for all permission requests",
+		level:       config.ApprovalOff,
+	},
+	{
+		label:       "Safe",
+		description: "Auto-approve file edits and safe commands",
+		level:       config.ApprovalSafe,
+	},
+	{
+		label:       "Full",
+		description: "Auto-approve everything (use with caution)",
+		level:       config.ApprovalFull,
+	},
+}
+
 type formStep int
 
 const (
 	stepName formStep = iota
 	stepRepo
 	stepAgent
+	stepAutoApprove
 )
 
 var agentTypes = []config.AgentType{
@@ -34,6 +60,7 @@ type formModel struct {
 	nameInput     textinput.Model
 	repoInput     textinput.Model
 	agentIndex    int
+	approvalIndex int // index into approvalOptions
 	err           string
 	existingNames map[string]bool
 	completion    completionModel
@@ -132,6 +159,30 @@ func (m formModel) Update(msg tea.Msg) (formModel, tea.Cmd) {
 				m.agentIndex--
 			}
 			return m, nil
+
+		case isRuneKey(msg, 'j') && m.step == stepAutoApprove:
+			if m.approvalIndex < len(approvalOptions)-1 {
+				m.approvalIndex++
+			}
+			return m, nil
+
+		case isRuneKey(msg, 'k') && m.step == stepAutoApprove:
+			if m.approvalIndex > 0 {
+				m.approvalIndex--
+			}
+			return m, nil
+
+		case msg.Type == tea.KeyDown && m.step == stepAutoApprove:
+			if m.approvalIndex < len(approvalOptions)-1 {
+				m.approvalIndex++
+			}
+			return m, nil
+
+		case msg.Type == tea.KeyUp && m.step == stepAutoApprove:
+			if m.approvalIndex > 0 {
+				m.approvalIndex--
+			}
+			return m, nil
 		}
 	}
 
@@ -198,10 +249,16 @@ func (m formModel) advance() (formModel, tea.Cmd) {
 		return m, nil
 
 	case stepAgent:
+		m.step = stepAutoApprove
+		m.repoInput.Blur()
+		return m, nil
+
+	case stepAutoApprove:
 		project := config.Project{
-			Name:  strings.TrimSpace(m.nameInput.Value()),
-			Repo:  strings.TrimSpace(m.repoInput.Value()),
-			Agent: agentTypes[m.agentIndex],
+			Name:        strings.TrimSpace(m.nameInput.Value()),
+			Repo:        strings.TrimSpace(m.repoInput.Value()),
+			Agent:       agentTypes[m.agentIndex],
+			AutoApprove: approvalOptions[m.approvalIndex].level,
 		}
 		return m, func() tea.Msg { return ProjectAddedMsg{Project: project} }
 	}
@@ -211,7 +268,7 @@ func (m formModel) advance() (formModel, tea.Cmd) {
 
 func (m formModel) stepIndicator() string {
 	step := int(m.step) + 1
-	return formStepStyle.Render(fmt.Sprintf("%d/3", step))
+	return formStepStyle.Render(fmt.Sprintf("%d/4", step))
 }
 
 func (m formModel) View() string {
@@ -266,6 +323,26 @@ func (m formModel) View() string {
 			b.WriteString("\n")
 		}
 		b.WriteString(formHintStyle.Render("  j/k to select, Enter to confirm"))
+
+	case stepAutoApprove:
+		b.WriteString(formDoneStyle.Render("Name   " + m.nameInput.Value()))
+		b.WriteString("\n")
+		b.WriteString(formDoneStyle.Render("Repo   " + m.repoInput.Value()))
+		b.WriteString("\n")
+		b.WriteString(formDoneStyle.Render("Agent  " + string(agentTypes[m.agentIndex])))
+		b.WriteString("\n\n")
+		b.WriteString(formLabelStyle.Render("Auto-approve permissions"))
+		b.WriteString("\n")
+		for i, opt := range approvalOptions {
+			line := fmt.Sprintf("%-6s  %s", opt.label, opt.description)
+			if i == m.approvalIndex {
+				b.WriteString(formSelectedStyle.Render("▸ " + line))
+			} else {
+				b.WriteString(formOptionStyle.Render("  " + line))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString(formHintStyle.Render("  j/k to select, Enter to confirm"))
 	}
 
 	if m.err != "" {
@@ -283,6 +360,13 @@ func (m *formModel) selectAgent(idx int) {
 	}
 }
 
+// selectApproval sets the approval level selection by index (used for mouse clicks).
+func (m *formModel) selectApproval(idx int) {
+	if idx >= 0 && idx < len(approvalOptions) {
+		m.approvalIndex = idx
+	}
+}
+
 // agentOptionY returns the screen Y of agent option i within the sidebar.
 // Sidebar top padding = 1, form content for stepAgent:
 //
@@ -294,3 +378,16 @@ func (m *formModel) selectAgent(idx int) {
 //	line 5: "Agent:"
 //	line 6+i: agent option i
 const formAgentOptionContentStart = 6
+
+// formApprovalOptionContentStart is the screen Y offset of the first approval
+// option within the sidebar for stepAutoApprove:
+//
+//	line 0: "Add Project"
+//	line 1: (blank)
+//	line 2: "Name   ..."
+//	line 3: "Repo   ..."
+//	line 4: "Agent  ..."
+//	line 5: (blank)
+//	line 6: "Auto-approve permissions"
+//	line 7+i: approval option i
+const formApprovalOptionContentStart = 7
