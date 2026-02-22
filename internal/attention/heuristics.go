@@ -266,8 +266,8 @@ func isVerbEllipsis(s string) bool {
 	return strings.HasSuffix(s, "…") || strings.HasSuffix(s, "...")
 }
 
-// checkOpenCode detects OpenCode's working/idle/permission state from its
-// terminal output.
+// checkOpenCode detects OpenCode's working/idle/permission/question state
+// from its terminal output.
 //
 // Working: OpenCode shows a progress bar with "esc interrupt" at the bottom
 // while an LLM is actively generating a response.
@@ -284,6 +284,11 @@ func isVerbEllipsis(s string) bool {
 //	- /path/to/glob/*
 //	Allow once  Allow always  Reject    ctrl+f fullscreen  ⌘ select  enter confirm
 //
+// Question dialog: OpenCode shows a multi-option question modal when the agent
+// needs a decision from the user. The footer is uniquely:
+//
+//	↕ select  enter submit  esc dismiss
+//
 // Idle/done: The progress bar disappears and the bottom shows keyboard
 // shortcuts like "ctrl+t variants  tab agents  ctrl+p commands" without
 // "esc interrupt". This means the agent has finished and is waiting for
@@ -293,10 +298,11 @@ func checkOpenCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 	hasIdleShortcuts := false
 	hasPermissionRequired := false
 	hasAllowOnce := false
+	hasQuestionDialog := false
 
 	// Scan all visible lines (not just maxScanLines) because the permission
-	// dialog spans multiple rows and "Permission required" may appear higher
-	// up the screen while the button row is at the bottom.
+	// and question dialogs span multiple rows and header text may appear
+	// higher up the screen while the button row is at the bottom.
 	for i := len(lastLines) - 1; i >= 0; i-- {
 		trimmed := strings.TrimSpace(lastLines[i])
 		if trimmed == "" {
@@ -317,6 +323,12 @@ func checkOpenCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 		if strings.Contains(lower, "allow once") || strings.Contains(lower, "allow always") {
 			hasAllowOnce = true
 		}
+		// "enter submit  esc dismiss" is the footer of OpenCode's question
+		// dialog. "↕ select" may render as "↕" or the arrow glyphs
+		// separately, so we match the unambiguous "enter submit" part.
+		if strings.Contains(lower, "enter submit") && strings.Contains(lower, "esc dismiss") {
+			hasQuestionDialog = true
+		}
 	}
 
 	if hasEscInterrupt {
@@ -329,6 +341,15 @@ func checkOpenCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 		return Certain, &AttentionEvent{
 			Type:   NeedsPermission,
 			Detail: "opencode permission dialog detected",
+			Source: "heuristic",
+		}
+	}
+
+	if hasQuestionDialog {
+		// Question dialog is visible — agent is asking for a decision.
+		return Certain, &AttentionEvent{
+			Type:   NeedsAnswer,
+			Detail: "opencode question dialog detected",
 			Source: "heuristic",
 		}
 	}

@@ -207,6 +207,19 @@ func scrollCheckTickCmd() tea.Cmd {
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Forward unrecognized CSI sequences to the active PTY. bubbletea v1.3.10
+	// emits Shift+Enter (\x1b[13;2u) and other kitty keyboard protocol
+	// sequences as the unexported unknownCSISequenceMsg (underlying []byte).
+	// We detect it via reflection so we can forward without importing internals.
+	if a.focus == focusTerminal {
+		if raw := unknownCSIBytes(msg); len(raw) > 0 {
+			if s := a.mgr.ActiveSession(); s != nil {
+				s.Write(raw)
+			}
+			return a, nil
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
@@ -715,6 +728,8 @@ func inactiveTabStyle(state SessionState) lipgloss.Style {
 	switch state {
 	case StateNeedsAttention:
 		return tabAttentionStyle
+	case StateAsking:
+		return tabAskingStyle
 	case StateError:
 		return tabErrorStyle
 	case StateDone:
@@ -1147,7 +1162,7 @@ func (a App) closeTabCmd(name string) tea.Cmd {
 // isAttentionState returns true for states that should be sticky (not
 // immediately downgraded to Working).
 func isAttentionState(s SessionState) bool {
-	return s == StateNeedsAttention || s == StateError || s == StateDone
+	return s == StateNeedsAttention || s == StateAsking || s == StateError || s == StateDone
 }
 
 // checkAttention runs attention detection on ALL sessions (not just the
@@ -1211,8 +1226,8 @@ func (a *App) checkAttention() {
 				if isAttentionState(state) {
 					a.stateStickUntil[name] = now.Add(stateStickDuration)
 
-					// Send desktop notification on entering attention/error.
-					if a.notifier != nil && (state == StateNeedsAttention || state == StateError) {
+					// Send desktop notification on entering attention/asking/error.
+					if a.notifier != nil && (state == StateNeedsAttention || state == StateAsking || state == StateError) {
 						a.notifier.Notify(name, event.Type.String(), event.Detail)
 					}
 				}
@@ -1254,6 +1269,8 @@ func attentionEventToState(event *attention.AttentionEvent) SessionState {
 	switch event.Type {
 	case attention.NeedsInput, attention.NeedsPermission:
 		return StateNeedsAttention
+	case attention.NeedsAnswer:
+		return StateAsking
 	case attention.HitError, attention.Stuck:
 		return StateError
 	case attention.NeedsReview:

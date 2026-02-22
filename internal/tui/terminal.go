@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -834,4 +835,24 @@ func mouseToBytes(msg tea.MouseMsg, x, y int, sgrMode, motionMode bool) []byte {
 		btn = 3
 	}
 	return []byte{'\x1b', '[', 'M', byte(btn + 32), byte(col + 32), byte(row + 32)}
+}
+
+// unknownCSIBytes extracts the raw bytes from a bubbletea unknownCSISequenceMsg.
+// bubbletea v1.3.10 emits kitty keyboard protocol sequences (e.g. Shift+Enter
+// as \x1b[13;2u) that it doesn't recognise as the unexported type
+// unknownCSISequenceMsg (underlying type []byte). Since the type is unexported
+// we detect it via reflection on the type name and extract the byte slice.
+// Returns nil for any other message type.
+func unknownCSIBytes(msg tea.Msg) []byte {
+	rv := reflect.ValueOf(msg)
+	if !rv.IsValid() {
+		return nil
+	}
+	if reflect.TypeOf(msg).Name() != "unknownCSISequenceMsg" {
+		return nil
+	}
+	if rv.Kind() != reflect.Slice {
+		return nil
+	}
+	return rv.Bytes()
 }

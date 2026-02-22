@@ -191,6 +191,24 @@ func TestE2E_OpenCode_PermissionDialog(t *testing.T) {
 	t.Logf("OpenCode permission dialog → %s: %s (source: %s)", event.Type, event.Detail, event.Source)
 }
 
+func TestE2E_OpenCode_QuestionDialog(t *testing.T) {
+	d := NewDetector()
+	lines := simulateOpenCodeQuestion()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+
+	if isWorking {
+		t.Error("expected isWorking=false for question dialog")
+	}
+	if event == nil {
+		t.Fatal("expected attention event for question dialog, got nil")
+	}
+	if event.Type != NeedsAnswer {
+		t.Errorf("expected NeedsAnswer, got %v", event.Type)
+	}
+	t.Logf("OpenCode question dialog → %s: %s (source: %s)", event.Type, event.Detail, event.Source)
+}
+
 func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 	d := NewDetector()
 	ctx := context.Background()
@@ -216,10 +234,16 @@ func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 		t.Fatalf("phase 3 (permission): expected NeedsPermission, got %v", event)
 	}
 
-	// Phase 4: Back to idle
+	// Phase 4: Question dialog → NeedsAnswer
+	event, _ = d.Check(ctx, "proj1", simulateOpenCodeQuestion(), livePID(), AgentOpenCode)
+	if event == nil || event.Type != NeedsAnswer {
+		t.Fatalf("phase 4 (question): expected NeedsAnswer, got %v", event)
+	}
+
+	// Phase 5: Back to idle
 	event, _ = d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), AgentOpenCode)
 	if event == nil || event.Type != NeedsInput {
-		t.Fatalf("phase 4 (idle again): expected NeedsInput, got %v", event)
+		t.Fatalf("phase 5 (idle again): expected NeedsInput, got %v", event)
 	}
 }
 
@@ -395,5 +419,46 @@ func simulateOpenCodeIdle() []string {
 	}
 	lines[22] = "                                ctrl+t variants  tab agents  ctrl+p commands"
 	lines[23] = ""
+	return lines
+}
+
+// ── OpenCode Question Dialog Scenario ──────────────────────────────────────
+//
+// Reconstructed from a real terminal capture (screenshot confirmed):
+//
+//	■ Build · claude-opus-4-6
+//
+//	Docker Desktop currently has only ~2GB of RAM, which isn't enough for
+//	the Vite build. You'll need to increase it to at least 6GB. Go to
+//	Docker Desktop > Settings > Resources > Memory and increase it.
+//	Should I wait while you do that, or would you prefer I try another approach?
+//
+//	1. I'll increase Docker memory
+//	   I'll go to Docker Desktop settings and increase RAM to 6GB+, then tell you to retry
+//	2. Try with swap/workaround
+//	   Attempt to build with swap or reduced Vite concurrency as a workaround
+//	3. Type your own answer
+//
+//	↕ select  enter submit  esc dismiss
+
+func simulateOpenCodeQuestion() []string {
+	lines := make([]string, 24)
+	lines[0] = "■ Build · claude-opus-4-6"
+	lines[1] = ""
+	lines[2] = "Docker Desktop currently has only ~2GB of RAM, which isn't enough for the Vite build."
+	lines[3] = "You'll need to increase it to at least 6GB. Go to Docker Desktop > Settings > Resources"
+	lines[4] = "> Memory and increase it. Should I wait while you do that, or would you prefer I try"
+	lines[5] = "another approach?"
+	lines[6] = ""
+	lines[7] = "1. I'll increase Docker memory"
+	lines[8] = "   I'll go to Docker Desktop settings and increase RAM to 6GB+, then tell you to retry"
+	lines[9] = "2. Try with swap/workaround"
+	lines[10] = "   Attempt to build with swap or reduced Vite concurrency as a workaround"
+	lines[11] = "3. Type your own answer"
+	lines[12] = ""
+	lines[13] = "↕ select  enter submit  esc dismiss"
+	for i := 14; i < 24; i++ {
+		lines[i] = ""
+	}
 	return lines
 }

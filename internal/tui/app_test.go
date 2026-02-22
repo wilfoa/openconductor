@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hinshun/vt10x"
+	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
 )
@@ -1224,6 +1225,7 @@ func TestInactiveTabStyleByState(t *testing.T) {
 		expected lipgloss.Style
 	}{
 		{StateNeedsAttention, tabAttentionStyle},
+		{StateAsking, tabAskingStyle},
 		{StateError, tabErrorStyle},
 		{StateDone, tabDoneStyle},
 		{StateWorking, tabStyle},
@@ -1235,5 +1237,41 @@ func TestInactiveTabStyleByState(t *testing.T) {
 		if got.Render("X") != tt.expected.Render("X") {
 			t.Errorf("inactiveTabStyle(%v): style mismatch", tt.state)
 		}
+	}
+}
+
+func TestAttentionEventToState_NeedsAnswer(t *testing.T) {
+	event := &attention.AttentionEvent{Type: attention.NeedsAnswer}
+	state := attentionEventToState(event)
+	if state != StateAsking {
+		t.Errorf("expected StateAsking for NeedsAnswer, got %v", state)
+	}
+}
+
+func TestIsAttentionState_IncludesAsking(t *testing.T) {
+	if !isAttentionState(StateAsking) {
+		t.Error("expected StateAsking to be an attention state")
+	}
+	if !isAttentionState(StateNeedsAttention) {
+		t.Error("expected StateNeedsAttention to be an attention state")
+	}
+	if isAttentionState(StateWorking) {
+		t.Error("expected StateWorking to NOT be an attention state")
+	}
+}
+
+func TestStateAsking_StringAndDescription(t *testing.T) {
+	if StateAsking.String() != "asking" {
+		t.Errorf("expected 'asking', got %q", StateAsking.String())
+	}
+	if StateAsking.Description() != "agent has a question" {
+		t.Errorf("expected 'agent has a question', got %q", StateAsking.Description())
+	}
+}
+
+func TestBadgeChar_Asking(t *testing.T) {
+	char := badgeChar(StateAsking, 0)
+	if char != "?" {
+		t.Errorf("expected '?' badge for StateAsking, got %q", char)
 	}
 }

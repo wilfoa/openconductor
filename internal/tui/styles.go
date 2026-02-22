@@ -10,11 +10,12 @@ var (
 	// Warm gold accent with warm-shifted neutrals.
 	// Desaturated status colors for dark-background legibility.
 
-	colorPrimary = lipgloss.Color("#D4A053") // warm gold accent
-	colorInfo    = lipgloss.Color("#7BAFCC") // steel blue
-	colorSuccess = lipgloss.Color("#7EC699") // sage green
-	colorWarning = lipgloss.Color("#E5C07B") // muted gold
-	colorDanger  = lipgloss.Color("#E06C75") // muted rose
+	colorPrimary  = lipgloss.Color("#D4A053") // warm gold accent
+	colorInfo     = lipgloss.Color("#7BAFCC") // steel blue
+	colorSuccess  = lipgloss.Color("#7EC699") // sage green
+	colorWarning  = lipgloss.Color("#E5C07B") // muted gold
+	colorDanger   = lipgloss.Color("#E06C75") // muted rose
+	colorQuestion = lipgloss.Color("#56B6C2") // teal — agent asking a question
 
 	colorFg     = lipgloss.Color("#E2DCD5") // warm off-white (primary text)
 	colorDimFg  = lipgloss.Color("#A89F91") // warm gray (secondary text)
@@ -91,12 +92,14 @@ var (
 	// Green ● = online (steady idle, breathing working).
 	// Red ● = error / attention analysis issue.
 	// Gold ◆ = needs user attention.
+	// Teal ? = agent asking a question.
 	// Blue ✓ = task done.
 
 	colorSuccessMid = lipgloss.Color("#5E9A78") // mid green for breathing mid-frame
 
-	badgeOnline    = lipgloss.NewStyle().Foreground(colorSuccess).SetString("●") // green: agent online
-	badgeAttention = lipgloss.NewStyle().Foreground(colorWarning).SetString("◆")
+	badgeOnline    = lipgloss.NewStyle().Foreground(colorSuccess).SetString("●")  // green: agent online
+	badgeAttention = lipgloss.NewStyle().Foreground(colorWarning).SetString("◆")  // gold: needs input
+	badgeAsking    = lipgloss.NewStyle().Foreground(colorQuestion).SetString("?") // teal: agent question
 	badgeError     = lipgloss.NewStyle().Foreground(colorDanger).SetString("●")
 	badgeDone      = lipgloss.NewStyle().Foreground(colorInfo).SetString("✓")
 
@@ -148,30 +151,38 @@ var (
 	tabActiveStyle = lipgloss.NewStyle().
 			Border(activeTabBorder, true).
 			BorderForeground(colorPrimary).
+			Background(colorHighlight).
 			Foreground(colorPrimary).
 			Bold(true).
 			Padding(0, 1)
 
-	// State-specific inactive tab styles: same structure as tabStyle but
-	// with colored borders and text to signal attention/error/done.
+	// State-specific inactive tab styles: colored border only to signal
+	// state without competing visually with the active tab. Text stays
+	// dim — the badge character (◆ ● ✓) already communicates the state.
+	// Bold text is intentionally omitted so the active tab always wins
+	// on visual prominence.
 	tabAttentionStyle = lipgloss.NewStyle().
 				Border(inactiveTabBorder, true).
 				BorderForeground(colorWarning).
-				Foreground(colorWarning).
-				Bold(true).
+				Foreground(colorDimFg).
 				Padding(0, 1)
+
+	tabAskingStyle = lipgloss.NewStyle().
+			Border(inactiveTabBorder, true).
+			BorderForeground(colorQuestion).
+			Foreground(colorDimFg).
+			Padding(0, 1)
 
 	tabErrorStyle = lipgloss.NewStyle().
 			Border(inactiveTabBorder, true).
 			BorderForeground(colorDanger).
-			Foreground(colorDanger).
-			Bold(true).
+			Foreground(colorDimFg).
 			Padding(0, 1)
 
 	tabDoneStyle = lipgloss.NewStyle().
 			Border(inactiveTabBorder, true).
 			BorderForeground(colorInfo).
-			Foreground(colorInfo).
+			Foreground(colorDimFg).
 			Padding(0, 1)
 
 	tabGapStyle = lipgloss.NewStyle().

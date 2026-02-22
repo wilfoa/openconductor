@@ -11,6 +11,9 @@ const (
 	NeedsInput AttentionType = iota
 	// NeedsPermission indicates the process is requesting a permission decision.
 	NeedsPermission
+	// NeedsAnswer indicates the agent is asking the user a structured question
+	// with numbered choices (e.g. OpenCode's multi-option question dialog).
+	NeedsAnswer
 	// NeedsReview indicates the process has finished and output should be reviewed.
 	NeedsReview
 	// HitError indicates the process has encountered an error.
@@ -26,6 +29,8 @@ func (a AttentionType) String() string {
 		return "NeedsInput"
 	case NeedsPermission:
 		return "NeedsPermission"
+	case NeedsAnswer:
+		return "NeedsAnswer"
 	case NeedsReview:
 		return "NeedsReview"
 	case HitError:

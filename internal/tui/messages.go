@@ -12,6 +12,9 @@ const (
 	StateIdle SessionState = iota
 	StateWorking
 	StateNeedsAttention
+	// StateAsking indicates the agent is asking the user a structured question
+	// (e.g. OpenCode's multi-option question dialog).
+	StateAsking
 	StateError
 	StateDone
 )
@@ -24,6 +27,8 @@ func (s SessionState) String() string {
 		return "working"
 	case StateNeedsAttention:
 		return "attention"
+	case StateAsking:
+		return "asking"
 	case StateError:
 		return "error"
 	case StateDone:
@@ -43,6 +48,8 @@ func (s SessionState) Description() string {
 		return "agent is working"
 	case StateNeedsAttention:
 		return "needs your input"
+	case StateAsking:
+		return "agent has a question"
 	case StateError:
 		return "agent error"
 	case StateDone:
