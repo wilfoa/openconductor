@@ -180,6 +180,12 @@ func runTUI(debug bool) {
 		tea.WithMouseCellMotion(),
 	)
 
+	// Enable kitty keyboard protocol for enhanced key reporting (e.g., Shift+Enter).
+	// Mode flags: 1=disambiguate, 2=report event types, 4=report alternate keys, 8=report all keys
+	// We use mode 1 (disambiguate) which enables CSI u sequences for modified keys.
+	// See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
+	os.Stdout.WriteString("\x1b[>1u")
+
 	// Graceful shutdown: catch SIGINT/SIGTERM and tell bubbletea to quit.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -191,9 +197,13 @@ func runTUI(debug bool) {
 
 	logging.Info("starting TUI")
 	if _, err := p.Run(); err != nil {
+		// Disable kitty keyboard protocol before exiting.
+		os.Stdout.WriteString("\x1b[<u")
 		logging.Error("TUI exited with error", "err", err)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	// Disable kitty keyboard protocol on clean exit.
+	os.Stdout.WriteString("\x1b[<u")
 	logging.Info("openconductor exited cleanly")
 }
