@@ -13,8 +13,7 @@ emulation, watches for moments the agent needs you (input prompts, permission
 requests, errors), and notifies you so you can context-switch only when it
 matters.
 
-<!-- TODO: replace with a screenshot or GIF of the TUI -->
-<!-- ![OpenConductor TUI](assets/screenshot.png) -->
+![OpenConductor TUI](assets/screenshot.png)
 
 ## Features
 
@@ -76,40 +75,19 @@ cd openconductor
 make build
 ```
 
-### Configure
-
-Copy the [example config](config.example.yaml) to `~/.openconductor/config.yaml`
-and edit it:
-
-```yaml
-projects:
-  - name: api
-    repo: ~/code/api
-    agent: claude-code
-  - name: frontend
-    repo: ~/code/frontend
-    agent: opencode
-  - name: infra
-    repo: ~/code/infra
-    agent: codex
-
-# Optional: L2 LLM classifier for ambiguous attention signals
-llm:
-  provider: anthropic          # anthropic | openai | google
-  model: ""                    # empty = provider default
-  api_key_env: ANTHROPIC_API_KEY
-
-notifications:
-  enabled: true
-  cooldown_seconds: 30
-```
-
 ### Run
 
 ```bash
 openconductor            # normal mode
 openconductor --debug    # verbose logging
 ```
+
+On first launch you'll see an empty sidebar. Press `a` to add a project --
+pick a name, point it at a repo, and choose an agent. OpenConductor starts the
+agent immediately. Add as many projects as you like; switch between them with
+`Ctrl+J`/`Ctrl+K` or click the tabs.
+
+![Adding a project](assets/add-project.png)
 
 ### Bootstrap agent configs
 
@@ -208,38 +186,6 @@ traces, and agent-specific spinners. Fast, runs every 500ms.
 **L2 LLM classifier** fires only when L1 returns `Uncertain`. Sends the
 last ~20 terminal lines to an LLM for structured classification. Throttled
 to once per 5 seconds with backoff.
-
-## Configuration reference
-
-### Project
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Display name for the tab and sidebar |
-| `repo` | string | Absolute or `~`-relative path to the repository |
-| `agent` | string | One of `claude-code`, `opencode`, `codex`, `gemini` |
-
-### LLM (optional)
-
-| Field | Type | Description |
-|---|---|---|
-| `provider` | string | `anthropic`, `openai`, or `google` |
-| `model` | string | Model override (empty uses provider default) |
-| `api_key_env` | string | Name of env var containing the API key |
-
-### Notifications
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `true` | Enable desktop notifications |
-| `cooldown_seconds` | int | `30` | Min seconds between notifications per project |
-
-### Telegram (optional)
-
-| Field | Type | Description |
-|---|---|---|
-| `bot_token_env` | string | Env var name containing the bot token |
-| `chat_id` | int | Telegram chat or group ID |
 
 ## Development
 
