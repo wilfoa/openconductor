@@ -111,6 +111,14 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 		case isRuneKey(msg, 'a'):
 			return m.openForm()
 
+		case isRuneKey(msg, 't'):
+			return m, func() tea.Msg {
+				return SystemTabRequestMsg{
+					Name: "Telegram Setup",
+					Args: []string{"telegram", "setup"},
+				}
+			}
+
 		case isRuneKey(msg, 'd'), isRuneKey(msg, 'x'):
 			if len(m.projects) > 0 && m.selected < len(m.projects) {
 				m.mode = sidebarConfirmDelete
@@ -250,7 +258,7 @@ func (m sidebarModel) View() string {
 		if len(m.projects) == 0 {
 			b.WriteString(emptyHintStyle.Render("No projects"))
 			b.WriteString("\n")
-			b.WriteString(emptyHintStyle.Render("Press a to add"))
+			b.WriteString(emptyHintStyle.Render("a add  t telegram"))
 			b.WriteString("\n")
 		} else {
 			// Inner content width (container has Padding 1 on each side).

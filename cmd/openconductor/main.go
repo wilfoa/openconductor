@@ -18,6 +18,7 @@ import (
 	"github.com/openconductorhq/openconductor/internal/logging"
 	"github.com/openconductorhq/openconductor/internal/notification"
 	"github.com/openconductorhq/openconductor/internal/permission"
+	"github.com/openconductorhq/openconductor/internal/telegram"
 	"github.com/openconductorhq/openconductor/internal/tui"
 )
 
@@ -38,6 +39,9 @@ func main() {
 		case "bootstrap":
 			runBootstrap(args[1:])
 			return
+		case "telegram":
+			runTelegram(args[1:])
+			return
 		case "--help", "-h":
 			printUsage()
 			return
@@ -55,8 +59,9 @@ func printUsage() {
 	fmt.Println("Usage: openconductor [flags] [command]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  (no command)    Launch the TUI")
-	fmt.Println("  bootstrap       Bootstrap agent config files for a repository")
+	fmt.Println("  (no command)       Launch the TUI")
+	fmt.Println("  bootstrap          Bootstrap agent config files for a repository")
+	fmt.Println("  telegram setup     Set up Telegram bot integration")
 	fmt.Println()
 	fmt.Println("Global flags:")
 	fmt.Println("  --debug    Enable verbose debug logging to ~/.openconductor/openconductor.log")
@@ -66,6 +71,24 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  --agent    Agent type: claude-code (default), codex, gemini")
+}
+
+func runTelegram(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: openconductor telegram setup")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "setup":
+		if err := telegram.RunSetup(); err != nil {
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown telegram subcommand: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "Usage: openconductor telegram setup")
+		os.Exit(1)
+	}
 }
 
 func runBootstrap(args []string) {
@@ -175,6 +198,20 @@ func runTUI(debug bool) {
 	// Wire desktop notifications.
 	app.SetNotifier(notification.New(cfg.Notifications.Enabled, cfg.Notifications.Cooldown))
 
+	// Wire Telegram bot bridge if enabled.
+	var tgBot *telegram.Bot
+	if cfg.Telegram.Enabled {
+		bot, err := telegram.NewBot(cfg.Telegram, app.SessionManager(), cfg.Projects)
+		if err != nil {
+			logging.Error("telegram: failed to create bot", "err", err)
+			fmt.Fprintf(os.Stderr, "Warning: Telegram bot failed to start: %v\n", err)
+		} else {
+			app.SetTelegramChannel(bot.EventChannel())
+			tgBot = bot
+			logging.Info("telegram bot configured")
+		}
+	}
+
 	p := tea.NewProgram(app,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
@@ -195,15 +232,32 @@ func runTUI(debug bool) {
 		p.Send(tea.Quit())
 	}()
 
+	// Start Telegram bot (polling + bridge loops).
+	if tgBot != nil {
+		if err := tgBot.Start(); err != nil {
+			logging.Error("telegram: failed to start bot", "err", err)
+			fmt.Fprintf(os.Stderr, "Warning: Telegram bot failed to start: %v\n", err)
+		} else {
+			logging.Info("telegram bot started")
+		}
+	}
+
 	logging.Info("starting TUI")
 	if _, err := p.Run(); err != nil {
 		// Disable kitty keyboard protocol before exiting.
 		os.Stdout.WriteString("\x1b[<u")
+		if tgBot != nil {
+			tgBot.Stop()
+		}
 		logging.Error("TUI exited with error", "err", err)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	// Disable kitty keyboard protocol on clean exit.
 	os.Stdout.WriteString("\x1b[<u")
+	if tgBot != nil {
+		tgBot.Stop()
+		logging.Info("telegram bot stopped")
+	}
 	logging.Info("openconductor exited cleanly")
 }

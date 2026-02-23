@@ -107,3 +107,16 @@ type FormCancelledMsg struct{}
 type ConfigSavedMsg struct {
 	Err error
 }
+
+// SystemTabRequestMsg asks the App to open a system tab running a command.
+// The tab is not backed by an agent — it runs an arbitrary process in a PTY.
+type SystemTabRequestMsg struct {
+	Name string   // tab name (e.g. "Telegram Setup")
+	Args []string // args to pass to the openconductor binary (e.g. ["telegram", "setup"])
+}
+
+// SystemTabExitedMsg signals that a system tab process has exited.
+// The App uses this to trigger post-exit actions (e.g. config reload).
+type SystemTabExitedMsg struct {
+	Name string
+}

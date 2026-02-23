@@ -1,0 +1,286 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 The OpenConductor Authors.
+
+package telegram
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/openconductorhq/openconductor/internal/config"
+)
+
+// ── ParseQuestionOptions ────────────────────────────────────────
+
+func TestParseQuestionOptions_DotFormat(t *testing.T) {
+	lines := []string{
+		"Which option would you like?",
+		"1. Create a new file",
+		"2. Edit existing file",
+		"3. Delete file",
+		"",
+		"Enter your choice:",
+	}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 3 {
+		t.Fatalf("expected 3 options, got %d", len(opts))
+	}
+	if opts[0] != "1. Create a new file" {
+		t.Fatalf("expected first option '1. Create a new file', got %q", opts[0])
+	}
+}
+
+func TestParseQuestionOptions_ParenFormat(t *testing.T) {
+	lines := []string{
+		"Select an action:",
+		"1) Continue",
+		"2) Abort",
+		"3) Retry",
+	}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 3 {
+		t.Fatalf("expected 3 options with ')' format, got %d", len(opts))
+	}
+	if opts[0] != "1) Continue" {
+		t.Fatalf("expected '1) Continue', got %q", opts[0])
+	}
+}
+
+func TestParseQuestionOptions_MixedFormats(t *testing.T) {
+	lines := []string{"1. Dot format", "2) Paren format", "3. Another dot"}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 3 {
+		t.Fatalf("expected 3 options (mixed), got %d", len(opts))
+	}
+}
+
+func TestParseQuestionOptions_NoNumbers(t *testing.T) {
+	lines := []string{"Just a regular question", "with no numbered options"}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 0 {
+		t.Fatalf("expected 0 options, got %d", len(opts))
+	}
+}
+
+func TestParseQuestionOptions_IndentedNumbers(t *testing.T) {
+	lines := []string{"  1. Indented option", "  2. Another one"}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 2 {
+		t.Fatalf("expected 2 options (trimmed), got %d", len(opts))
+	}
+}
+
+func TestParseQuestionOptions_ZeroNotMatched(t *testing.T) {
+	lines := []string{"0. This should not match", "1. This should match"}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 option (0 excluded), got %d", len(opts))
+	}
+}
+
+func TestParseQuestionOptions_BlankLines(t *testing.T) {
+	lines := []string{"", "  ", "1. Only option", ""}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 option, got %d", len(opts))
+	}
+}
+
+// ── extractLeadingNumber ────────────────────────────────────────
+
+func TestExtractLeadingNumber(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"1. Foo", "1"},
+		{"12) Bar", "12"},
+		{"3.thing", "3"},
+		{"99 whatever", "99"},
+		{"abc", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := extractLeadingNumber(tt.input)
+		if got != tt.want {
+			t.Errorf("extractLeadingNumber(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// ── FormatCallbackData ──────────────────────────────────────────
+
+func TestFormatCallbackData_Short(t *testing.T) {
+	data := FormatCallbackData("perm", "my-project", "allow")
+	expected := "perm:my-project:allow"
+	if data != expected {
+		t.Fatalf("expected %q, got %q", expected, data)
+	}
+}
+
+func TestFormatCallbackData_Truncates(t *testing.T) {
+	longName := "this-is-a-very-long-project-name-that-exceeds-the-telegram-limit"
+	data := FormatCallbackData("perm", longName, "allow")
+	if len(data) > 64 {
+		t.Fatalf("expected callback data <= 64 bytes, got %d", len(data))
+	}
+	if data[0:5] != "perm:" {
+		t.Fatalf("expected prefix 'perm:', got %q", data[:5])
+	}
+}
+
+func TestFormatCallbackData_PreservesShortData(t *testing.T) {
+	data := FormatCallbackData("opt", "p", "1")
+	if data != "opt:p:1" {
+		t.Fatalf("expected 'opt:p:1', got %q", data)
+	}
+}
+
+// ── Callback data round-trip ────────────────────────────────────
+// Verify that the callback data produced by keyboards can be parsed back
+// into the correct kind/project/action triple.
+
+func TestCallbackRoundTrip_Permission(t *testing.T) {
+	project := "my-proj"
+	for _, action := range []string{"allow", "allowall", "deny"} {
+		data := FormatCallbackData("perm", project, action)
+		parts := strings.SplitN(data, ":", 3)
+		if len(parts) != 3 {
+			t.Fatalf("expected 3 parts, got %d from %q", len(parts), data)
+		}
+		if parts[0] != "perm" {
+			t.Errorf("kind: expected 'perm', got %q", parts[0])
+		}
+		if parts[1] != project {
+			t.Errorf("project: expected %q, got %q", project, parts[1])
+		}
+		if parts[2] != action {
+			t.Errorf("action: expected %q, got %q", action, parts[2])
+		}
+	}
+}
+
+func TestCallbackRoundTrip_QuestionOption(t *testing.T) {
+	project := "stocks"
+	for _, num := range []string{"1", "2", "3"} {
+		data := FormatCallbackData("opt", project, num)
+		parts := strings.SplitN(data, ":", 3)
+		if len(parts) != 3 {
+			t.Fatalf("expected 3 parts from %q", data)
+		}
+		if parts[0] != "opt" || parts[1] != project || parts[2] != num {
+			t.Errorf("round-trip failed: %q → [%s, %s, %s]", data, parts[0], parts[1], parts[2])
+		}
+	}
+}
+
+// ── Keyboard structure ──────────────────────────────────────────
+
+func TestPermissionKeyboard_HasThreeButtons(t *testing.T) {
+	kb := PermissionKeyboard("test-project")
+	if len(kb.InlineKeyboard) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(kb.InlineKeyboard))
+	}
+	row := kb.InlineKeyboard[0]
+	if len(row) != 3 {
+		t.Fatalf("expected 3 buttons, got %d", len(row))
+	}
+
+	// Verify button labels.
+	labels := []string{row[0].Text, row[1].Text, row[2].Text}
+	if labels[0] != "Allow Once" || labels[1] != "Allow Always" || labels[2] != "Deny" {
+		t.Fatalf("unexpected button labels: %v", labels)
+	}
+
+	// Verify callback data is parseable.
+	for _, btn := range row {
+		parts := strings.SplitN(*btn.CallbackData, ":", 3)
+		if len(parts) != 3 {
+			t.Errorf("button %q: callback data %q not parseable", btn.Text, *btn.CallbackData)
+		}
+		if parts[0] != "perm" {
+			t.Errorf("button %q: expected kind 'perm', got %q", btn.Text, parts[0])
+		}
+		if parts[1] != "test-project" {
+			t.Errorf("button %q: expected project 'test-project', got %q", btn.Text, parts[1])
+		}
+	}
+
+	// Verify specific actions.
+	if !strings.HasSuffix(*row[0].CallbackData, ":allow") {
+		t.Errorf("Allow Once button: expected ':allow' suffix, got %q", *row[0].CallbackData)
+	}
+	if !strings.HasSuffix(*row[1].CallbackData, ":allowall") {
+		t.Errorf("Allow Always button: expected ':allowall' suffix, got %q", *row[1].CallbackData)
+	}
+	if !strings.HasSuffix(*row[2].CallbackData, ":deny") {
+		t.Errorf("Deny button: expected ':deny' suffix, got %q", *row[2].CallbackData)
+	}
+}
+
+func TestQuestionKeyboard_MatchesOptions(t *testing.T) {
+	options := []string{"1. Create file", "2. Edit file", "3. Delete file"}
+	kb := QuestionKeyboard("proj", options)
+
+	// QuestionKeyboard puts all buttons in one row.
+	if len(kb.InlineKeyboard) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(kb.InlineKeyboard))
+	}
+	row := kb.InlineKeyboard[0]
+	if len(row) != 3 {
+		t.Fatalf("expected 3 buttons, got %d", len(row))
+	}
+
+	// Button labels should be the full option text.
+	for i, btn := range row {
+		if btn.Text != options[i] {
+			t.Errorf("button %d: expected label %q, got %q", i, options[i], btn.Text)
+		}
+	}
+
+	// Callback data should contain just the number.
+	for i, btn := range row {
+		parts := strings.SplitN(*btn.CallbackData, ":", 3)
+		expectedNum := extractLeadingNumber(options[i])
+		if parts[2] != expectedNum {
+			t.Errorf("button %d: expected action %q, got %q", i, expectedNum, parts[2])
+		}
+	}
+}
+
+func TestQuestionKeyboard_ParenFormat(t *testing.T) {
+	options := []string{"1) Yes", "2) No"}
+	kb := QuestionKeyboard("proj", options)
+	row := kb.InlineKeyboard[0]
+	if len(row) != 2 {
+		t.Fatalf("expected 2 buttons, got %d", len(row))
+	}
+	// "1) Yes" → number should be "1".
+	parts := strings.SplitN(*row[0].CallbackData, ":", 3)
+	if parts[2] != "1" {
+		t.Errorf("expected action '1', got %q", parts[2])
+	}
+}
+
+// ── Handler project-by-topic lookup ─────────────────────────────
+
+func TestHandler_ProjectByTopic(t *testing.T) {
+	state := newTopicState()
+	state.Set("alpha", 100)
+	state.Set("beta", 200)
+
+	h := &handler{state: state, projects: []config.Project{
+		{Name: "alpha"},
+		{Name: "beta"},
+	}}
+
+	if got := h.projectByTopic(100); got != "alpha" {
+		t.Errorf("expected 'alpha', got %q", got)
+	}
+	if got := h.projectByTopic(200); got != "beta" {
+		t.Errorf("expected 'beta', got %q", got)
+	}
+	if got := h.projectByTopic(999); got != "" {
+		t.Errorf("expected empty for unknown topic, got %q", got)
+	}
+}

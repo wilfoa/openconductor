@@ -5,6 +5,7 @@ package session
 
 import (
 	"fmt"
+	"os/exec"
 	"sync"
 
 	"github.com/openconductorhq/openconductor/internal/config"
@@ -48,6 +49,31 @@ func (m *Manager) StartSession(project config.Project, width, height int) (*Sess
 
 	if m.active == "" {
 		m.active = project.Name
+	}
+
+	return s, nil
+}
+
+// StartSystemSession creates and starts a session that runs an arbitrary
+// command instead of an agent. Used for system tabs like setup wizards.
+// If a session with this name already exists, it is returned as-is.
+func (m *Manager) StartSystemSession(name string, cmd *exec.Cmd, width, height int) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if s, ok := m.sessions[name]; ok {
+		return s, nil
+	}
+
+	s := NewSystemSession(name)
+	if err := s.StartCmd(cmd, width, height); err != nil {
+		return nil, fmt.Errorf("manager: %w", err)
+	}
+
+	m.sessions[name] = s
+
+	if m.active == "" {
+		m.active = name
 	}
 
 	return s, nil

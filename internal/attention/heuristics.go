@@ -323,10 +323,10 @@ func checkOpenCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 		if strings.Contains(lower, "allow once") || strings.Contains(lower, "allow always") {
 			hasAllowOnce = true
 		}
-		// "enter submit  esc dismiss" is the footer of OpenCode's question
-		// dialog. "↕ select" may render as "↕" or the arrow glyphs
-		// separately, so we match the unambiguous "enter submit" part.
-		if strings.Contains(lower, "enter submit") && strings.Contains(lower, "esc dismiss") {
+		// "enter submit  esc dismiss" or "enter confirm  esc dismiss" is
+		// the footer of OpenCode's question/selection dialog. Match either
+		// variant paired with "esc dismiss".
+		if (strings.Contains(lower, "enter submit") || strings.Contains(lower, "enter confirm")) && strings.Contains(lower, "esc dismiss") {
 			hasQuestionDialog = true
 		}
 	}

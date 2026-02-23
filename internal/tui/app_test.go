@@ -14,6 +14,7 @@ import (
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
+	"github.com/openconductorhq/openconductor/internal/telegram"
 )
 
 func emptyConfig() *config.Config {
@@ -1285,5 +1286,162 @@ func TestBadgeChar_Asking(t *testing.T) {
 	char := badgeChar(StateAsking, 0)
 	if char != "?" {
 		t.Errorf("expected '?' badge for StateAsking, got %q", char)
+	}
+}
+
+// ── Telegram event mapping tests ────────────────────────────────
+
+func TestStateToEventKind_AllMappings(t *testing.T) {
+	tests := []struct {
+		state SessionState
+		want  int // telegram.EventKind as int (-1 for unmapped)
+	}{
+		{StateIdle, 0},            // EventResponse
+		{StateNeedsPermission, 1}, // EventPermission
+		{StateAsking, 2},          // EventQuestion
+		{StateNeedsAttention, 3},  // EventAttention
+		{StateError, 4},           // EventError
+		{StateDone, 5},            // EventDone
+		{StateWorking, -1},        // Not sent
+	}
+	for _, tt := range tests {
+		got := stateToEventKind(tt.state)
+		if int(got) != tt.want {
+			t.Errorf("stateToEventKind(%v) = %d, want %d", tt.state, got, tt.want)
+		}
+	}
+}
+
+func TestSendTelegramEvent_NilChannel(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	// telegramCh is nil by default — should not panic.
+	app.sendTelegramEvent("proj1", StateNeedsPermission, "test", []string{"screen"})
+}
+
+func TestSendTelegramEvent_SkipsWorking(t *testing.T) {
+	// Verify stateToEventKind returns -1 for Working, which means
+	// sendTelegramEvent returns early without sending.
+	kind := stateToEventKind(StateWorking)
+	if kind != -1 {
+		t.Fatalf("expected -1 for StateWorking, got %d", kind)
+	}
+}
+
+// ── System tab tests ────────────────────────────────────────────
+
+func TestSystemTabRequestMsg_KeybindingT(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	app.focus = focusSidebar
+	app.sidebar.focused = true
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}}
+	_, cmd := app.Update(msg)
+
+	if cmd == nil {
+		t.Fatal("expected a command from 't' key in sidebar")
+	}
+	result := cmd()
+	sysMsg, ok := result.(SystemTabRequestMsg)
+	if !ok {
+		t.Fatalf("expected SystemTabRequestMsg, got %T", result)
+	}
+	if sysMsg.Name != "Telegram Setup" {
+		t.Fatalf("expected tab name 'Telegram Setup', got %q", sysMsg.Name)
+	}
+	if len(sysMsg.Args) != 2 || sysMsg.Args[0] != "telegram" || sysMsg.Args[1] != "setup" {
+		t.Fatalf("expected args [telegram setup], got %v", sysMsg.Args)
+	}
+}
+
+// ── Outbound event wiring: verify all attention types send events ─
+
+func TestSendTelegramEvent_AllAttentionTypes(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	ch := make(chan telegram.Event, 16)
+	app.SetTelegramChannel(ch)
+
+	tests := []struct {
+		state    SessionState
+		wantKind telegram.EventKind
+		sent     bool
+	}{
+		{StateNeedsPermission, telegram.EventPermission, true},
+		{StateAsking, telegram.EventQuestion, true},
+		{StateNeedsAttention, telegram.EventAttention, true},
+		{StateError, telegram.EventError, true},
+		{StateDone, telegram.EventDone, true},
+		{StateIdle, telegram.EventResponse, true},
+		{StateWorking, -1, false}, // should NOT send
+	}
+
+	for _, tt := range tests {
+		// Drain channel.
+		for len(ch) > 0 {
+			<-ch
+		}
+
+		app.sendTelegramEvent("proj1", tt.state, "test detail", []string{"screen line"})
+
+		if tt.sent {
+			select {
+			case e := <-ch:
+				if e.Kind != tt.wantKind {
+					t.Errorf("state %v: expected kind %d, got %d", tt.state, tt.wantKind, e.Kind)
+				}
+				if e.Project != "proj1" {
+					t.Errorf("state %v: expected project 'proj1', got %q", tt.state, e.Project)
+				}
+				if e.Detail != "test detail" {
+					t.Errorf("state %v: expected detail 'test detail', got %q", tt.state, e.Detail)
+				}
+				if len(e.Screen) != 1 || e.Screen[0] != "screen line" {
+					t.Errorf("state %v: screen content mismatch", tt.state)
+				}
+			default:
+				t.Errorf("state %v: expected event to be sent, but channel is empty", tt.state)
+			}
+		} else {
+			select {
+			case e := <-ch:
+				t.Errorf("state %v: expected no event, but got kind %d", tt.state, e.Kind)
+			default:
+				// Good — no event sent.
+			}
+		}
+	}
+}
+
+func TestSendTelegramEvent_ChannelFull_DoesNotBlock(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	ch := make(chan telegram.Event, 1)
+	app.SetTelegramChannel(ch)
+
+	// Fill the channel.
+	app.sendTelegramEvent("proj1", StateNeedsPermission, "", []string{"a"})
+	// Second send should not block (drops silently).
+	app.sendTelegramEvent("proj1", StateError, "", []string{"b"})
+
+	// Only the first event should be in the channel.
+	e := <-ch
+	if e.Kind != telegram.EventPermission {
+		t.Errorf("expected first event to be Permission, got %d", e.Kind)
+	}
+}
+
+func TestSystemTabExitedMsg_ReloadsConfig(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	// Initially telegram is disabled.
+	if app.cfg.Telegram.Enabled {
+		t.Fatal("precondition: expected Telegram disabled")
+	}
+
+	// SystemTabExitedMsg should reload from disk (but since there's no
+	// real config file, it will load defaults — just verify no panic).
+	model, _ := app.Update(SystemTabExitedMsg{Name: "Telegram Setup"})
+	app = model.(App)
+
+	// Config should still be valid.
+	if app.cfg == nil {
+		t.Fatal("expected config to be non-nil after reload")
 	}
 }

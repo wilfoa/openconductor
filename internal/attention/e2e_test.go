@@ -209,6 +209,25 @@ func TestE2E_OpenCode_QuestionDialog(t *testing.T) {
 	t.Logf("OpenCode question dialog → %s: %s (source: %s)", event.Type, event.Detail, event.Source)
 }
 
+func TestE2E_OpenCode_QuestionDialogEnterConfirm(t *testing.T) {
+	d := NewDetector()
+	// Some OpenCode versions use "enter confirm" instead of "enter submit".
+	lines := simulateOpenCodeQuestion()
+	lines[13] = "↕ select  enter confirm  esc dismiss"
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+
+	if isWorking {
+		t.Error("expected isWorking=false for question dialog (enter confirm)")
+	}
+	if event == nil {
+		t.Fatal("expected attention event for question dialog (enter confirm), got nil")
+	}
+	if event.Type != NeedsAnswer {
+		t.Errorf("expected NeedsAnswer, got %v", event.Type)
+	}
+}
+
 func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 	d := NewDetector()
 	ctx := context.Background()

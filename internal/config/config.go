@@ -53,10 +53,19 @@ type NotificationConfig struct {
 	Cooldown int  `yaml:"cooldown_seconds"`
 }
 
+// TelegramConfig controls the Telegram bot bridge for remote agent
+// interaction via Forum Topics.
+type TelegramConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	BotTokenEnv string `yaml:"bot_token_env"` // env var name containing the bot token
+	ChatID      int64  `yaml:"chat_id"`       // supergroup ID (with Forum Topics enabled)
+}
+
 type Config struct {
 	Projects      []Project          `yaml:"projects"`
 	LLM           LLMConfig          `yaml:"llm"`
 	Notifications NotificationConfig `yaml:"notifications"`
+	Telegram      TelegramConfig     `yaml:"telegram"`
 }
 
 func DefaultConfigDir() string {

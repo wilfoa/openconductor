@@ -6,6 +6,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
+	"github.com/openconductorhq/openconductor/internal/telegram"
 )
 
 // Notifier is the interface for sending desktop notifications on attention events.
@@ -82,6 +85,10 @@ type App struct {
 	sidebarWidth int      // content width of sidebar (excludes padding/border)
 	dragging     bool     // true during separator drag
 	openTabs     []string // project names of opened tabs, in visit order
+
+	// telegramCh, when non-nil, receives events for the Telegram bridge.
+	// Set via SetTelegramChannel before starting the program.
+	telegramCh chan<- telegram.Event
 
 	// stateStickUntil records the earliest time each project's attention
 	// state can be downgraded to Working. Prevents flip-flop when
@@ -173,6 +180,19 @@ func (a *App) SetAutoApprover(aa *attention.AutoApprover) {
 // SetNotifier configures desktop notifications for attention events.
 func (a *App) SetNotifier(n Notifier) {
 	a.notifier = n
+}
+
+// SetTelegramChannel configures the outbound channel for the Telegram bot
+// bridge. Events are sent non-blocking; the bridge handles dedup and rate
+// limiting on the receiving side.
+func (a *App) SetTelegramChannel(ch chan<- telegram.Event) {
+	a.telegramCh = ch
+}
+
+// SessionManager returns the underlying session manager. Used by the Telegram
+// bot to read/write agent PTYs for inbound message routing.
+func (a *App) SessionManager() *session.Manager {
+	return a.mgr
 }
 
 // Init returns the initial command for the bubbletea program.
@@ -590,8 +610,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ProjectName == a.mgr.ActiveName() {
 			a.terminal.active = false
 		}
+		// Check if this is a system tab (not in cfg.Projects).
+		isSystemTab := a.projectIndexByName(msg.ProjectName) < 0
+		if isSystemTab {
+			// Emit SystemTabExitedMsg so the app can reload config.
+			return a, func() tea.Msg {
+				return SystemTabExitedMsg{Name: msg.ProjectName}
+			}
+		}
 		a.sidebar.states[msg.ProjectName] = StateDone
 		a.statusbar.states[msg.ProjectName] = StateDone
+		// Notify Telegram that the session completed.
+		if s := a.mgr.GetSession(msg.ProjectName); s != nil {
+			a.sendTelegramEvent(msg.ProjectName, StateDone, "", s.GetScreenLines())
+		}
 		return a, nil
 
 	case SessionStateChangedMsg:
@@ -651,6 +683,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.runScrollCheck()
 		cmds = append(cmds, scrollCheckTickCmd())
 		return a, tea.Batch(cmds...)
+
+	case SystemTabRequestMsg:
+		// Spawn the current binary with the given args in a system tab.
+		exe, err := os.Executable()
+		if err != nil {
+			return a, nil
+		}
+		cmd := exec.Command(exe, msg.Args...)
+		termW, termH := a.termDimensions()
+		_, err = a.mgr.StartSystemSession(msg.Name, cmd, termW, termH)
+		if err != nil {
+			return a, nil
+		}
+		a.mgr.SetActive(msg.Name)
+		a.addTab(msg.Name)
+		a.syncTerminalFromSession()
+		a.focus = focusTerminal
+		a.sidebar.focused = false
+		a.terminal.focused = true
+		cmds = append(cmds, a.waitForSessionOutput(msg.Name))
+		return a, tea.Batch(cmds...)
+
+	case SystemTabExitedMsg:
+		// System tab process finished — reload config for post-setup changes.
+		configPath := config.DefaultConfigPath()
+		freshCfg := config.LoadOrDefault(configPath)
+		a.cfg.Telegram = freshCfg.Telegram
+		return a, nil
 
 	case TickMsg:
 		// Run attention detection on the active session.
@@ -1305,6 +1365,9 @@ func (a *App) checkAttention() {
 					if a.notifier != nil && (state == StateNeedsAttention || state == StateNeedsPermission || state == StateAsking || state == StateError) {
 						a.notifier.Notify(name, event.Type.String(), event.Detail)
 					}
+
+					// Send Telegram event on attention state transitions.
+					a.sendTelegramEvent(name, state, event.Detail, lines)
 				}
 			}
 			a.sidebar.states[name] = state
@@ -1334,8 +1397,56 @@ func (a *App) checkAttention() {
 				a.sidebar.states[name] = StateIdle
 				a.statusbar.states[name] = StateIdle
 				delete(a.stateStickUntil, name)
+			} else if s.State == session.StateRunning && prevState == StateWorking {
+				// Working → Idle (agent finished responding).
+				a.sendTelegramEvent(name, StateIdle, "", lines)
 			}
 		}
+	}
+}
+
+// sendTelegramEvent sends an event to the Telegram bridge channel if configured.
+// Non-blocking; the bridge handles dedup and rate limiting.
+func (a *App) sendTelegramEvent(project string, state SessionState, detail string, lines []string) {
+	if a.telegramCh == nil {
+		return
+	}
+
+	kind := stateToEventKind(state)
+	if kind < 0 {
+		return
+	}
+
+	select {
+	case a.telegramCh <- telegram.Event{
+		Project: project,
+		Kind:    kind,
+		Detail:  detail,
+		Screen:  lines,
+	}:
+	default:
+		// Channel full — drop the event (bridge dedup will cover next tick).
+	}
+}
+
+// stateToEventKind maps a SessionState to a telegram.EventKind.
+// Returns -1 for states that should not be sent.
+func stateToEventKind(state SessionState) telegram.EventKind {
+	switch state {
+	case StateIdle:
+		return telegram.EventResponse
+	case StateNeedsPermission:
+		return telegram.EventPermission
+	case StateAsking:
+		return telegram.EventQuestion
+	case StateNeedsAttention:
+		return telegram.EventAttention
+	case StateError:
+		return telegram.EventError
+	case StateDone:
+		return telegram.EventDone
+	default:
+		return -1
 	}
 }
 

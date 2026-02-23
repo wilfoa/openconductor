@@ -8,6 +8,7 @@ package session
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
@@ -56,6 +57,15 @@ func NewSession(project config.Project) (*Session, error) {
 	}, nil
 }
 
+// NewSystemSession creates a Session that runs an arbitrary command instead
+// of an agent. Used for system tabs (e.g. Telegram setup wizard).
+func NewSystemSession(name string) *Session {
+	return &Session{
+		Project: config.Project{Name: name},
+		State:   StateIdle,
+	}
+}
+
 // Start launches the agent process in a PTY with the given dimensions.
 func (s *Session) Start(width, height int) error {
 	if width < 1 {
@@ -88,6 +98,44 @@ func (s *Session) Start(width, height int) error {
 	})
 	if err != nil {
 		return fmt.Errorf("starting PTY for %q: %w", s.Project.Name, err)
+	}
+
+	s.Ptmx = ptmx
+	s.Cmd = cmd.Process
+	s.State = StateRunning
+	s.closed = false
+
+	return nil
+}
+
+// StartCmd launches an arbitrary command in a PTY. Used for system sessions
+// that don't go through the agent adapter (e.g. setup wizards).
+func (s *Session) StartCmd(cmd *exec.Cmd, width, height int) error {
+	if width < 1 {
+		width = 80
+	}
+	if height < 1 {
+		height = 24
+	}
+
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+
+	s.Width = width
+	s.Height = height
+	s.VT = vt10x.New(vt10x.WithSize(width, height))
+
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		"COLORTERM=truecolor",
+	)
+
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
+		Rows: uint16(height),
+		Cols: uint16(width),
+	})
+	if err != nil {
+		return fmt.Errorf("starting PTY for system session: %w", err)
 	}
 
 	s.Ptmx = ptmx
