@@ -36,21 +36,21 @@ const (
 )
 
 // sessionOutputMsg carries raw bytes read from a session's PTY, tagged with
-// the originating project name.
+// the originating session ID.
 type sessionOutputMsg struct {
-	ProjectName string
-	Data        []byte
+	SessionID string
+	Data      []byte
 }
 
 // sessionStartedMsg signals that a session was started and its read loop
 // channel is ready for listening.
 type sessionStartedMsg struct {
-	ProjectName string
+	SessionID string
 }
 
 // sessionExitedMsg signals that a session's PTY read loop has ended.
 type sessionExitedMsg struct {
-	ProjectName string
+	SessionID string
 }
 
 // stateStickDuration is the minimum time an attention state (NeedsAttention,
@@ -68,23 +68,24 @@ const scrollLinesPerTick = 3
 
 // App is the top-level bubbletea model for OpenConductor.
 type App struct {
-	cfg          *config.Config
-	configPath   string
-	sidebar      sidebarModel
-	terminal     terminalModel
-	statusbar    statusBarModel
-	focus        focus
-	width        int
-	height       int
-	ready        bool
-	active       int // index of active project
-	mgr          *session.Manager
-	detector     *attention.Detector
-	autoApprover *attention.AutoApprover
-	notifier     Notifier
-	sidebarWidth int      // content width of sidebar (excludes padding/border)
-	dragging     bool     // true during separator drag
-	openTabs     []string // project names of opened tabs, in visit order
+	cfg           *config.Config
+	configPath    string
+	sidebar       sidebarModel
+	terminal      terminalModel
+	statusbar     statusBarModel
+	focus         focus
+	width         int
+	height        int
+	ready         bool
+	active        int // index of active project
+	mgr           *session.Manager
+	detector      *attention.Detector
+	autoApprover  *attention.AutoApprover
+	notifier      Notifier
+	sidebarWidth  int                     // content width of sidebar (excludes padding/border)
+	dragging      bool                    // true during separator drag
+	openTabs      []string                // session IDs of opened tabs, in visit order
+	sessionStates map[string]SessionState // per-session state, keyed by session ID
 
 	// telegramCh, when non-nil, receives events for the Telegram bridge.
 	// Set via SetTelegramChannel before starting the program.
@@ -156,6 +157,7 @@ func NewApp(cfg *config.Config, configPath string) App {
 		detector:             attention.NewDetector(),
 		sidebarWidth:         defaultSidebarWidth,
 		openTabs:             openTabs,
+		sessionStates:        make(map[string]SessionState),
 		stateStickUntil:      make(map[string]time.Time),
 		scrollbacks:          make(map[string]*scrollbackBuffer),
 		scrollSnapshots:      make(map[string][]string),
@@ -264,10 +266,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Resize all existing sessions.
 		termW, termH := a.termDimensions()
-		for _, p := range a.cfg.Projects {
-			if s := a.mgr.GetSession(p.Name); s != nil {
-				s.Resize(termW, termH)
-			}
+		for _, s := range a.mgr.AllSessions() {
+			s.Resize(termW, termH)
 		}
 
 		// Start the first project session if nothing is active yet.
@@ -411,21 +411,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && msg.Y < 3 {
 				localX := msg.X - screenPadding - sbWidth
 				if tabIdx, isClose := a.tabHitTest(localX); tabIdx >= 0 {
-					name := a.openTabs[tabIdx]
+					sessionID := a.openTabs[tabIdx]
 					if isClose {
 						// Close the tab.
-						return a, a.closeTabCmd(name)
+						return a, a.closeTabCmd(sessionID)
 					}
-					if projIdx := a.projectIndexByName(name); projIdx >= 0 {
-						// Reuse the ProjectSwitchedMsg path to switch project,
-						// update sidebar selection, and focus terminal.
-						a.sidebar.selected = projIdx
-						return a, func() tea.Msg {
-							return ProjectSwitchedMsg{
-								Index:   projIdx,
-								Project: a.cfg.Projects[projIdx],
-							}
-						}
+					// Switch to the clicked session tab.
+					return a, func() tea.Msg {
+						return TabSwitchedMsg{SessionID: sessionID}
 					}
 				}
 			}
@@ -478,26 +471,37 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ProjectSwitchedMsg:
 		a.active = msg.Index
 		project := msg.Project
-		a.statusbar.activeName = project.Name
-		a.addTab(project.Name)
 
-		// Clear sticky timer — the user is acknowledging this project.
-		delete(a.stateStickUntil, project.Name)
-
-		// Focus terminal when switching projects.
+		// Focus terminal when creating a new session.
 		a.focus = focusTerminal
 		a.sidebar.focused = false
 		a.terminal.focused = true
 
-		// If a session exists, just switch to it. Otherwise start one.
-		if s := a.mgr.GetSession(project.Name); s != nil {
-			a.mgr.SetActive(project.Name)
-			a.syncTerminalFromSession()
-		} else {
-			cmd := a.startSessionCmd(project)
-			cmds = append(cmds, cmd)
-		}
+		// Always create a new session — each Enter in sidebar is a new
+		// agent invocation (new opencode process).
+		cmd := a.startSessionCmd(project)
+		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)
+
+	case TabSwitchedMsg:
+		// Switch to an existing session (tab click or Ctrl+J/K).
+		s := a.mgr.GetSession(msg.SessionID)
+		if s == nil {
+			return a, nil
+		}
+		a.mgr.SetActive(msg.SessionID)
+		a.statusbar.activeName = msg.SessionID
+		if projIdx := a.projectIndexByName(s.Project.Name); projIdx >= 0 {
+			a.active = projIdx
+			a.sidebar.selected = projIdx
+		}
+		a.syncTerminalFromSession()
+
+		// Focus terminal when switching tabs.
+		a.focus = focusTerminal
+		a.sidebar.focused = false
+		a.terminal.focused = true
+		return a, nil
 
 	case ProjectAddedMsg:
 		project := msg.Project
@@ -506,13 +510,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.states[project.Name] = StateIdle
 		a.sidebar.selected = len(a.cfg.Projects) - 1
 		a.sidebar.mode = sidebarNormal
-		a.addTab(project.Name)
 
 		a.statusbar = newStatusBarModel(a.cfg.Projects)
-		a.statusbar.activeName = project.Name
-		// Carry over existing states.
-		for name, state := range a.sidebar.states {
-			a.statusbar.states[name] = state
+		// Carry over existing session states into statusbar.
+		for id, state := range a.sessionStates {
+			a.statusbar.states[id] = state
 		}
 
 		a.active = len(a.cfg.Projects) - 1
@@ -529,7 +531,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ProjectDeletedMsg:
 		name := msg.Name
-		a.removeTab(name)
+
+		// Close all sessions for this project and remove their tabs.
+		for _, s := range a.mgr.GetSessionsByProject(name) {
+			a.removeTab(s.ID)
+			a.mgr.StopSession(s.ID)
+			delete(sessionChannels, s.ID)
+			delete(a.sessionStates, s.ID)
+			delete(a.stateStickUntil, s.ID)
+			delete(a.statusbar.states, s.ID)
+		}
 
 		// Remove from config.
 		var newProjects []config.Project
@@ -544,6 +555,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cfg.Projects = newProjects
 		a.sidebar.projects = a.cfg.Projects
 		delete(a.sidebar.states, name)
+		delete(a.sidebar.openTabs, name)
 		a.sidebar.mode = sidebarNormal
 
 		// Clamp selection.
@@ -553,16 +565,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Rebuild statusbar.
 		a.statusbar = newStatusBarModel(a.cfg.Projects)
-		for n, state := range a.sidebar.states {
-			a.statusbar.states[n] = state
+		for id, state := range a.sessionStates {
+			a.statusbar.states[id] = state
 		}
 
 		// Save config.
 		cmds = append(cmds, a.saveConfigCmd())
-
-		// Stop the deleted session and clean up its channel.
-		a.mgr.StopSession(name)
-		delete(sessionChannels, name)
 
 		// If the deleted project was the active one, switch.
 		if a.mgr.ActiveName() == "" && len(a.cfg.Projects) > 0 {
@@ -586,83 +594,101 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionStartedMsg:
-		a.mgr.SetActive(msg.ProjectName)
-		a.statusbar.activeName = msg.ProjectName
-		a.addTab(msg.ProjectName)
+		a.mgr.SetActive(msg.SessionID)
+		a.statusbar.activeName = msg.SessionID
+		a.addTab(msg.SessionID)
 		a.syncTerminalFromSession()
+		// Update sidebar to show this project has an open tab.
+		if s := a.mgr.GetSession(msg.SessionID); s != nil {
+			a.sidebar.openTabs[s.Project.Name] = true
+		}
 		// Begin listening for output from this session.
-		cmds = append(cmds, a.waitForSessionOutput(msg.ProjectName))
+		cmds = append(cmds, a.waitForSessionOutput(msg.SessionID))
 		return a, tea.Batch(cmds...)
 
 	case sessionOutputMsg:
 		// VT is already written by the session's ReadLoop (no DeferVTWrite).
-		// Mark this project as dirty so the next scroll-check tick will
+		// Mark this session as dirty so the next scroll-check tick will
 		// compare screen snapshots and capture any scrolled-off lines.
-		a.scrollDirty[msg.ProjectName] = true
-		if msg.ProjectName == a.mgr.ActiveName() {
+		a.scrollDirty[msg.SessionID] = true
+		if msg.SessionID == a.mgr.ActiveName() {
 			a.syncTerminalFromSession()
 		}
 		// Continue listening.
-		cmds = append(cmds, a.waitForSessionOutput(msg.ProjectName))
+		cmds = append(cmds, a.waitForSessionOutput(msg.SessionID))
 		return a, tea.Batch(cmds...)
 
 	case sessionExitedMsg:
-		if msg.ProjectName == a.mgr.ActiveName() {
+		if msg.SessionID == a.mgr.ActiveName() {
 			a.terminal.active = false
 		}
-		// Check if this is a system tab (not in cfg.Projects).
-		isSystemTab := a.projectIndexByName(msg.ProjectName) < 0
+		// Check if this is a system tab (look up by session ID).
+		s := a.mgr.GetSession(msg.SessionID)
+		isSystemTab := s != nil && a.projectIndexByName(s.Project.Name) < 0
 		if isSystemTab {
 			// Emit SystemTabExitedMsg so the app can reload config.
 			return a, func() tea.Msg {
-				return SystemTabExitedMsg{Name: msg.ProjectName}
+				return SystemTabExitedMsg{Name: msg.SessionID}
 			}
 		}
-		a.sidebar.states[msg.ProjectName] = StateDone
-		a.statusbar.states[msg.ProjectName] = StateDone
+		a.sessionStates[msg.SessionID] = StateDone
+		a.statusbar.states[msg.SessionID] = StateDone
+		if s != nil {
+			a.sidebar.states[s.Project.Name] = a.aggregateProjectState(s.Project.Name)
+		}
 		// Notify Telegram that the session completed.
-		if s := a.mgr.GetSession(msg.ProjectName); s != nil {
-			a.sendTelegramEvent(msg.ProjectName, StateDone, "", s.GetScreenLines())
+		if s != nil {
+			a.sendTelegramEvent(s.Project.Name, msg.SessionID, StateDone, "", s.GetScreenLines())
 		}
 		return a, nil
 
 	case SessionStateChangedMsg:
-		a.sidebar.states[msg.ProjectName] = msg.State
-		a.statusbar.states[msg.ProjectName] = msg.State
+		a.sessionStates[msg.SessionID] = msg.State
+		a.statusbar.states[msg.SessionID] = msg.State
+		if s := a.mgr.GetSession(msg.SessionID); s != nil {
+			a.sidebar.states[s.Project.Name] = a.aggregateProjectState(s.Project.Name)
+		}
 		return a, nil
 
 	case TabClosedMsg:
-		name := msg.Name
-		a.removeTab(name)
-		delete(a.stateStickUntil, name)
+		sessionID := msg.Name
+		a.removeTab(sessionID)
+		delete(a.stateStickUntil, sessionID)
+		delete(a.sessionStates, sessionID)
+		delete(a.statusbar.states, sessionID)
+
+		// Get project name before stopping the session.
+		var projectName string
+		if s := a.mgr.GetSession(sessionID); s != nil {
+			projectName = s.Project.Name
+		}
 
 		// Terminate the session behind this tab (sends SIGINT, closes PTY).
-		a.mgr.StopSession(name)
-		a.sidebar.states[name] = StateIdle
-		a.statusbar.states[name] = StateIdle
+		a.mgr.StopSession(sessionID)
+		delete(sessionChannels, sessionID)
 
-		// If the closed tab was the active project, switch to the nearest
-		// tab or deactivate the terminal if no tabs remain.
-		activeName := ""
-		if a.active >= 0 && a.active < len(a.cfg.Projects) {
-			activeName = a.cfg.Projects[a.active].Name
+		// Update sidebar state for the project.
+		if projectName != "" {
+			if a.mgr.HasSessionsForProject(projectName) {
+				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+			} else {
+				a.sidebar.states[projectName] = StateIdle
+				delete(a.sidebar.openTabs, projectName)
+			}
 		}
-		if name == activeName {
+
+		// If the closed tab was the active session, switch to the nearest
+		// tab or deactivate the terminal if no tabs remain.
+		wasActive := sessionID == a.mgr.ActiveName() || a.mgr.ActiveName() == ""
+		if wasActive {
 			if len(a.openTabs) > 0 {
 				// Switch to the last tab in the list (most recently visited).
 				switchTo := a.openTabs[len(a.openTabs)-1]
-				if projIdx := a.projectIndexByName(switchTo); projIdx >= 0 {
-					a.sidebar.selected = projIdx
-					return a, func() tea.Msg {
-						return ProjectSwitchedMsg{
-							Index:   projIdx,
-							Project: a.cfg.Projects[projIdx],
-						}
-					}
+				return a, func() tea.Msg {
+					return TabSwitchedMsg{SessionID: switchTo}
 				}
 			} else {
-				// No tabs left — clear the terminal so it shows the
-				// empty placeholder instead of stale content.
+				// No tabs left — clear the terminal.
 				a.clearTerminal()
 			}
 		}
@@ -817,19 +843,16 @@ func (a App) tabBarView() string {
 	sbWidth := a.sidebar.Width()
 	panelWidth := a.innerWidth() - sbWidth
 
-	activeName := ""
-	if a.active >= 0 && a.active < len(a.cfg.Projects) {
-		activeName = a.cfg.Projects[a.active].Name
-	}
+	activeSessionID := a.mgr.ActiveName()
 
 	// Render each tab as a bordered box. All tabs show a close button ✕.
 	var renderedTabs []string
-	for _, name := range a.openTabs {
-		state := a.sidebar.states[name]
+	for _, sessionID := range a.openTabs {
+		state := a.sessionStates[sessionID]
 		char := badgeChar(state, a.animFrame)
-		label := char + " " + name + " ✕"
+		label := char + " " + sessionID + " ✕"
 
-		if name == activeName {
+		if sessionID == activeSessionID {
 			renderedTabs = append(renderedTabs, tabActiveStyle.Render(label))
 		} else {
 			renderedTabs = append(renderedTabs, inactiveTabStyle(state).Render(label))
@@ -886,22 +909,23 @@ func (a *App) termDimensions() (int, int) {
 	return termWidth, termHeight
 }
 
-// startSessionCmd creates a tea.Cmd that starts a session for the given
+// startSessionCmd creates a tea.Cmd that starts a new session for the given
 // project in the background and emits a sessionStartedMsg on success.
+// Each call creates a fresh agent process.
 func (a *App) startSessionCmd(project config.Project) tea.Cmd {
 	mgr := a.mgr
 	termW, termH := a.termDimensions()
 
 	return func() tea.Msg {
-		_, err := mgr.StartSession(project, termW, termH)
+		s, err := mgr.StartSession(project, termW, termH)
 		if err != nil {
 			return SessionStateChangedMsg{
-				ProjectName: project.Name,
-				State:       StateError,
-				Detail:      err.Error(),
+				SessionID: project.Name,
+				State:     StateError,
+				Detail:    err.Error(),
 			}
 		}
-		return sessionStartedMsg{ProjectName: project.Name}
+		return sessionStartedMsg{SessionID: s.ID}
 	}
 }
 
@@ -917,13 +941,13 @@ func (a *App) saveConfigCmd() tea.Cmd {
 
 // waitForSessionOutput returns a tea.Cmd that blocks until data is available
 // from the session's read loop, then emits a sessionOutputMsg.
-func (a *App) waitForSessionOutput(projectName string) tea.Cmd {
-	s := a.mgr.GetSession(projectName)
+func (a *App) waitForSessionOutput(sessionID string) tea.Cmd {
+	s := a.mgr.GetSession(sessionID)
 	if s == nil {
 		return nil
 	}
 
-	return a.readPTYOnce(projectName, s)
+	return a.readPTYOnce(sessionID, s)
 }
 
 // sessionChannels caches per-session read-loop channels so we only call
@@ -931,23 +955,23 @@ func (a *App) waitForSessionOutput(projectName string) tea.Cmd {
 var sessionChannels = make(map[string]<-chan []byte)
 
 // readPTYOnce returns a tea.Cmd that reads from the session's PTY channel.
-// On first call for a given project it initialises the channel via ReadLoop.
-func (a *App) readPTYOnce(projectName string, s *session.Session) tea.Cmd {
-	ch, ok := sessionChannels[projectName]
+// On first call for a given session it initialises the channel via ReadLoop.
+func (a *App) readPTYOnce(sessionID string, s *session.Session) tea.Cmd {
+	ch, ok := sessionChannels[sessionID]
 	if !ok {
 		ch = s.ReadLoop()
-		sessionChannels[projectName] = ch
+		sessionChannels[sessionID] = ch
 	}
 
 	return func() tea.Msg {
 		data, ok := <-ch
 		if !ok {
-			delete(sessionChannels, projectName)
-			return sessionExitedMsg{ProjectName: projectName}
+			delete(sessionChannels, sessionID)
+			return sessionExitedMsg{SessionID: sessionID}
 		}
 		return sessionOutputMsg{
-			ProjectName: projectName,
-			Data:        data,
+			SessionID: sessionID,
+			Data:      data,
 		}
 	}
 }
@@ -969,12 +993,12 @@ func (a *App) syncTerminalFromSession() {
 	a.terminal.active = true
 	a.terminal.mu.Unlock()
 
-	// Point the terminal at this project's scrollback buffer.
-	name := s.Project.Name
-	sb := a.scrollbacks[name]
+	// Point the terminal at this session's scrollback buffer.
+	id := s.ID
+	sb := a.scrollbacks[id]
 	if sb == nil {
 		sb = newScrollbackBuffer(defaultScrollbackCapacity)
-		a.scrollbacks[name] = sb
+		a.scrollbacks[id] = sb
 	}
 	a.terminal.scrollback = sb
 }
@@ -984,24 +1008,24 @@ func (a *App) syncTerminalFromSession() {
 // This runs on a 100ms tick — by then the VT has a stable screen regardless
 // of how PTY data was chunked across reads.
 func (a *App) runScrollCheck() {
-	for name, dirty := range a.scrollDirty {
+	for sessionID, dirty := range a.scrollDirty {
 		if !dirty {
 			continue
 		}
-		a.scrollDirty[name] = false
+		a.scrollDirty[sessionID] = false
 
-		s := a.mgr.GetSession(name)
+		s := a.mgr.GetSession(sessionID)
 		if s == nil {
 			continue
 		}
 
-		pushed := a.checkScrollback(s, name)
+		pushed := a.checkScrollback(s, sessionID)
 
 		// If the user is scrolled up AND pinned (scrolled up into history,
 		// not scrolling back down), bump the offset so the view stays on
 		// the same content. When not pinned (user is scrolling down toward
 		// live), skip adjustment so they can reach offset 0.
-		if name == a.mgr.ActiveName() && a.terminal.scrollOffset > 0 && pushed > 0 && a.terminal.scrollPinned {
+		if sessionID == a.mgr.ActiveName() && a.terminal.scrollOffset > 0 && pushed > 0 && a.terminal.scrollPinned {
 			a.terminal.scrollOffset += pushed
 		}
 	}
@@ -1017,11 +1041,11 @@ func (a *App) runScrollCheck() {
 // the entire screen on every update. In that case, we fall back to pushing
 // all old non-blank rows that disappeared from the new screen, giving the
 // user access to previous screen content when scrolling back.
-func (a *App) checkScrollback(s *session.Session, projectName string) int {
-	sb := a.scrollbacks[projectName]
+func (a *App) checkScrollback(s *session.Session, sessionID string) int {
+	sb := a.scrollbacks[sessionID]
 	if sb == nil {
 		sb = newScrollbackBuffer(defaultScrollbackCapacity)
-		a.scrollbacks[projectName] = sb
+		a.scrollbacks[sessionID] = sb
 	}
 
 	s.Mu.RLock()
@@ -1046,13 +1070,13 @@ func (a *App) checkScrollback(s *session.Session, projectName string) int {
 		curTexts[row] = glyphsToText(glyphs)
 	}
 
-	oldTexts := a.scrollSnapshots[projectName]
-	oldGlyphs := a.scrollGlyphSnapshots[projectName]
+	oldTexts := a.scrollSnapshots[sessionID]
+	oldGlyphs := a.scrollGlyphSnapshots[sessionID]
 
 	// First snapshot — just store it, nothing to compare.
 	if oldTexts == nil {
-		a.scrollSnapshots[projectName] = curTexts
-		a.scrollGlyphSnapshots[projectName] = curGlyphs
+		a.scrollSnapshots[sessionID] = curTexts
+		a.scrollGlyphSnapshots[sessionID] = curGlyphs
 		return 0
 	}
 
@@ -1085,8 +1109,8 @@ func (a *App) checkScrollback(s *session.Session, projectName string) int {
 	}
 
 	// Store current snapshot for next comparison.
-	a.scrollSnapshots[projectName] = curTexts
-	a.scrollGlyphSnapshots[projectName] = curGlyphs
+	a.scrollSnapshots[sessionID] = curTexts
+	a.scrollGlyphSnapshots[sessionID] = curGlyphs
 	return pushed
 }
 
@@ -1172,10 +1196,8 @@ func (a *App) clampAndSetSidebarWidth(x int) {
 // resizeAllSessions resizes all PTY sessions to the new terminal dimensions.
 func (a *App) resizeAllSessions() {
 	termW, termH := a.termDimensions()
-	for _, p := range a.cfg.Projects {
-		if s := a.mgr.GetSession(p.Name); s != nil {
-			s.Resize(termW, termH)
-		}
+	for _, s := range a.mgr.AllSessions() {
+		s.Resize(termW, termH)
 	}
 }
 
@@ -1184,19 +1206,16 @@ func (a *App) resizeAllSessions() {
 // (tabIndex, isClose). tabIndex is -1 if the click falls outside any tab.
 // isClose is true if the click landed on the close button region (✕) of any tab.
 func (a App) tabHitTest(localX int) (int, bool) {
-	activeName := ""
-	if a.active >= 0 && a.active < len(a.cfg.Projects) {
-		activeName = a.cfg.Projects[a.active].Name
-	}
+	activeSessionID := a.mgr.ActiveName()
 
 	offset := 0
-	for i, name := range a.openTabs {
-		state := a.sidebar.states[name]
+	for i, sessionID := range a.openTabs {
+		state := a.sessionStates[sessionID]
 		char := badgeChar(state, a.animFrame)
-		label := char + " " + name + " ✕"
+		label := char + " " + sessionID + " ✕"
 
 		var w int
-		if name == activeName {
+		if sessionID == activeSessionID {
 			w = lipgloss.Width(tabActiveStyle.Render(label))
 		} else {
 			w = lipgloss.Width(inactiveTabStyle(state).Render(label))
@@ -1225,13 +1244,10 @@ func (a App) switchTab(delta int) tea.Cmd {
 	}
 
 	// Find current tab index in openTabs.
-	activeName := ""
-	if a.active >= 0 && a.active < len(a.cfg.Projects) {
-		activeName = a.cfg.Projects[a.active].Name
-	}
+	activeSessionID := a.mgr.ActiveName()
 	cur := -1
-	for i, name := range a.openTabs {
-		if name == activeName {
+	for i, id := range a.openTabs {
+		if id == activeSessionID {
 			cur = i
 			break
 		}
@@ -1241,16 +1257,9 @@ func (a App) switchTab(delta int) tea.Cmd {
 	}
 
 	next := (cur + delta + len(a.openTabs)) % len(a.openTabs)
-	targetName := a.openTabs[next]
-	projIdx := a.projectIndexByName(targetName)
-	if projIdx < 0 {
-		return nil
-	}
+	targetID := a.openTabs[next]
 	return func() tea.Msg {
-		return ProjectSwitchedMsg{
-			Index:   projIdx,
-			Project: a.cfg.Projects[projIdx],
-		}
+		return TabSwitchedMsg{SessionID: targetID}
 	}
 }
 
@@ -1264,24 +1273,28 @@ func (a App) projectIndexByName(name string) int {
 	return -1
 }
 
-// addTab appends a project name to the open tabs list if not already present.
-func (a *App) addTab(name string) {
+// addTab appends a session ID to the open tabs list. Each session ID is
+// unique, so no dedup check is needed.
+func (a *App) addTab(sessionID string) {
 	for _, t := range a.openTabs {
-		if t == name {
+		if t == sessionID {
 			return
 		}
 	}
-	a.openTabs = append(a.openTabs, name)
-	a.sidebar.openTabs[name] = true
+	a.openTabs = append(a.openTabs, sessionID)
+	// Mark the project as having an open tab.
+	if s := a.mgr.GetSession(sessionID); s != nil {
+		a.sidebar.openTabs[s.Project.Name] = true
+	}
 }
 
-// removeTab removes a project name from the open tabs list.
-func (a *App) removeTab(name string) {
+// removeTab removes a session ID from the open tabs list.
+// If this was the last session for a project, clears the project's openTab flag.
+func (a *App) removeTab(sessionID string) {
 	for i, t := range a.openTabs {
-		if t == name {
+		if t == sessionID {
 			a.openTabs = append(a.openTabs[:i], a.openTabs[i+1:]...)
-			delete(a.sidebar.openTabs, name)
-			return
+			break
 		}
 	}
 }
@@ -1312,18 +1325,14 @@ func (a *App) checkAttention() {
 	ctx := context.Background()
 	now := time.Now()
 
-	for _, p := range a.cfg.Projects {
-		s := a.mgr.GetSession(p.Name)
-		if s == nil {
-			continue
-		}
-
+	for _, s := range a.mgr.AllSessions() {
 		lines := s.GetScreenLines()
 		if lines == nil {
 			continue
 		}
 
-		name := p.Name
+		sessionID := s.ID
+		projectName := s.Project.Name
 
 		// Get the process PID for liveness checking.
 		pid := 0
@@ -1331,25 +1340,24 @@ func (a *App) checkAttention() {
 			pid = s.Cmd.Pid
 		}
 
-		prevState := a.sidebar.states[name]
+		prevState := a.sessionStates[sessionID]
 
-		event, isWorking := a.detector.Check(ctx, name, lines, pid, string(p.Agent))
+		event, isWorking := a.detector.Check(ctx, sessionID, lines, pid, string(s.Project.Agent))
 		if event != nil {
 			// Auto-approve permission requests when the project is configured
 			// to do so and the classifier identifies the category as allowed.
 			if event.Type == attention.NeedsPermission && a.autoApprover != nil {
-				adapter, adapterErr := agent.Get(p.Agent)
+				adapter, adapterErr := agent.Get(s.Project.Agent)
 				if adapterErr == nil {
-					result := a.autoApprover.CheckAndApprove(ctx, p, lines, adapter)
+					result := a.autoApprover.CheckAndApprove(ctx, s.Project, lines, adapter)
 					if result.ShouldApprove {
 						// Send the approval keystroke to the PTY and treat
 						// the session as Working — no notification needed.
-						if s := a.mgr.GetSession(name); s != nil {
-							s.Write(result.Keystroke)
-						}
-						a.sidebar.states[name] = StateWorking
-						a.statusbar.states[name] = StateWorking
-						delete(a.stateStickUntil, name)
+						s.Write(result.Keystroke)
+						a.sessionStates[sessionID] = StateWorking
+						a.statusbar.states[sessionID] = StateWorking
+						a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+						delete(a.stateStickUntil, sessionID)
 						continue
 					}
 				}
@@ -1359,55 +1367,58 @@ func (a *App) checkAttention() {
 			if state != prevState {
 				// State transition — apply sticky timer for attention states.
 				if isAttentionState(state) {
-					a.stateStickUntil[name] = now.Add(stateStickDuration)
+					a.stateStickUntil[sessionID] = now.Add(stateStickDuration)
 
 					// Send desktop notification on entering attention/permission/asking/error.
 					if a.notifier != nil && (state == StateNeedsAttention || state == StateNeedsPermission || state == StateAsking || state == StateError) {
-						a.notifier.Notify(name, event.Type.String(), event.Detail)
+						a.notifier.Notify(projectName, event.Type.String(), event.Detail)
 					}
 
 					// Send Telegram event on attention state transitions.
-					a.sendTelegramEvent(name, state, event.Detail, lines)
+					a.sendTelegramEvent(projectName, sessionID, state, event.Detail, lines)
 				}
 			}
-			a.sidebar.states[name] = state
-			a.statusbar.states[name] = state
+			a.sessionStates[sessionID] = state
+			a.statusbar.states[sessionID] = state
 		} else if isWorking {
 			// Positive working signal (agent-specific: spinner, progress
 			// bar, etc). Only upgrade to Working; respect sticky attention
 			// states.
 			if s.State == session.StateRunning {
 				if isAttentionState(prevState) {
-					if deadline, ok := a.stateStickUntil[name]; ok && now.Before(deadline) {
+					if deadline, ok := a.stateStickUntil[sessionID]; ok && now.Before(deadline) {
 						continue
 					}
 				}
-				a.sidebar.states[name] = StateWorking
-				a.statusbar.states[name] = StateWorking
-				delete(a.stateStickUntil, name)
+				a.sessionStates[sessionID] = StateWorking
+				a.statusbar.states[sessionID] = StateWorking
+				delete(a.stateStickUntil, sessionID)
 			}
 		} else {
 			// No signal — keep current state. Only expire sticky attention
 			// states back to Idle (not Working) once the timer lapses.
 			if s.State == session.StateRunning && isAttentionState(prevState) {
-				if deadline, ok := a.stateStickUntil[name]; ok && now.Before(deadline) {
+				if deadline, ok := a.stateStickUntil[sessionID]; ok && now.Before(deadline) {
 					continue
 				}
 				// Sticky expired — return to Idle, not Working.
-				a.sidebar.states[name] = StateIdle
-				a.statusbar.states[name] = StateIdle
-				delete(a.stateStickUntil, name)
+				a.sessionStates[sessionID] = StateIdle
+				a.statusbar.states[sessionID] = StateIdle
+				delete(a.stateStickUntil, sessionID)
 			} else if s.State == session.StateRunning && prevState == StateWorking {
 				// Working → Idle (agent finished responding).
-				a.sendTelegramEvent(name, StateIdle, "", lines)
+				a.sendTelegramEvent(projectName, sessionID, StateIdle, "", lines)
 			}
 		}
+
+		// Update sidebar aggregate state for this project.
+		a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
 	}
 }
 
 // sendTelegramEvent sends an event to the Telegram bridge channel if configured.
 // Non-blocking; the bridge handles dedup and rate limiting.
-func (a *App) sendTelegramEvent(project string, state SessionState, detail string, lines []string) {
+func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, detail string, lines []string) {
 	if a.telegramCh == nil {
 		return
 	}
@@ -1419,13 +1430,51 @@ func (a *App) sendTelegramEvent(project string, state SessionState, detail strin
 
 	select {
 	case a.telegramCh <- telegram.Event{
-		Project: project,
-		Kind:    kind,
-		Detail:  detail,
-		Screen:  lines,
+		Project:   project,
+		SessionID: sessionID,
+		Kind:      kind,
+		Detail:    detail,
+		Screen:    lines,
 	}:
 	default:
 		// Channel full — drop the event (bridge dedup will cover next tick).
+	}
+}
+
+// aggregateProjectState returns the highest-priority state across all
+// sessions for a project. Priority: NeedsPermission > Asking >
+// NeedsAttention > Error > Working > Done > Idle.
+func (a *App) aggregateProjectState(projectName string) SessionState {
+	best := StateIdle
+	for _, s := range a.mgr.GetSessionsByProject(projectName) {
+		state := a.sessionStates[s.ID]
+		if statePriority(state) > statePriority(best) {
+			best = state
+		}
+	}
+	return best
+}
+
+// statePriority returns a numeric priority for session states, used to
+// compute the aggregate "most urgent" state for sidebar display.
+func statePriority(s SessionState) int {
+	switch s {
+	case StateNeedsPermission:
+		return 7
+	case StateAsking:
+		return 6
+	case StateNeedsAttention:
+		return 5
+	case StateError:
+		return 4
+	case StateWorking:
+		return 3
+	case StateDone:
+		return 2
+	case StateIdle:
+		return 1
+	default:
+		return 0
 	}
 }
 

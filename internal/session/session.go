@@ -28,14 +28,17 @@ const (
 )
 
 // Session wraps a single agent process running in a PTY with vt10x terminal
-// emulation.
+// emulation. Multiple sessions can exist for the same project, each running
+// an independent agent process.
 type Session struct {
-	Project config.Project
-	Agent   agent.AgentAdapter
-	Ptmx    *os.File
-	Cmd     *os.Process
-	VT      vt10x.Terminal
-	State   State
+	ID       string // unique session identifier (e.g. "proj", "proj (2)")
+	Instance int    // instance number (1, 2, 3...)
+	Project  config.Project
+	Agent    agent.AgentAdapter
+	Ptmx     *os.File
+	Cmd      *os.Process
+	VT       vt10x.Terminal
+	State    State
 
 	Mu            sync.RWMutex
 	Width, Height int

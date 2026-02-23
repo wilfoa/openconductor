@@ -48,15 +48,18 @@ func (h *handler) HandleMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	s := h.mgr.GetSession(project)
-	if s == nil {
+	sessions := h.mgr.GetSessionsByProject(project)
+	if len(sessions) == 0 {
 		logging.Debug("telegram: no active session for project", "project", project)
 		return
 	}
 
+	// Route to the most recently created session for this project.
+	s := sessions[len(sessions)-1]
+
 	// Write the text to the agent's PTY followed by a newline.
 	s.Write([]byte(msg.Text + "\n"))
-	logging.Info("telegram: forwarded message to agent", "project", project, "len", len(msg.Text))
+	logging.Info("telegram: forwarded message to agent", "project", project, "session", s.ID, "len", len(msg.Text))
 }
 
 // HandleCallback processes an inline keyboard callback (permission or question).
@@ -73,11 +76,13 @@ func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQ
 	project := parts[1]
 	action := parts[2]
 
-	s := h.mgr.GetSession(project)
-	if s == nil {
+	sessions := h.mgr.GetSessionsByProject(project)
+	if len(sessions) == 0 {
 		h.answerCallback(bot, query.ID, "No active session")
 		return
 	}
+	// Route to the most recently created session for this project.
+	s := sessions[len(sessions)-1]
 
 	var actionLabel string
 

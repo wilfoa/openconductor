@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/session"
 )
 
 func init() {
@@ -34,6 +35,15 @@ func makeTestApp() App {
 	app.statusbar.states["stocks"] = StateWorking
 	app.sidebar.states["Where is everyone"] = StateNeedsAttention
 	app.statusbar.states["Where is everyone"] = StateNeedsAttention
+
+	// Inject sessions so mgr.ActiveName() works for tab rendering.
+	app.mgr.InjectSession("stocks", &session.Session{
+		ID: "stocks", Instance: 1, Project: cfg.Projects[0],
+	})
+	app.mgr.InjectSession("Where is everyone", &session.Session{
+		ID: "Where is everyone", Instance: 1, Project: cfg.Projects[1],
+	})
+
 	app.addTab("Where is everyone")
 	app.layout()
 	return app
@@ -59,6 +69,7 @@ func TestVisualRender(t *testing.T) {
 	app.active = 0
 	app.sidebar.selected = 0
 	app.statusbar.activeName = "stocks"
+	_ = app.mgr.SetActive("stocks")
 
 	bar := app.tabBarView()
 	top, content, bottom := tabBarLines(bar)
@@ -73,6 +84,7 @@ func TestVisualRender(t *testing.T) {
 	app.active = 1
 	app.sidebar.selected = 1
 	app.statusbar.activeName = "Where is everyone"
+	_ = app.mgr.SetActive("Where is everyone")
 
 	bar = app.tabBarView()
 	top, content, bottom = tabBarLines(bar)
@@ -93,6 +105,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("top border has rounded corners", func(t *testing.T) {
 		app.active = 0
+		_ = app.mgr.SetActive("stocks")
 		top, _, _ := tabBarLines(app.tabBarView())
 		stripped := stripAnsi(top)
 		if !strings.Contains(stripped, "╭") || !strings.Contains(stripped, "╮") {
@@ -102,6 +115,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("active tab content has no bgAlt", func(t *testing.T) {
 		app.active = 0
+		_ = app.mgr.SetActive("stocks")
 		_, content, _ := tabBarLines(app.tabBarView())
 		// Find the active tab region (first │...│ segment)
 		// Active tab should not have bgAlt background
@@ -119,6 +133,7 @@ func TestTabVisualInvariants(t *testing.T) {
 		// With the border technique, we no longer use bgAlt on tabs.
 		// Visual distinction comes from border color + text style.
 		app.active = 0
+		_ = app.mgr.SetActive("stocks")
 		_, content, _ := tabBarLines(app.tabBarView())
 		nameIdx := strings.Index(content, "Where is everyone")
 		if nameIdx < 0 {
@@ -128,6 +143,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("active tab bottom is open (spaces)", func(t *testing.T) {
 		app.active = 0
+		_ = app.mgr.SetActive("stocks")
 		_, _, bottom := tabBarLines(app.tabBarView())
 		stripped := stripAnsi(bottom)
 		t.Logf("bottom: %q", stripped)
@@ -148,6 +164,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("inactive tab bottom is closed", func(t *testing.T) {
 		app.active = 0
+		_ = app.mgr.SetActive("stocks")
 		_, _, bottom := tabBarLines(app.tabBarView())
 		stripped := stripAnsi(bottom)
 
@@ -159,6 +176,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("active right tab — left starts with ┴", func(t *testing.T) {
 		app.active = 1
+		_ = app.mgr.SetActive("Where is everyone")
 		_, _, bottom := tabBarLines(app.tabBarView())
 		stripped := stripAnsi(bottom)
 		t.Logf("bottom: %q", stripped)
@@ -183,6 +201,9 @@ func TestTabVisualInvariants(t *testing.T) {
 		single.width = 80
 		single.height = 15
 		single.ready = true
+		single.mgr.InjectSession("solo", &session.Session{
+			ID: "solo", Instance: 1, Project: singleCfg.Projects[0],
+		})
 		single.layout()
 
 		_, _, bottom := tabBarLines(single.tabBarView())
@@ -199,6 +220,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("tab bar widths — all 3 lines match panel", func(t *testing.T) {
 		app.active = 0
+		_ = app.mgr.SetActive("stocks")
 		top, content, bottom := tabBarLines(app.tabBarView())
 
 		sbWidth := app.sidebar.Width()
@@ -217,6 +239,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("tab bar is exactly 3 lines", func(t *testing.T) {
 		app.active = 0
+		_ = app.mgr.SetActive("stocks")
 		bar := app.tabBarView()
 		lineCount := strings.Count(bar, "\n") + 1
 		if lineCount != 3 {
@@ -226,6 +249,7 @@ func TestTabVisualInvariants(t *testing.T) {
 
 	t.Run("full view line widths", func(t *testing.T) {
 		app.active = 1
+		_ = app.mgr.SetActive("Where is everyone")
 		app.sidebar.selected = 1
 		app.statusbar.activeName = "Where is everyone"
 

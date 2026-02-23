@@ -66,22 +66,29 @@ func (s SessionState) Description() string {
 	}
 }
 
-// ProjectSwitchedMsg is sent when the user selects a different project.
+// ProjectSwitchedMsg is sent when the user selects a project in the sidebar.
+// Always creates a new session (new agent invocation).
 type ProjectSwitchedMsg struct {
 	Index   int
 	Project config.Project
 }
 
+// TabSwitchedMsg is sent when the user clicks a tab or uses Ctrl+J/K to
+// switch between existing sessions. Does NOT create a new session.
+type TabSwitchedMsg struct {
+	SessionID string
+}
+
 // SessionStateChangedMsg is sent when a session's state changes.
 type SessionStateChangedMsg struct {
-	ProjectName string
-	State       SessionState
-	Detail      string
+	SessionID string
+	State     SessionState
+	Detail    string
 }
 
 // TabClosedMsg is sent when a user clicks the close button on a tab.
 type TabClosedMsg struct {
-	Name string
+	Name string // session ID
 }
 
 // TickMsg triggers periodic checks (attention detection, etc).

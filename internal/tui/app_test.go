@@ -269,41 +269,54 @@ func TestNewAppEmptyHasNoTabs(t *testing.T) {
 	}
 }
 
-func TestAppProjectSwitchedAddsTab(t *testing.T) {
+func TestAppProjectSwitchedReturnsStartCmd(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
 	// Initially only proj1 is open.
 	if len(app.openTabs) != 1 {
 		t.Fatalf("precondition: expected 1 tab, got %d", len(app.openTabs))
 	}
 
-	// Switch to proj2.
+	// Switch to proj2 — should return a command to start a new session.
 	msg := ProjectSwitchedMsg{Index: 1, Project: app.cfg.Projects[1]}
-	model, _ := app.Update(msg)
+	_, cmd := app.Update(msg)
+
+	if cmd == nil {
+		t.Fatal("expected a command from ProjectSwitchedMsg")
+	}
+}
+
+func TestSessionStartedAddsTab(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	// Inject a session and simulate sessionStartedMsg.
+	sess := &session.Session{
+		ID:       "proj2",
+		Instance: 1,
+		Project:  app.cfg.Projects[1],
+		State:    session.StateRunning,
+	}
+	app.mgr.InjectSession("proj2", sess)
+
+	model, _ := app.Update(sessionStartedMsg{SessionID: "proj2"})
 	app = model.(App)
 
 	if len(app.openTabs) != 2 {
 		t.Fatalf("expected 2 open tabs, got %d", len(app.openTabs))
 	}
-	if app.openTabs[0] != "proj1" || app.openTabs[1] != "proj2" {
-		t.Fatalf("expected tabs [proj1, proj2], got %v", app.openTabs)
-	}
-}
-
-func TestAppProjectSwitchedNoDuplicateTab(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
-	// Switch to proj1 again — should not duplicate.
-	msg := ProjectSwitchedMsg{Index: 0, Project: app.cfg.Projects[0]}
-	model, _ := app.Update(msg)
-	app = model.(App)
-
-	if len(app.openTabs) != 1 {
-		t.Fatalf("expected 1 tab (no duplicate), got %d", len(app.openTabs))
-	}
 }
 
 func TestAppProjectDeletedRemovesTab(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
-	// Open both tabs.
+	// Inject sessions for both projects so the delete handler can find them.
+	sess1 := &session.Session{
+		ID: "proj1", Instance: 1,
+		Project: app.cfg.Projects[0], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess1)
+	sess2 := &session.Session{
+		ID: "proj2", Instance: 1,
+		Project: app.cfg.Projects[1], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj2", sess2)
 	app.addTab("proj2")
 	if len(app.openTabs) != 2 {
 		t.Fatalf("precondition: expected 2 tabs, got %d", len(app.openTabs))
@@ -321,20 +334,21 @@ func TestAppProjectDeletedRemovesTab(t *testing.T) {
 	}
 }
 
-func TestAppProjectAddedOpensTab(t *testing.T) {
+func TestAppProjectAddedReturnsStartCmd(t *testing.T) {
 	app := NewApp(emptyConfig(), "")
 
 	msg := ProjectAddedMsg{
 		Project: config.Project{Name: "new", Repo: "/tmp/new", Agent: config.AgentGemini},
 	}
-	model, _ := app.Update(msg)
-	app = model.(App)
+	_, cmd := app.Update(msg)
 
-	if len(app.openTabs) != 1 {
-		t.Fatalf("expected 1 tab, got %d", len(app.openTabs))
+	// Should return commands (save config + start session).
+	if cmd == nil {
+		t.Fatal("expected commands from ProjectAddedMsg")
 	}
-	if app.openTabs[0] != "new" {
-		t.Fatalf("expected tab 'new', got %q", app.openTabs[0])
+	// Project should be in config now.
+	if len(app.cfg.Projects) != 1 || app.cfg.Projects[0].Name != "new" {
+		t.Fatalf("expected project 'new' in config, got %v", app.cfg.Projects)
 	}
 }
 
@@ -360,11 +374,10 @@ func configWith3Projects() *config.Config {
 }
 
 // testTabWidth returns the rendered width of a tab, matching the logic in
-// tabBarView and tabHitTest. Active tab has no close button; inactive tabs
-// include " ✕" and use state-colored styles.
-func testTabWidth(name string, state SessionState, isActive bool) int {
+// tabBarView and tabHitTest.
+func testTabWidth(sessionID string, state SessionState, isActive bool) int {
 	char := badgeChar(state, 0) // animFrame=0 for steady badge in tests
-	label := char + " " + name + " ✕"
+	label := char + " " + sessionID + " ✕"
 	if isActive {
 		return lipgloss.Width(tabActiveStyle.Render(label))
 	}
@@ -391,16 +404,20 @@ func TestTabHitTestSingleTab(t *testing.T) {
 func TestTabHitTestMultipleTabs(t *testing.T) {
 	cfg := configWith3Projects()
 	app := NewApp(cfg, "")
-	// Open all three tabs.
+	// Inject sessions and open tabs.
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
 	app.addTab("beta")
 	app.addTab("gamma")
 
-	activeName := cfg.Projects[app.active].Name
+	activeSessionID := app.mgr.ActiveName()
 
 	widths := make([]int, 3)
-	for i, name := range app.openTabs {
-		state := app.sidebar.states[name]
-		widths[i] = testTabWidth(name, state, name == activeName)
+	for i, id := range app.openTabs {
+		state := app.sessionStates[id]
+		widths[i] = testTabWidth(id, state, id == activeSessionID)
 	}
 
 	// Click in first tab → 0.
@@ -441,13 +458,18 @@ func TestTabHitTestNegativeX(t *testing.T) {
 func TestTabHitTestCloseRegion(t *testing.T) {
 	cfg := configWith3Projects()
 	app := NewApp(cfg, "")
+	// Inject sessions.
+	for _, p := range cfg.Projects[:2] {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
 	app.addTab("beta")
 
 	// beta is inactive (alpha is active). Clicking the rightmost portion
 	// of beta's tab should report isClose=true.
-	activeName := cfg.Projects[app.active].Name
-	firstWidth := testTabWidth("alpha", app.sidebar.states["alpha"], "alpha" == activeName)
-	secondWidth := testTabWidth("beta", app.sidebar.states["beta"], false)
+	activeSessionID := app.mgr.ActiveName()
+	firstWidth := testTabWidth("alpha", app.sessionStates["alpha"], "alpha" == activeSessionID)
+	secondWidth := testTabWidth("beta", app.sessionStates["beta"], false)
 
 	// Click 2 pixels from the right edge of beta's tab → close region.
 	closeX := firstWidth + secondWidth - 2
@@ -497,18 +519,22 @@ func TestProjectIndexByName(t *testing.T) {
 	}
 }
 
-func TestTabClickSwitchesProject(t *testing.T) {
+func TestTabClickSwitchesSession(t *testing.T) {
 	cfg := configWith3Projects()
 	app := NewApp(cfg, "")
 	app.width = 160
 	app.height = 40
 
-	// Open all three tabs.
+	// Inject sessions and open tabs.
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
 	app.addTab("beta")
 	app.addTab("gamma")
 
 	// Compute where the second tab starts (after the active first tab).
-	firstWidth := testTabWidth("alpha", app.sidebar.states["alpha"], true)
+	firstWidth := testTabWidth("alpha", app.sessionStates["alpha"], true)
 
 	sbWidth := app.sidebar.Width()
 	tabBarStartX := screenPadding + sbWidth
@@ -528,15 +554,12 @@ func TestTabClickSwitchesProject(t *testing.T) {
 		t.Fatal("expected a command from tab click")
 	}
 	result := cmd()
-	switched, ok := result.(ProjectSwitchedMsg)
+	switched, ok := result.(TabSwitchedMsg)
 	if !ok {
-		t.Fatalf("expected ProjectSwitchedMsg, got %T", result)
+		t.Fatalf("expected TabSwitchedMsg, got %T", result)
 	}
-	if switched.Project.Name != "beta" {
-		t.Fatalf("expected project 'beta', got %q", switched.Project.Name)
-	}
-	if switched.Index != 1 {
-		t.Fatalf("expected index 1, got %d", switched.Index)
+	if switched.SessionID != "beta" {
+		t.Fatalf("expected session 'beta', got %q", switched.SessionID)
 	}
 }
 
@@ -546,12 +569,17 @@ func TestTabCloseClick(t *testing.T) {
 	app.width = 160
 	app.height = 40
 
+	// Inject sessions.
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
 	app.addTab("beta")
 	app.addTab("gamma")
 
 	// Click the close region of the second tab (beta).
-	firstWidth := testTabWidth("alpha", app.sidebar.states["alpha"], true)
-	secondWidth := testTabWidth("beta", app.sidebar.states["beta"], false)
+	firstWidth := testTabWidth("alpha", app.sessionStates["alpha"], true)
+	secondWidth := testTabWidth("beta", app.sessionStates["beta"], false)
 
 	sbWidth := app.sidebar.Width()
 	tabBarStartX := screenPadding + sbWidth
@@ -581,7 +609,13 @@ func TestTabCloseClick(t *testing.T) {
 }
 
 func TestTabClosedMsgRemovesTab(t *testing.T) {
-	app := NewApp(configWith3Projects(), "")
+	cfg := configWith3Projects()
+	app := NewApp(cfg, "")
+	// Inject sessions.
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
 	app.addTab("beta")
 	app.addTab("gamma")
 	if len(app.openTabs) != 3 {
@@ -603,7 +637,13 @@ func TestTabClosedMsgRemovesTab(t *testing.T) {
 }
 
 func TestTabClosedMsgSwitchesIfActive(t *testing.T) {
-	app := NewApp(configWith3Projects(), "")
+	cfg := configWith3Projects()
+	app := NewApp(cfg, "")
+	// Inject sessions.
+	for _, p := range cfg.Projects[:2] {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
 	app.addTab("beta")
 	// alpha (index 0) is the active tab.
 
@@ -611,22 +651,28 @@ func TestTabClosedMsgSwitchesIfActive(t *testing.T) {
 	model, cmd := app.Update(TabClosedMsg{Name: "alpha"})
 	app = model.(App)
 
-	// Should produce a ProjectSwitchedMsg to switch to the remaining tab.
+	// Should produce a TabSwitchedMsg to switch to the remaining tab.
 	if cmd == nil {
 		t.Fatal("expected a command when closing active tab")
 	}
 	result := cmd()
-	switched, ok := result.(ProjectSwitchedMsg)
+	switched, ok := result.(TabSwitchedMsg)
 	if !ok {
-		t.Fatalf("expected ProjectSwitchedMsg, got %T", result)
+		t.Fatalf("expected TabSwitchedMsg, got %T", result)
 	}
-	if switched.Project.Name != "beta" {
-		t.Fatalf("expected switch to 'beta', got %q", switched.Project.Name)
+	if switched.SessionID != "beta" {
+		t.Fatalf("expected switch to 'beta', got %q", switched.SessionID)
 	}
 }
 
 func TestTabClosedLastTabClearsTerminal(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
+	// Inject session.
+	sess := &session.Session{
+		ID: "proj1", Instance: 1,
+		Project: app.cfg.Projects[0], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess)
 	// Simulate an active terminal.
 	app.terminal.active = true
 
@@ -652,8 +698,14 @@ func TestTabClosedLastTabClearsTerminal(t *testing.T) {
 
 func TestTabClosedResetsStateToIdle(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
+	// Inject a session so closing it has something to clean up.
+	sess := &session.Session{
+		ID: "proj1", Instance: 1,
+		Project: app.cfg.Projects[0], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess)
+	app.sessionStates["proj1"] = StateWorking
 	app.sidebar.states["proj1"] = StateWorking
-	app.statusbar.states["proj1"] = StateWorking
 
 	model, _ := app.Update(TabClosedMsg{Name: "proj1"})
 	app = model.(App)
@@ -661,8 +713,9 @@ func TestTabClosedResetsStateToIdle(t *testing.T) {
 	if app.sidebar.states["proj1"] != StateIdle {
 		t.Fatalf("expected sidebar state Idle, got %v", app.sidebar.states["proj1"])
 	}
-	if app.statusbar.states["proj1"] != StateIdle {
-		t.Fatalf("expected statusbar state Idle, got %v", app.statusbar.states["proj1"])
+	// Session state should be cleaned up.
+	if _, exists := app.sessionStates["proj1"]; exists {
+		t.Fatal("expected sessionStates['proj1'] to be deleted")
 	}
 }
 
@@ -1070,15 +1123,28 @@ func TestStickyStatePreventsDowngrade(t *testing.T) {
 }
 
 func TestProjectSwitchClearsStickyTimer(t *testing.T) {
+	// Sticky timers are now per-session ID, not project name.
+	// Verify that TabSwitchedMsg does not clear them (they expire on their own).
+	// This test now verifies the sticky timer mechanism still works.
 	app := NewApp(configWithProjects(), "")
 	app.stateStickUntil["proj1"] = time.Now().Add(10 * time.Second)
 
-	msg := ProjectSwitchedMsg{Index: 0, Project: app.cfg.Projects[0]}
-	model, _ := app.Update(msg)
+	// Sticky timer should exist.
+	if _, ok := app.stateStickUntil["proj1"]; !ok {
+		t.Fatal("precondition: expected sticky timer to exist")
+	}
+
+	// Closing the tab clears the sticky timer.
+	sess := &session.Session{
+		ID: "proj1", Instance: 1,
+		Project: app.cfg.Projects[0], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess)
+	model, _ := app.Update(TabClosedMsg{Name: "proj1"})
 	app = model.(App)
 
 	if _, ok := app.stateStickUntil["proj1"]; ok {
-		t.Fatal("expected sticky timer to be cleared after project switch")
+		t.Fatal("expected sticky timer to be cleared after tab close")
 	}
 }
 
@@ -1315,7 +1381,7 @@ func TestStateToEventKind_AllMappings(t *testing.T) {
 func TestSendTelegramEvent_NilChannel(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
 	// telegramCh is nil by default — should not panic.
-	app.sendTelegramEvent("proj1", StateNeedsPermission, "test", []string{"screen"})
+	app.sendTelegramEvent("proj1", "proj1", StateNeedsPermission, "test", []string{"screen"})
 }
 
 func TestSendTelegramEvent_SkipsWorking(t *testing.T) {
@@ -1380,7 +1446,7 @@ func TestSendTelegramEvent_AllAttentionTypes(t *testing.T) {
 			<-ch
 		}
 
-		app.sendTelegramEvent("proj1", tt.state, "test detail", []string{"screen line"})
+		app.sendTelegramEvent("proj1", "proj1", tt.state, "test detail", []string{"screen line"})
 
 		if tt.sent {
 			select {
@@ -1417,9 +1483,9 @@ func TestSendTelegramEvent_ChannelFull_DoesNotBlock(t *testing.T) {
 	app.SetTelegramChannel(ch)
 
 	// Fill the channel.
-	app.sendTelegramEvent("proj1", StateNeedsPermission, "", []string{"a"})
+	app.sendTelegramEvent("proj1", "proj1", StateNeedsPermission, "", []string{"a"})
 	// Second send should not block (drops silently).
-	app.sendTelegramEvent("proj1", StateError, "", []string{"b"})
+	app.sendTelegramEvent("proj1", "proj1", StateError, "", []string{"b"})
 
 	// Only the first event should be in the channel.
 	e := <-ch

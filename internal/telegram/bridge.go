@@ -24,12 +24,13 @@ const (
 )
 
 // Event is sent from the TUI to the Telegram bot when a state transition
-// occurs for a project.
+// occurs for a session.
 type Event struct {
-	Project string
-	Kind    EventKind
-	Detail  string   // human-readable description from attention detection
-	Screen  []string // current visible terminal lines
+	Project   string // project name (used for topic lookup)
+	SessionID string // session ID (e.g. "proj" or "proj (2)")
+	Kind      EventKind
+	Detail    string   // human-readable description from attention detection
+	Screen    []string // current visible terminal lines
 }
 
 // bridge manages the outbound event flow from the TUI to Telegram, including
