@@ -214,3 +214,35 @@ func TestSidebarEmptyStateView(t *testing.T) {
 		t.Fatalf("expected add button hint, got:\n%s", view)
 	}
 }
+
+// TestSidebarStateLabelAlwaysVisible verifies that the state label (idle,
+// working, attention, etc.) is shown for ALL projects, not just the selected
+// one or those with open tabs.
+func TestSidebarStateLabelAlwaysVisible(t *testing.T) {
+	projects := testProjects()
+	m := newSidebarModel(projects, defaultSidebarWidth)
+	m.focused = true
+	m.height = 30
+	m.selected = 0 // alpha is selected
+
+	// Set different states for each project
+	m.states["alpha"] = StateWorking
+	m.states["beta"] = StateNeedsAttention
+	m.states["gamma"] = StateIdle
+
+	// Only alpha has an open tab
+	m.openTabs["alpha"] = true
+
+	view := m.View()
+
+	// All state labels should be visible, regardless of tab state
+	if !strings.Contains(view, "working") {
+		t.Errorf("expected 'working' state label for alpha, got:\n%s", view)
+	}
+	if !strings.Contains(view, "attention") {
+		t.Errorf("expected 'attention' state label for beta (non-selected, no tab), got:\n%s", view)
+	}
+	if !strings.Contains(view, "idle") {
+		t.Errorf("expected 'idle' state label for gamma (non-selected, no tab), got:\n%s", view)
+	}
+}

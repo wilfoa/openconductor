@@ -294,7 +294,8 @@ func (m sidebarModel) View() string {
 					label := " " + badge + " " + name
 					b.WriteString(projectItemStyle.Render(label))
 					b.WriteString("\n")
-					b.WriteString(projectAgentStyle.Render(agentDisplayName(p.Agent)))
+					agentLine := agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
+					b.WriteString(projectAgentStyle.Render(agentLine))
 				}
 				b.WriteString("\n")
 			}
