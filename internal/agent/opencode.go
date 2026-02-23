@@ -22,9 +22,9 @@ func (a *opencodeAdapter) Type() config.AgentType {
 }
 
 // Command returns an *exec.Cmd that launches the "opencode" CLI in the given
-// repo directory.
+// repo directory. The --continue flag resumes the previous conversation.
 func (a *opencodeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
-	cmd := exec.Command("opencode")
+	cmd := exec.Command("opencode", "--continue")
 	cmd.Dir = repoPath
 	return cmd
 }
