@@ -1637,6 +1637,98 @@ func TestKittyShiftEnter_ForwardedToPTY(t *testing.T) {
 	}
 }
 
+// TestLegacyCtrlJ_SwitchesTab verifies that a standard (non-kitty) Ctrl+J
+// key message triggers tab switching when multiple tabs are open.
+func TestLegacyCtrlJ_SwitchesTab(t *testing.T) {
+	cfg := configWith3Projects()
+	app := NewApp(cfg, "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusTerminal
+
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
+	app.addTab("beta")
+	app.addTab("gamma")
+
+	// Send legacy Ctrl+J (as bubbletea would produce from byte 0x0A).
+	legacyCtrlJ := tea.KeyMsg{Type: tea.KeyCtrlJ}
+
+	_, cmd := app.Update(legacyCtrlJ)
+	if cmd == nil {
+		t.Fatal("expected command from legacy Ctrl+J to switch tab")
+	}
+	result := cmd()
+	switched, ok := result.(TabSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected TabSwitchedMsg, got %T", result)
+	}
+	if switched.SessionID != "beta" {
+		t.Fatalf("expected switch to 'beta', got %q", switched.SessionID)
+	}
+}
+
+// TestLegacyCtrlK_SwitchesTabBackward verifies Ctrl+K switches to prev tab.
+func TestLegacyCtrlK_SwitchesTabBackward(t *testing.T) {
+	cfg := configWith3Projects()
+	app := NewApp(cfg, "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusTerminal
+
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
+	app.addTab("beta")
+	app.addTab("gamma")
+
+	// Send legacy Ctrl+K (as bubbletea would produce from byte 0x0B).
+	legacyCtrlK := tea.KeyMsg{Type: tea.KeyCtrlK}
+
+	_, cmd := app.Update(legacyCtrlK)
+	if cmd == nil {
+		t.Fatal("expected command from legacy Ctrl+K to switch tab")
+	}
+	result := cmd()
+	switched, ok := result.(TabSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected TabSwitchedMsg, got %T", result)
+	}
+	// alpha is at index 0, Ctrl+K goes backward, wrapping to gamma (index 2).
+	if switched.SessionID != "gamma" {
+		t.Fatalf("expected switch to 'gamma', got %q", switched.SessionID)
+	}
+}
+
+// TestCtrlJK_FromSidebar verifies Ctrl+J/K work even when sidebar is focused.
+func TestCtrlJK_FromSidebar(t *testing.T) {
+	cfg := configWith3Projects()
+	app := NewApp(cfg, "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusSidebar
+
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
+	app.addTab("beta")
+	app.addTab("gamma")
+
+	// Ctrl+J from sidebar should still switch tabs.
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if cmd == nil {
+		t.Fatal("expected Ctrl+J to switch tab even from sidebar")
+	}
+	result := cmd()
+	if _, ok := result.(TabSwitchedMsg); !ok {
+		t.Fatalf("expected TabSwitchedMsg, got %T", result)
+	}
+}
+
 func TestSystemTabExitedMsg_ReloadsConfig(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
 	// Initially telegram is disabled.

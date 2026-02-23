@@ -37,6 +37,6 @@ Thumbs.db
 # Agent config
 .opencode/
 
-# VHS
-*.tape
+# VHS (keep demo.tape tracked; ignore other tapes)
+!demo.tape
 .opencode-telegram

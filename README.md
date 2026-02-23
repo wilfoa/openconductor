@@ -13,7 +13,7 @@ emulation, watches for moments the agent needs you (input prompts, permission
 requests, errors), and notifies you so you can context-switch only when it
 matters.
 
-![OpenConductor TUI](assets/screenshot.png)
+![OpenConductor demo](assets/demo.gif)
 
 ## Features
 
@@ -86,8 +86,6 @@ On first launch you'll see an empty sidebar. Press `a` to add a project --
 pick a name, point it at a repo, and choose an agent. OpenConductor starts the
 agent immediately. Add as many projects as you like; switch between them with
 `Ctrl+J`/`Ctrl+K` or click the tabs.
-
-![Adding a project](assets/add-project.png)
 
 ### Bootstrap agent configs
 
