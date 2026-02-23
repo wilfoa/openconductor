@@ -856,3 +856,56 @@ func unknownCSIBytes(msg tea.Msg) []byte {
 	}
 	return rv.Bytes()
 }
+
+// parseKittyCSI attempts to parse a kitty keyboard protocol CSI u sequence
+// into a tea.KeyMsg. The CSI u format is: \x1b [ <codepoint> ; <modifier> u
+// where modifier = (shift | alt<<1 | ctrl<<2 | super<<3) + 1.
+//
+// Returns (keyMsg, true) for sequences that map to app-level shortcuts
+// (Ctrl+C, Ctrl+S, Ctrl+J, Ctrl+K). All other sequences return (_, false)
+// and should be forwarded to the PTY.
+func parseKittyCSI(raw []byte) (tea.KeyMsg, bool) {
+	// Minimum: \x1b [ <digit> u = 4 bytes.
+	if len(raw) < 4 || raw[0] != '\x1b' || raw[1] != '[' || raw[len(raw)-1] != 'u' {
+		return tea.KeyMsg{}, false
+	}
+
+	params := string(raw[2 : len(raw)-1]) // between '[' and 'u'
+	parts := strings.SplitN(params, ";", 2)
+
+	codepoint, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return tea.KeyMsg{}, false
+	}
+
+	modifier := 1 // default: no modifier
+	if len(parts) > 1 {
+		modifier, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return tea.KeyMsg{}, false
+		}
+	}
+
+	// Decode modifier bits (encoded as bits + 1).
+	modBits := modifier - 1
+	hasCtrl := modBits&4 != 0
+	hasAlt := modBits&2 != 0
+
+	if !hasCtrl {
+		return tea.KeyMsg{}, false
+	}
+
+	// Map Ctrl+letter codepoints to tea.KeyType.
+	switch rune(codepoint) {
+	case 'c':
+		return tea.KeyMsg{Type: tea.KeyCtrlC, Alt: hasAlt}, true
+	case 's':
+		return tea.KeyMsg{Type: tea.KeyCtrlS, Alt: hasAlt}, true
+	case 'j':
+		return tea.KeyMsg{Type: tea.KeyCtrlJ, Alt: hasAlt}, true
+	case 'k':
+		return tea.KeyMsg{Type: tea.KeyCtrlK, Alt: hasAlt}, true
+	default:
+		return tea.KeyMsg{}, false
+	}
+}

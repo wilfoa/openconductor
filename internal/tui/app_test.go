@@ -1494,6 +1494,149 @@ func TestSendTelegramEvent_ChannelFull_DoesNotBlock(t *testing.T) {
 	}
 }
 
+// ── Kitty keyboard protocol E2E tests ───────────────────────────
+//
+// When kitty keyboard mode 1 is enabled (\x1b[>1u), the terminal encodes
+// Ctrl+letter as CSI u sequences instead of legacy control codes:
+//   Ctrl+C → \x1b[99;5u   (instead of 0x03)
+//   Ctrl+S → \x1b[115;5u  (instead of 0x13)
+//   Ctrl+J → \x1b[106;5u  (instead of 0x0A)
+//   Ctrl+K → \x1b[107;5u  (instead of 0x0B)
+//
+// bubbletea v1.3.10 does not recognise these sequences and emits them as
+// unknownCSISequenceMsg. Our unknownCSI handler intercepts and forwards
+// them to the active PTY. This means Ctrl+C double-tap to exit, Ctrl+S
+// to toggle focus, and Ctrl+J/K to switch tabs all stop working in
+// terminals with kitty protocol support (kitty, WezTerm, Ghostty).
+
+// unknownCSISequenceMsg mirrors bubbletea's unexported type of the same
+// name. Our unknownCSIBytes() function matches on reflect.TypeOf().Name(),
+// so a local type with the same name and underlying type ([]byte) works.
+type unknownCSISequenceMsg []byte
+
+func TestKittyCtrlC_DoubleTapExits(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusTerminal
+
+	// Inject a session so the PTY write path is exercised.
+	sess := &session.Session{
+		ID: "proj1", Instance: 1,
+		Project: app.cfg.Projects[0], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess)
+
+	// Simulate kitty-encoded Ctrl+C: \x1b[99;5u
+	kittyCtrlC := unknownCSISequenceMsg([]byte{0x1b, '[', '9', '9', ';', '5', 'u'})
+
+	// First Ctrl+C — should show hint, not exit.
+	model, cmd := app.Update(kittyCtrlC)
+	app = model.(App)
+	if cmd != nil {
+		// If cmd is tea.Quit, the app exited on the first press — wrong.
+		result := cmd()
+		if _, isQuit := result.(tea.QuitMsg); isQuit {
+			t.Fatal("first kitty Ctrl+C should not quit")
+		}
+	}
+	if !app.ctrlCHint {
+		t.Fatal("expected ctrlCHint=true after first kitty Ctrl+C")
+	}
+
+	// Second Ctrl+C within the window — should exit.
+	model, cmd = app.Update(kittyCtrlC)
+	app = model.(App)
+	if cmd == nil {
+		t.Fatal("expected tea.Quit command from second kitty Ctrl+C")
+	}
+	result := cmd()
+	if _, isQuit := result.(tea.QuitMsg); !isQuit {
+		t.Fatalf("expected tea.QuitMsg, got %T", result)
+	}
+}
+
+func TestKittyCtrlS_TogglesFocus(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusTerminal
+
+	sess := &session.Session{
+		ID: "proj1", Instance: 1,
+		Project: app.cfg.Projects[0], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess)
+
+	// Simulate kitty-encoded Ctrl+S: \x1b[115;5u
+	kittyCtrlS := unknownCSISequenceMsg([]byte{0x1b, '[', '1', '1', '5', ';', '5', 'u'})
+
+	model, _ := app.Update(kittyCtrlS)
+	app = model.(App)
+
+	if app.focus != focusSidebar {
+		t.Fatalf("expected focus=sidebar after kitty Ctrl+S, got %d", app.focus)
+	}
+}
+
+func TestKittyCtrlJ_SwitchesTab(t *testing.T) {
+	cfg := configWith3Projects()
+	app := NewApp(cfg, "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusTerminal
+
+	// Inject sessions and open tabs for all projects.
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
+	app.addTab("beta")
+	app.addTab("gamma")
+
+	// Simulate kitty-encoded Ctrl+J: \x1b[106;5u
+	kittyCtrlJ := unknownCSISequenceMsg([]byte{0x1b, '[', '1', '0', '6', ';', '5', 'u'})
+
+	_, cmd := app.Update(kittyCtrlJ)
+	if cmd == nil {
+		t.Fatal("expected command from kitty Ctrl+J to switch tab")
+	}
+
+	result := cmd()
+	switched, ok := result.(TabSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected TabSwitchedMsg, got %T", result)
+	}
+	if switched.SessionID != "beta" {
+		t.Fatalf("expected switch to 'beta', got %q", switched.SessionID)
+	}
+}
+
+func TestKittyShiftEnter_ForwardedToPTY(t *testing.T) {
+	app := NewApp(configWithProjects(), "")
+	app.width = 160
+	app.height = 40
+	app.focus = focusTerminal
+
+	sess := &session.Session{
+		ID: "proj1", Instance: 1,
+		Project: app.cfg.Projects[0], State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess)
+
+	// Simulate kitty-encoded Shift+Enter: \x1b[13;2u
+	// This should still be forwarded to the PTY (not intercepted).
+	kittyShiftEnter := unknownCSISequenceMsg([]byte{0x1b, '[', '1', '3', ';', '2', 'u'})
+
+	model, cmd := app.Update(kittyShiftEnter)
+	_ = model.(App)
+
+	// Should return nil (forwarded to PTY, no app-level action).
+	if cmd != nil {
+		t.Fatal("expected Shift+Enter to be forwarded (nil cmd), got a command")
+	}
+}
+
 func TestSystemTabExitedMsg_ReloadsConfig(t *testing.T) {
 	app := NewApp(configWithProjects(), "")
 	// Initially telegram is disabled.

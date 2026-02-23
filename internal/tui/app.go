@@ -235,15 +235,22 @@ func scrollCheckTickCmd() tea.Cmd {
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// Forward unrecognized CSI sequences to the active PTY. bubbletea v1.3.10
-	// emits Shift+Enter (\x1b[13;2u) and other kitty keyboard protocol
-	// sequences as the unexported unknownCSISequenceMsg (underlying []byte).
-	// We detect it via reflection so we can forward without importing internals.
-	if a.focus == focusTerminal {
-		if raw := unknownCSIBytes(msg); len(raw) > 0 {
+	// Handle kitty keyboard protocol CSI u sequences. bubbletea v1.3.10 does
+	// not parse these and emits them as unknownCSISequenceMsg. We intercept
+	// sequences that map to app shortcuts (Ctrl+C/S/J/K) and convert them to
+	// tea.KeyMsg so the normal key handling below processes them. Everything
+	// else (e.g. Shift+Enter) is forwarded to the active PTY.
+	if raw := unknownCSIBytes(msg); len(raw) > 0 {
+		if keyMsg, ok := parseKittyCSI(raw); ok {
+			// Recognised app shortcut — replace msg and fall through
+			// to the switch below so key handlers see it.
+			msg = keyMsg
+		} else if a.focus == focusTerminal {
 			if s := a.mgr.ActiveSession(); s != nil {
 				s.Write(raw)
 			}
+			return a, nil
+		} else {
 			return a, nil
 		}
 	}
