@@ -131,10 +131,16 @@ func NewApp(cfg *config.Config, configPath string) App {
 		openTabs = []string{cfg.Projects[0].Name}
 	}
 
+	sidebar := newSidebarModel(cfg.Projects, defaultSidebarWidth)
+	// Sync sidebar's openTabs map with the initial open tabs.
+	for _, name := range openTabs {
+		sidebar.openTabs[name] = true
+	}
+
 	return App{
 		cfg:                  cfg,
 		configPath:           configPath,
-		sidebar:              newSidebarModel(cfg.Projects, defaultSidebarWidth),
+		sidebar:              sidebar,
 		terminal:             newTerminalModel(),
 		statusbar:            newStatusBarModel(cfg.Projects),
 		focus:                initialFocus,
@@ -1204,6 +1210,7 @@ func (a *App) addTab(name string) {
 		}
 	}
 	a.openTabs = append(a.openTabs, name)
+	a.sidebar.openTabs[name] = true
 }
 
 // removeTab removes a project name from the open tabs list.
@@ -1211,6 +1218,7 @@ func (a *App) removeTab(name string) {
 	for i, t := range a.openTabs {
 		if t == name {
 			a.openTabs = append(a.openTabs[:i], a.openTabs[i+1:]...)
+			delete(a.sidebar.openTabs, name)
 			return
 		}
 	}

@@ -33,6 +33,7 @@ const (
 type sidebarModel struct {
 	projects     []config.Project
 	states       map[string]SessionState
+	openTabs     map[string]bool // tracks which projects have open tabs
 	selected     int
 	focused      bool
 	height       int
@@ -51,6 +52,7 @@ func newSidebarModel(projects []config.Project, contentWidth int) sidebarModel {
 	return sidebarModel{
 		projects:     projects,
 		states:       states,
+		openTabs:     make(map[string]bool),
 		selected:     0,
 		focused:      false,
 		contentWidth: contentWidth,
@@ -269,11 +271,16 @@ func (m sidebarModel) View() string {
 					// foreground escape (no reset) so the surrounding
 					// projectActiveStyle (bold + fg + bg) stays intact
 					// for the project name that follows.
-					state := m.states[p.Name]
-					char := badgeChar(state, m.animFrame)
-					badgeFG := rawFG(stateBadgeColor(state, m.animFrame))
-					restoreFG := rawFG(colorFg)
-					nameLine := badgeFG + char + restoreFG + " " + name
+					var nameLine string
+					if m.openTabs[p.Name] {
+						state := m.states[p.Name]
+						char := badgeChar(state, m.animFrame)
+						badgeFG := rawFG(stateBadgeColor(state, m.animFrame))
+						restoreFG := rawFG(colorFg)
+						nameLine = badgeFG + char + restoreFG + " " + name
+					} else {
+						nameLine = "  " + name // space for alignment (no badge)
+					}
 					agentLine := "  " + agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
 					content := nameLine + "\n" + agentLine
 					b.WriteString(projectActiveStyle.
@@ -315,6 +322,11 @@ func (m sidebarModel) View() string {
 }
 
 func (m sidebarModel) statusBadge(projectName string) string {
+	// Only show badge if the project has an open tab.
+	if !m.openTabs[projectName] {
+		return " " // space for alignment
+	}
+
 	state, ok := m.states[projectName]
 	if !ok {
 		state = StateIdle
