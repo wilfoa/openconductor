@@ -92,16 +92,19 @@ var (
 	// Green ● = online (steady idle, breathing working).
 	// Red ● = error / attention analysis issue.
 	// Gold ◆ = needs user attention.
+	// Orange ! = needs permission decision.
 	// Teal ? = agent asking a question.
 	// Blue ✓ = task done.
 
 	colorSuccessMid = lipgloss.Color("#5E9A78") // mid green for breathing mid-frame
+	colorPermission = lipgloss.Color("#FF8C00") // orange: permission request
 
-	badgeOnline    = lipgloss.NewStyle().Foreground(colorSuccess).SetString("●")  // green: agent online
-	badgeAttention = lipgloss.NewStyle().Foreground(colorWarning).SetString("◆")  // gold: needs input
-	badgeAsking    = lipgloss.NewStyle().Foreground(colorQuestion).SetString("?") // teal: agent question
-	badgeError     = lipgloss.NewStyle().Foreground(colorDanger).SetString("●")
-	badgeDone      = lipgloss.NewStyle().Foreground(colorInfo).SetString("✓")
+	badgeOnline     = lipgloss.NewStyle().Foreground(colorSuccess).SetString("●")    // green: agent online
+	badgeAttention  = lipgloss.NewStyle().Foreground(colorWarning).SetString("◆")    // gold: needs input
+	badgePermission = lipgloss.NewStyle().Foreground(colorPermission).SetString("!") // orange: needs permission
+	badgeAsking     = lipgloss.NewStyle().Foreground(colorQuestion).SetString("?")   // teal: agent question
+	badgeError      = lipgloss.NewStyle().Foreground(colorDanger).SetString("●")
+	badgeDone       = lipgloss.NewStyle().Foreground(colorInfo).SetString("✓")
 
 	// Breathing cycle for StateWorking: ● bright → • mid → · dim → • mid.
 	// Each frame is 600ms, full cycle is 2.4s.
@@ -164,6 +167,12 @@ var (
 	tabAttentionStyle = lipgloss.NewStyle().
 				Border(inactiveTabBorder, true).
 				BorderForeground(colorWarning).
+				Foreground(colorDimFg).
+				Padding(0, 1)
+
+	tabPermissionStyle = lipgloss.NewStyle().
+				Border(inactiveTabBorder, true).
+				BorderForeground(colorPermission).
 				Foreground(colorDimFg).
 				Padding(0, 1)
 

@@ -734,6 +734,8 @@ func inactiveTabStyle(state SessionState) lipgloss.Style {
 	switch state {
 	case StateNeedsAttention:
 		return tabAttentionStyle
+	case StateNeedsPermission:
+		return tabPermissionStyle
 	case StateAsking:
 		return tabAskingStyle
 	case StateError:
@@ -1235,7 +1237,7 @@ func (a App) closeTabCmd(name string) tea.Cmd {
 // isAttentionState returns true for states that should be sticky (not
 // immediately downgraded to Working).
 func isAttentionState(s SessionState) bool {
-	return s == StateNeedsAttention || s == StateAsking || s == StateError || s == StateDone
+	return s == StateNeedsAttention || s == StateNeedsPermission || s == StateAsking || s == StateError || s == StateDone
 }
 
 // checkAttention runs attention detection on ALL sessions (not just the
@@ -1299,8 +1301,8 @@ func (a *App) checkAttention() {
 				if isAttentionState(state) {
 					a.stateStickUntil[name] = now.Add(stateStickDuration)
 
-					// Send desktop notification on entering attention/asking/error.
-					if a.notifier != nil && (state == StateNeedsAttention || state == StateAsking || state == StateError) {
+					// Send desktop notification on entering attention/permission/asking/error.
+					if a.notifier != nil && (state == StateNeedsAttention || state == StateNeedsPermission || state == StateAsking || state == StateError) {
 						a.notifier.Notify(name, event.Type.String(), event.Detail)
 					}
 				}
@@ -1340,8 +1342,10 @@ func (a *App) checkAttention() {
 // attentionEventToState maps an attention.AttentionEvent to a TUI SessionState.
 func attentionEventToState(event *attention.AttentionEvent) SessionState {
 	switch event.Type {
-	case attention.NeedsInput, attention.NeedsPermission:
+	case attention.NeedsInput:
 		return StateNeedsAttention
+	case attention.NeedsPermission:
+		return StateNeedsPermission
 	case attention.NeedsAnswer:
 		return StateAsking
 	case attention.HitError, attention.Stuck:

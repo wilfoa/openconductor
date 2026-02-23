@@ -337,6 +337,8 @@ func (m sidebarModel) statusBadge(projectName string) string {
 		return breathingBadgeStyles[m.animFrame].String()
 	case StateNeedsAttention:
 		return badgeAttention.String()
+	case StateNeedsPermission:
+		return badgePermission.String()
 	case StateAsking:
 		return badgeAsking.String()
 	case StateError:
@@ -362,6 +364,8 @@ func badgeChar(state SessionState, animFrame int) string {
 		return breathingChars[animFrame]
 	case StateNeedsAttention:
 		return "◆"
+	case StateNeedsPermission:
+		return "!"
 	case StateAsking:
 		return "?"
 	case StateError:
@@ -387,6 +391,8 @@ func stateBadgeColor(state SessionState, animFrame int) lipgloss.Color {
 	switch state {
 	case StateNeedsAttention:
 		return colorWarning
+	case StateNeedsPermission:
+		return colorPermission
 	case StateAsking:
 		return colorQuestion
 	case StateError:

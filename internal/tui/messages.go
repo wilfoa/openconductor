@@ -12,6 +12,9 @@ const (
 	StateIdle SessionState = iota
 	StateWorking
 	StateNeedsAttention
+	// StateNeedsPermission indicates the agent is requesting a permission
+	// decision (e.g. file read/write, command execution).
+	StateNeedsPermission
 	// StateAsking indicates the agent is asking the user a structured question
 	// (e.g. OpenCode's multi-option question dialog).
 	StateAsking
@@ -27,6 +30,8 @@ func (s SessionState) String() string {
 		return "working"
 	case StateNeedsAttention:
 		return "attention"
+	case StateNeedsPermission:
+		return "permission"
 	case StateAsking:
 		return "asking"
 	case StateError:
@@ -48,6 +53,8 @@ func (s SessionState) Description() string {
 		return "agent is working"
 	case StateNeedsAttention:
 		return "needs your input"
+	case StateNeedsPermission:
+		return "needs permission"
 	case StateAsking:
 		return "agent has a question"
 	case StateError:

@@ -1051,6 +1051,9 @@ func TestStickyStatePreventsDowngrade(t *testing.T) {
 	if !isAttentionState(StateNeedsAttention) {
 		t.Fatal("expected NeedsAttention to be an attention state")
 	}
+	if !isAttentionState(StateNeedsPermission) {
+		t.Fatal("expected NeedsPermission to be an attention state")
+	}
 	if !isAttentionState(StateError) {
 		t.Fatal("expected Error to be an attention state")
 	}
@@ -1225,6 +1228,7 @@ func TestInactiveTabStyleByState(t *testing.T) {
 		expected lipgloss.Style
 	}{
 		{StateNeedsAttention, tabAttentionStyle},
+		{StateNeedsPermission, tabPermissionStyle},
 		{StateAsking, tabAskingStyle},
 		{StateError, tabErrorStyle},
 		{StateDone, tabDoneStyle},
@@ -1245,6 +1249,14 @@ func TestAttentionEventToState_NeedsAnswer(t *testing.T) {
 	state := attentionEventToState(event)
 	if state != StateAsking {
 		t.Errorf("expected StateAsking for NeedsAnswer, got %v", state)
+	}
+}
+
+func TestAttentionEventToState_NeedsPermission(t *testing.T) {
+	event := &attention.AttentionEvent{Type: attention.NeedsPermission}
+	state := attentionEventToState(event)
+	if state != StateNeedsPermission {
+		t.Errorf("expected StateNeedsPermission for NeedsPermission, got %v", state)
 	}
 }
 
