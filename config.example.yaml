@@ -1,0 +1,36 @@
+# OpenConductor configuration
+# Copy to ~/.openconductor/config.yaml and edit to match your setup.
+
+projects:
+  - name: api
+    repo: ~/code/api
+    agent: claude-code
+
+  - name: frontend
+    repo: ~/code/frontend
+    agent: opencode
+
+  - name: infra
+    repo: ~/code/infra
+    agent: codex
+
+# Optional: L2 LLM classifier for ambiguous attention signals.
+# This sends the last ~20 terminal lines to an LLM when heuristics are
+# uncertain. Leave this section out to rely on heuristics only.
+#
+# llm:
+#   provider: anthropic          # anthropic | openai | google
+#   model: ""                    # empty = provider default
+#   api_key_env: ANTHROPIC_API_KEY  # env var name (not the key itself)
+
+# Desktop notifications.
+notifications:
+  enabled: true
+  cooldown_seconds: 30
+
+# Optional: Telegram bot for remote monitoring.
+# Run `openconductor telegram setup` to configure interactively.
+#
+# telegram:
+#   bot_token_env: TELEGRAM_BOT_TOKEN  # env var name
+#   chat_id: 0                         # your Telegram chat/group ID

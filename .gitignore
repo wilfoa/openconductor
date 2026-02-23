@@ -27,6 +27,10 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
+# Secrets
+.env
+.env.*
+
 # Build
 /dist/
 
