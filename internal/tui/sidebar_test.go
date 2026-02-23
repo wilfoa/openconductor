@@ -215,10 +215,10 @@ func TestSidebarEmptyStateView(t *testing.T) {
 	}
 }
 
-// TestSidebarStateLabelAlwaysVisible verifies that the state label (idle,
-// working, attention, etc.) is shown for ALL projects, not just the selected
-// one or those with open tabs.
-func TestSidebarStateLabelAlwaysVisible(t *testing.T) {
+// TestSidebarStateLabelOnlyWithOpenTab verifies that the state label (idle,
+// working, attention, etc.) is shown ONLY for projects with an open tab.
+// Projects without an open tab show just the agent name.
+func TestSidebarStateLabelOnlyWithOpenTab(t *testing.T) {
 	projects := testProjects()
 	m := newSidebarModel(projects, defaultSidebarWidth)
 	m.focused = true
@@ -235,14 +235,13 @@ func TestSidebarStateLabelAlwaysVisible(t *testing.T) {
 
 	view := m.View()
 
-	// All state labels should be visible, regardless of tab state
+	// Alpha has open tab - state label should be visible
 	if !strings.Contains(view, "working") {
-		t.Errorf("expected 'working' state label for alpha, got:\n%s", view)
+		t.Errorf("expected 'working' state label for alpha (has open tab), got:\n%s", view)
 	}
-	if !strings.Contains(view, "attention") {
-		t.Errorf("expected 'attention' state label for beta (non-selected, no tab), got:\n%s", view)
-	}
-	if !strings.Contains(view, "idle") {
-		t.Errorf("expected 'idle' state label for gamma (non-selected, no tab), got:\n%s", view)
+
+	// Beta has no open tab - "attention" state label should NOT be visible
+	if strings.Contains(view, "attention") {
+		t.Errorf("expected NO 'attention' state label for beta (no open tab), got:\n%s", view)
 	}
 }

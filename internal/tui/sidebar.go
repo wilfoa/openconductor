@@ -272,16 +272,18 @@ func (m sidebarModel) View() string {
 					// projectActiveStyle (bold + fg + bg) stays intact
 					// for the project name that follows.
 					var nameLine string
+					var agentLine string
 					if m.openTabs[p.Name] {
 						state := m.states[p.Name]
 						char := badgeChar(state, m.animFrame)
 						badgeFG := rawFG(stateBadgeColor(state, m.animFrame))
 						restoreFG := rawFG(colorFg)
 						nameLine = badgeFG + char + restoreFG + " " + name
+						agentLine = "  " + agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
 					} else {
 						nameLine = "  " + name // space for alignment (no badge)
+						agentLine = "  " + agentDisplayName(p.Agent)
 					}
-					agentLine := "  " + agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
 					content := nameLine + "\n" + agentLine
 					b.WriteString(projectActiveStyle.
 						Width(innerWidth - 1).
@@ -294,7 +296,12 @@ func (m sidebarModel) View() string {
 					label := " " + badge + " " + name
 					b.WriteString(projectItemStyle.Render(label))
 					b.WriteString("\n")
-					agentLine := agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
+					var agentLine string
+					if m.openTabs[p.Name] {
+						agentLine = agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
+					} else {
+						agentLine = agentDisplayName(p.Agent)
+					}
 					b.WriteString(projectAgentStyle.Render(agentLine))
 				}
 				b.WriteString("\n")
