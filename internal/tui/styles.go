@@ -159,41 +159,6 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
-	// State-specific inactive tab styles: colored border only to signal
-	// state without competing visually with the active tab. Text stays
-	// dim — the badge character (◆ ● ✓) already communicates the state.
-	// Bold text is intentionally omitted so the active tab always wins
-	// on visual prominence.
-	tabAttentionStyle = lipgloss.NewStyle().
-				Border(inactiveTabBorder, true).
-				BorderForeground(colorWarning).
-				Foreground(colorDimFg).
-				Padding(0, 1)
-
-	tabPermissionStyle = lipgloss.NewStyle().
-				Border(inactiveTabBorder, true).
-				BorderForeground(colorPermission).
-				Foreground(colorDimFg).
-				Padding(0, 1)
-
-	tabAskingStyle = lipgloss.NewStyle().
-			Border(inactiveTabBorder, true).
-			BorderForeground(colorQuestion).
-			Foreground(colorDimFg).
-			Padding(0, 1)
-
-	tabErrorStyle = lipgloss.NewStyle().
-			Border(inactiveTabBorder, true).
-			BorderForeground(colorDanger).
-			Foreground(colorDimFg).
-			Padding(0, 1)
-
-	tabDoneStyle = lipgloss.NewStyle().
-			Border(inactiveTabBorder, true).
-			BorderForeground(colorInfo).
-			Foreground(colorDimFg).
-			Padding(0, 1)
-
 	tabGapStyle = lipgloss.NewStyle().
 			Border(inactiveTabBorder, true).
 			BorderTop(false).

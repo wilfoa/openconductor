@@ -1290,23 +1290,16 @@ func TestLayoutUsesTermDimensions(t *testing.T) {
 // ── Inactive tab style tests ────────────────────────────────────
 
 func TestInactiveTabStyleByState(t *testing.T) {
-	tests := []struct {
-		state    SessionState
-		expected lipgloss.Style
-	}{
-		{StateNeedsAttention, tabAttentionStyle},
-		{StateNeedsPermission, tabPermissionStyle},
-		{StateAsking, tabAskingStyle},
-		{StateError, tabErrorStyle},
-		{StateDone, tabDoneStyle},
-		{StateWorking, tabStyle},
-		{StateIdle, tabStyle},
+	// All inactive tabs use the same subtle style regardless of state.
+	// The badge character communicates state, not the border color.
+	allStates := []SessionState{
+		StateNeedsAttention, StateNeedsPermission, StateAsking,
+		StateError, StateDone, StateWorking, StateIdle,
 	}
-	for _, tt := range tests {
-		got := inactiveTabStyle(tt.state)
-		// Compare rendered output of a test string to verify style selection.
-		if got.Render("X") != tt.expected.Render("X") {
-			t.Errorf("inactiveTabStyle(%v): style mismatch", tt.state)
+	for _, state := range allStates {
+		got := inactiveTabStyle(state)
+		if got.Render("X") != tabStyle.Render("X") {
+			t.Errorf("inactiveTabStyle(%v): expected default tabStyle, got different style", state)
 		}
 	}
 }
@@ -1607,8 +1600,9 @@ func TestKittyCtrlJ_SwitchesTab(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected TabSwitchedMsg, got %T", result)
 	}
-	if switched.SessionID != "beta" {
-		t.Fatalf("expected switch to 'beta', got %q", switched.SessionID)
+	// Ctrl+J goes left (prev); from alpha (index 0) wraps to gamma (index 2).
+	if switched.SessionID != "gamma" {
+		t.Fatalf("expected switch to 'gamma', got %q", switched.SessionID)
 	}
 }
 
@@ -1665,13 +1659,14 @@ func TestLegacyCtrlJ_SwitchesTab(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected TabSwitchedMsg, got %T", result)
 	}
-	if switched.SessionID != "beta" {
-		t.Fatalf("expected switch to 'beta', got %q", switched.SessionID)
+	// Ctrl+J goes left (prev); from alpha (index 0) wraps to gamma (index 2).
+	if switched.SessionID != "gamma" {
+		t.Fatalf("expected switch to 'gamma', got %q", switched.SessionID)
 	}
 }
 
-// TestLegacyCtrlK_SwitchesTabBackward verifies Ctrl+K switches to prev tab.
-func TestLegacyCtrlK_SwitchesTabBackward(t *testing.T) {
+// TestLegacyCtrlK_SwitchesTabForward verifies Ctrl+K switches to next tab.
+func TestLegacyCtrlK_SwitchesTabForward(t *testing.T) {
 	cfg := configWith3Projects()
 	app := NewApp(cfg, "")
 	app.width = 160
@@ -1697,9 +1692,9 @@ func TestLegacyCtrlK_SwitchesTabBackward(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected TabSwitchedMsg, got %T", result)
 	}
-	// alpha is at index 0, Ctrl+K goes backward, wrapping to gamma (index 2).
-	if switched.SessionID != "gamma" {
-		t.Fatalf("expected switch to 'gamma', got %q", switched.SessionID)
+	// alpha is at index 0, Ctrl+K goes forward to beta (index 1).
+	if switched.SessionID != "beta" {
+		t.Fatalf("expected switch to 'beta', got %q", switched.SessionID)
 	}
 }
 

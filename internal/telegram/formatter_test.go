@@ -470,3 +470,63 @@ func TestFormatDone_BlankScreen_StillShowsHeader(t *testing.T) {
 		t.Fatal("done with blank screen should still produce a message")
 	}
 }
+
+// ── Reply hints ─────────────────────────────────────────────────
+// Verify that actionable messages include the reply hint footer,
+// and non-actionable types (Permission, Question) do not.
+
+func TestFormatResponse_HasReplyHint(t *testing.T) {
+	msgs := FormatResponse("proj", []string{"output"})
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	last := msgs[len(msgs)-1]
+	if !strings.Contains(last, "Reply in this thread") {
+		t.Error("response should include reply hint")
+	}
+}
+
+func TestFormatAttention_HasReplyHint(t *testing.T) {
+	msgs := FormatAttention("proj", "waiting", []string{"prompt"})
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	last := msgs[len(msgs)-1]
+	if !strings.Contains(last, "Reply in this thread") {
+		t.Error("attention should include reply hint")
+	}
+}
+
+func TestFormatError_HasReplyHint(t *testing.T) {
+	msgs := FormatError("proj", "failed", []string{"Error: boom"})
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	last := msgs[len(msgs)-1]
+	if !strings.Contains(last, "Reply in this thread") {
+		t.Error("error should include reply hint")
+	}
+}
+
+func TestFormatDone_HasReplyHint(t *testing.T) {
+	msgs := FormatDone("proj", []string{"done"})
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	last := msgs[len(msgs)-1]
+	if !strings.Contains(last, "Reply in this thread") {
+		t.Error("done should include reply hint")
+	}
+}
+
+func TestFormatPermission_NoReplyHint(t *testing.T) {
+	msgs := FormatPermission("proj", "write file", []string{"allow?"})
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	for _, m := range msgs {
+		if strings.Contains(m, "Reply in this thread") {
+			t.Error("permission should NOT include reply hint (has its own keyboard)")
+		}
+	}
+}

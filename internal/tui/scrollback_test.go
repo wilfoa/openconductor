@@ -260,9 +260,9 @@ func TestDetectScrollShiftFullScreenNoScroll(t *testing.T) {
 
 func TestScrollByClamps(t *testing.T) {
 	tm := newTerminalModel()
-	// Seed buffer with 10 lines.
+	// Seed buffer with 10 unique lines (dedup rejects identical text).
 	for i := 0; i < 10; i++ {
-		tm.scrollback.Push(makeGlyphs("line"))
+		tm.scrollback.Push(makeGlyphs("line %d", i))
 	}
 
 	// Scroll up by 5.
@@ -632,7 +632,7 @@ func TestPushAltScreenDiff_BasicCapture(t *testing.T) {
 		"footer", // same as old
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
 
 	// 4 old content rows disappeared (not in curTexts, not at same position).
 	if pushed != 4 {
@@ -676,7 +676,7 @@ func TestPushAltScreenDiff_SkipSmallDiff(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
 
 	// Only 2 rows changed — below threshold of 3, so nothing pushed.
 	if pushed != 0 {
@@ -712,7 +712,7 @@ func TestPushAltScreenDiff_SkipRowsPresentElsewhere(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
 
 	// Only "content A" truly disappeared (not anywhere in curTexts).
 	// That's 1 row — below minAltDiffRows, so nothing pushed.
@@ -748,10 +748,155 @@ func TestPushAltScreenDiff_BlankRowsIgnored(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
 
 	// 3 old content rows disappeared (blank rows skipped).
 	if pushed != 3 {
 		t.Fatalf("expected 3 pushed rows, got %d", pushed)
+	}
+}
+
+// ── Dedup tests ─────────────────────────────────────────────────
+
+func TestScrollbackDedup_SkipsDuplicates(t *testing.T) {
+	buf := newScrollbackBuffer(100)
+
+	buf.Push(makeGlyphs("hello world"))
+	buf.Push(makeGlyphs("hello world")) // duplicate — should be skipped
+	buf.Push(makeGlyphs("hello world")) // duplicate — should be skipped
+
+	if buf.Len() != 1 {
+		t.Fatalf("expected len=1 after dedup, got %d", buf.Len())
+	}
+
+	got := glyphsToText(buf.Line(0))
+	if got != "hello world" {
+		t.Fatalf("expected %q, got %q", "hello world", got)
+	}
+}
+
+func TestScrollbackDedup_AllowsUniqueContent(t *testing.T) {
+	buf := newScrollbackBuffer(100)
+
+	buf.Push(makeGlyphs("line A"))
+	buf.Push(makeGlyphs("line B"))
+	buf.Push(makeGlyphs("line C"))
+
+	if buf.Len() != 3 {
+		t.Fatalf("expected len=3, got %d", buf.Len())
+	}
+}
+
+func TestScrollbackDedup_BlankLinesBypassDedup(t *testing.T) {
+	buf := newScrollbackBuffer(100)
+
+	// Blank lines (empty after trim) should always be pushed (not deduped).
+	buf.Push(makeGlyphs(""))
+	buf.Push(makeGlyphs(""))
+	buf.Push(makeGlyphs(""))
+
+	if buf.Len() != 3 {
+		t.Fatalf("expected len=3 for blank lines, got %d", buf.Len())
+	}
+}
+
+func TestScrollbackDedup_WindowEvictsOldEntries(t *testing.T) {
+	buf := newScrollbackBuffer(10_000)
+
+	// Push a line, then push dedupWindow unique lines to evict it from
+	// the dedup ring, then push the original line again — it should succeed.
+	buf.Push(makeGlyphs("original line"))
+	if buf.Len() != 1 {
+		t.Fatalf("expected len=1, got %d", buf.Len())
+	}
+
+	for i := 0; i < dedupWindow; i++ {
+		buf.Push(makeGlyphs("filler line %d", i))
+	}
+
+	beforeLen := buf.Len()
+	buf.Push(makeGlyphs("original line")) // should succeed — evicted from dedup
+	if buf.Len() != beforeLen+1 {
+		t.Fatalf("expected len=%d after re-push, got %d", beforeLen+1, buf.Len())
+	}
+}
+
+func TestScrollbackDedup_DuplicateNotCountedInLen(t *testing.T) {
+	buf := newScrollbackBuffer(100)
+
+	buf.Push(makeGlyphs("same content"))
+	buf.Push(makeGlyphs("same content"))
+	buf.Push(makeGlyphs("different content"))
+	buf.Push(makeGlyphs("same content")) // still in dedup window
+
+	if buf.Len() != 2 {
+		t.Fatalf("expected len=2 (1 same + 1 different), got %d", buf.Len())
+	}
+}
+
+// ── Chrome skipping tests ───────────────────────────────────────
+
+func TestPushAltScreenDiff_ChromeSkipping(t *testing.T) {
+	// With chrome skipping, header (row 0) and last 2 rows (status + footer)
+	// should be excluded from candidates even if they changed.
+	sb := newScrollbackBuffer(100)
+
+	oldTexts := []string{
+		"header v1.0",                        // row 0: header — skip
+		"old content line1",                  // row 1: content
+		"old content line2",                  // row 2: content
+		"old content line3",                  // row 3: content
+		"old content line4",                  // row 4: content
+		"old content line5",                  // row 5: content
+		"Build · claude-opus-4-6 · 5m 21s",   // row 6: status bar — skip
+		"  > _                     esc exit", // row 7: footer — skip
+	}
+	oldGlyphs := make([]scrollbackLine, len(oldTexts))
+	for i, txt := range oldTexts {
+		oldGlyphs[i] = makeGlyphs("%s", txt)
+	}
+
+	curTexts := []string{
+		"header v1.0",       // same header
+		"new content line1", // all content changed
+		"new content line2",
+		"new content line3",
+		"new content line4",
+		"new content line5",
+		"Build · claude-opus-4-6 · 5m 22s",   // status bar changed (timer tick)
+		"  > _                     esc exit", // footer same
+	}
+
+	// With chromeSkipFirst=1, chromeSkipLast=2: skip row 0 and rows 6-7.
+	// Only rows 1-5 are candidates. All 5 old content rows disappeared.
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 1, 2)
+
+	if pushed != 5 {
+		t.Fatalf("expected 5 pushed rows with chrome skipping, got %d", pushed)
+	}
+	if sb.Len() != 5 {
+		t.Fatalf("expected scrollback len=5, got %d", sb.Len())
+	}
+
+	// Verify the status bar row was NOT pushed.
+	for i := 0; i < sb.Len(); i++ {
+		line := glyphsToText(sb.Line(i))
+		if strings.Contains(line, "Build") {
+			t.Errorf("status bar row should not be in scrollback, found at index %d: %q", i, line)
+		}
+	}
+}
+
+func TestPushAltScreenDiff_ChromeSkipLargerThanScreen(t *testing.T) {
+	// Edge case: skip values larger than screen height should not panic.
+	sb := newScrollbackBuffer(100)
+
+	oldTexts := []string{"only row"}
+	oldGlyphs := []scrollbackLine{makeGlyphs("only row")}
+	curTexts := []string{"changed"}
+
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 5, 5)
+	if pushed != 0 {
+		t.Fatalf("expected 0 pushed for oversized skip, got %d", pushed)
 	}
 }

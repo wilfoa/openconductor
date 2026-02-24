@@ -6,6 +6,8 @@ package attention
 import (
 	"strings"
 	"unicode"
+
+	"github.com/openconductorhq/openconductor/internal/logging"
 )
 
 // permissionPatterns are lowercase strings that indicate the process is
@@ -74,6 +76,7 @@ const (
 func CheckHeuristics(lastLines []string, processState ProcessState, agentType string) (HeuristicResult, *AttentionEvent) {
 	// Check process state first — these are the highest confidence signals.
 	if processState == Exited {
+		logging.Debug("heuristic: process exited")
 		return Certain, &AttentionEvent{
 			Type:   NeedsReview,
 			Detail: "process has exited",
@@ -82,6 +85,7 @@ func CheckHeuristics(lastLines []string, processState ProcessState, agentType st
 	}
 
 	if processState == BlockedOnRead {
+		logging.Debug("heuristic: process blocked on read")
 		return Certain, &AttentionEvent{
 			Type:   NeedsInput,
 			Detail: "process is waiting for input",
@@ -95,11 +99,39 @@ func CheckHeuristics(lastLines []string, processState ProcessState, agentType st
 	if agentType != "" {
 		result, event := checkAgentSpecific(lastLines, agentType)
 		if result != No {
+			if event != nil {
+				logging.Debug("heuristic: agent-specific match",
+					"agent", agentType,
+					"result", result,
+					"type", event.Type.String(),
+					"detail", event.Detail,
+				)
+			} else {
+				logging.Debug("heuristic: agent-specific working signal",
+					"agent", agentType,
+				)
+			}
 			return result, event
 		}
+
+		// Known agent type returned No — skip generic patterns to avoid
+		// false positives from broad matches like "error:" or "> " in
+		// normal agent output. Only agent-specific and process-state
+		// heuristics apply when the agent type is recognized.
+		logging.Debug("heuristic: known agent, no signal",
+			"agent", agentType,
+		)
+		return No, nil
 	}
 
-	// Scan lines from bottom to top for the most recent relevant output.
+	// Generic patterns: only for unknown agent types where we have no
+	// agent-specific heuristics to rely on.
+	return checkGenericPatterns(lastLines)
+}
+
+// checkGenericPatterns scans the last few non-empty lines for broad patterns
+// that suggest the process needs attention. Only used for unknown agent types.
+func checkGenericPatterns(lastLines []string) (HeuristicResult, *AttentionEvent) {
 	scanned := 0
 	for i := len(lastLines) - 1; i >= 0 && scanned < maxScanLines; i-- {
 		line := lastLines[i]
@@ -114,6 +146,10 @@ func CheckHeuristics(lastLines []string, processState ProcessState, agentType st
 		// Check permission patterns (highest priority).
 		for _, pattern := range permissionPatterns {
 			if strings.Contains(lower, pattern) {
+				logging.Debug("heuristic: generic permission match",
+					"pattern", pattern,
+					"line", trimmed,
+				)
 				return Certain, &AttentionEvent{
 					Type:   NeedsPermission,
 					Detail: "permission prompt detected: " + pattern,
@@ -125,6 +161,10 @@ func CheckHeuristics(lastLines []string, processState ProcessState, agentType st
 		// Check error patterns.
 		for _, pattern := range errorPatterns {
 			if strings.Contains(lower, pattern) {
+				logging.Debug("heuristic: generic error match",
+					"pattern", pattern,
+					"line", trimmed,
+				)
 				return Certain, &AttentionEvent{
 					Type:   HitError,
 					Detail: "error detected: " + trimmed,
@@ -136,6 +176,10 @@ func CheckHeuristics(lastLines []string, processState ProcessState, agentType st
 		// Check done patterns.
 		for _, pattern := range donePatterns {
 			if strings.Contains(lower, pattern) {
+				logging.Debug("heuristic: generic done match",
+					"pattern", pattern,
+					"line", trimmed,
+				)
 				return Certain, &AttentionEvent{
 					Type:   NeedsReview,
 					Detail: "completion detected: " + pattern,
@@ -149,6 +193,10 @@ func CheckHeuristics(lastLines []string, processState ProcessState, agentType st
 		if scanned == 1 {
 			for _, suffix := range promptSuffixes {
 				if strings.HasSuffix(line, suffix) {
+					logging.Debug("heuristic: generic prompt suffix match",
+						"suffix", suffix,
+						"line", trimmed,
+					)
 					return Uncertain, &AttentionEvent{
 						Type:   NeedsInput,
 						Detail: "possible prompt detected: " + trimmed,
@@ -201,12 +249,18 @@ func checkClaudeCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 
 		if isClaudeCodeSpinner(trimmed) {
 			hasSpinner = true
+			logging.Debug("heuristic: claude-code spinner detected",
+				"line", trimmed,
+			)
 			break
 		}
 		// Claude Code's prompt: line ends with "> " (with the trailing
 		// space) or the trimmed content is exactly ">".
 		if !hasPrompt && (strings.HasSuffix(lastLines[i], "> ") || trimmed == ">") {
 			hasPrompt = true
+			logging.Debug("heuristic: claude-code prompt detected",
+				"line", trimmed,
+			)
 		}
 	}
 
@@ -224,6 +278,9 @@ func checkClaudeCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 		}
 	}
 
+	logging.Debug("heuristic: claude-code no signal",
+		"scanned", scanned,
+	)
 	return No, nil
 }
 
@@ -330,6 +387,14 @@ func checkOpenCode(lastLines []string) (HeuristicResult, *AttentionEvent) {
 			hasQuestionDialog = true
 		}
 	}
+
+	logging.Debug("heuristic: opencode scan result",
+		"escInterrupt", hasEscInterrupt,
+		"idleShortcuts", hasIdleShortcuts,
+		"permissionRequired", hasPermissionRequired,
+		"allowOnce", hasAllowOnce,
+		"questionDialog", hasQuestionDialog,
+	)
 
 	if hasEscInterrupt {
 		// Agent is actively working — suppress generic patterns.

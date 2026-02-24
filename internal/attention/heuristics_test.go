@@ -319,13 +319,17 @@ func TestClaudeCode_SpinnerOverridesPrompt(t *testing.T) {
 	}
 }
 
-func TestClaudeCode_NoPromptNoSpinnerFallsThrough(t *testing.T) {
-	// No spinner, no prompt — falls through to generic patterns.
+func TestClaudeCode_NoPromptNoSpinnerReturnsNo(t *testing.T) {
+	// No spinner, no prompt — returns No. Known agent types do not fall
+	// through to generic patterns (avoids false positives from broad
+	// patterns like "error:" in normal output).
 	lines := []string{"Building project..."}
-	result, _ := CheckHeuristics(lines, Running, AgentClaudeCode)
-	// Should not be Working or Certain from agent-specific check.
-	if result == Working {
-		t.Error("expected not Working for output without spinner or prompt")
+	result, event := CheckHeuristics(lines, Running, AgentClaudeCode)
+	if result != No {
+		t.Errorf("expected No for known agent with no signal, got %v", result)
+	}
+	if event != nil {
+		t.Errorf("expected nil event, got %v", event)
 	}
 }
 
@@ -393,11 +397,15 @@ func TestOpenCode_EscInterruptSuppressesGenericError(t *testing.T) {
 }
 
 func TestOpenCode_NoAgentSignals(t *testing.T) {
-	// OpenCode output without specific signals falls through to generic.
+	// OpenCode output without specific signals returns No. Known agent
+	// types do not fall through to generic patterns.
 	lines := []string{"some random output"}
-	result, _ := CheckHeuristics(lines, Running, AgentOpenCode)
-	if result == Working || result == Certain {
-		t.Errorf("expected No or Uncertain for unrecognized output, got %v", result)
+	result, event := CheckHeuristics(lines, Running, AgentOpenCode)
+	if result != No {
+		t.Errorf("expected No for known agent with no signal, got %v", result)
+	}
+	if event != nil {
+		t.Errorf("expected nil event, got %v", event)
 	}
 }
 

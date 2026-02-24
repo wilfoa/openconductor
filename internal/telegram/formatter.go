@@ -12,6 +12,10 @@ import (
 // maxMessageLen is Telegram's maximum message length. We leave room for HTML tags.
 const maxMessageLen = 4000
 
+// replyHint is appended to actionable messages to inform the user they can
+// reply directly in the Telegram thread to send text to the agent.
+const replyHint = "\n\n<i>Reply in this thread to respond to the agent</i>"
+
 // FormatResponse formats an agent response (Working → Idle transition).
 func FormatResponse(project string, screen []string) []string {
 	body := cleanScreen(screen)
@@ -19,7 +23,11 @@ func FormatResponse(project string, screen []string) []string {
 		return nil
 	}
 	header := fmt.Sprintf("<b>%s</b>\n\n", html.EscapeString(project))
-	return splitMessage(header, body)
+	msgs := splitMessage(header, body)
+	if len(msgs) > 0 {
+		msgs[len(msgs)-1] += replyHint
+	}
+	return msgs
 }
 
 // FormatPermission formats a permission request.
@@ -53,9 +61,13 @@ func FormatAttention(project string, detail string, screen []string) []string {
 		header += fmt.Sprintf("%s\n\n", html.EscapeString(detail))
 	}
 	if body == "" {
-		return []string{header}
+		return []string{header + replyHint}
 	}
-	return splitMessage(header, body)
+	msgs := splitMessage(header, body)
+	if len(msgs) > 0 {
+		msgs[len(msgs)-1] += replyHint
+	}
+	return msgs
 }
 
 // FormatError formats an error notification.
@@ -66,19 +78,28 @@ func FormatError(project string, detail string, screen []string) []string {
 		header += fmt.Sprintf("%s\n\n", html.EscapeString(detail))
 	}
 	if body == "" {
-		return []string{header}
+		return []string{header + replyHint}
 	}
-	return splitMessage(header, body)
+	msgs := splitMessage(header, body)
+	if len(msgs) > 0 {
+		msgs[len(msgs)-1] += replyHint
+	}
+	return msgs
 }
 
 // FormatDone formats a task-complete notification.
 func FormatDone(project string, screen []string) []string {
 	body := cleanScreen(screen)
 	header := fmt.Sprintf("<b>%s</b>  \xe2\x9c\x85\n\n", html.EscapeString(project)) // checkmark emoji
+	footer := "\n\n<i>Reply in this thread to start a new task</i>"
 	if body == "" {
-		return []string{header}
+		return []string{header + footer}
 	}
-	return splitMessage(header, body)
+	msgs := splitMessage(header, body)
+	if len(msgs) > 0 {
+		msgs[len(msgs)-1] += footer
+	}
+	return msgs
 }
 
 // FormatActionTaken edits a permission/question message to show what happened.

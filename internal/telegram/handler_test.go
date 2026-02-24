@@ -262,6 +262,95 @@ func TestQuestionKeyboard_ParenFormat(t *testing.T) {
 	}
 }
 
+// ── AttentionKeyboard ───────────────────────────────────────────
+
+func TestAttentionKeyboard_HasFourButtons(t *testing.T) {
+	kb := AttentionKeyboard("test-project")
+	if len(kb.InlineKeyboard) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(kb.InlineKeyboard))
+	}
+	row := kb.InlineKeyboard[0]
+	if len(row) != 4 {
+		t.Fatalf("expected 4 buttons, got %d", len(row))
+	}
+
+	// Verify button labels.
+	expected := []string{"yes", "no", "continue", "skip"}
+	for i, btn := range row {
+		if btn.Text != expected[i] {
+			t.Errorf("button %d: expected label %q, got %q", i, expected[i], btn.Text)
+		}
+	}
+
+	// Verify all callback data uses "reply" kind.
+	for _, btn := range row {
+		parts := strings.SplitN(*btn.CallbackData, ":", 3)
+		if len(parts) != 3 {
+			t.Fatalf("button %q: callback data %q not parseable", btn.Text, *btn.CallbackData)
+		}
+		if parts[0] != "reply" {
+			t.Errorf("button %q: expected kind 'reply', got %q", btn.Text, parts[0])
+		}
+		if parts[1] != "test-project" {
+			t.Errorf("button %q: expected project 'test-project', got %q", btn.Text, parts[1])
+		}
+	}
+}
+
+// ── ErrorKeyboard ───────────────────────────────────────────────
+
+func TestErrorKeyboard_HasThreeButtons(t *testing.T) {
+	kb := ErrorKeyboard("test-project")
+	if len(kb.InlineKeyboard) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(kb.InlineKeyboard))
+	}
+	row := kb.InlineKeyboard[0]
+	if len(row) != 3 {
+		t.Fatalf("expected 3 buttons, got %d", len(row))
+	}
+
+	// Verify button labels.
+	expected := []string{"retry", "skip", "abort"}
+	for i, btn := range row {
+		if btn.Text != expected[i] {
+			t.Errorf("button %d: expected label %q, got %q", i, expected[i], btn.Text)
+		}
+	}
+
+	// Verify all callback data uses "reply" kind.
+	for _, btn := range row {
+		parts := strings.SplitN(*btn.CallbackData, ":", 3)
+		if len(parts) != 3 {
+			t.Fatalf("button %q: callback data not parseable", btn.Text)
+		}
+		if parts[0] != "reply" {
+			t.Errorf("button %q: expected kind 'reply', got %q", btn.Text, parts[0])
+		}
+	}
+}
+
+// ── Callback round-trip: reply ──────────────────────────────────
+
+func TestCallbackRoundTrip_Reply(t *testing.T) {
+	project := "my-proj"
+	for _, action := range []string{"yes", "no", "continue", "skip", "retry", "abort"} {
+		data := FormatCallbackData("reply", project, action)
+		parts := strings.SplitN(data, ":", 3)
+		if len(parts) != 3 {
+			t.Fatalf("expected 3 parts, got %d from %q", len(parts), data)
+		}
+		if parts[0] != "reply" {
+			t.Errorf("kind: expected 'reply', got %q", parts[0])
+		}
+		if parts[1] != project {
+			t.Errorf("project: expected %q, got %q", project, parts[1])
+		}
+		if parts[2] != action {
+			t.Errorf("action: expected %q, got %q", action, parts[2])
+		}
+	}
+}
+
 // ── Handler project-by-topic lookup ─────────────────────────────
 
 func TestHandler_ProjectByTopic(t *testing.T) {

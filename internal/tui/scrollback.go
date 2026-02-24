@@ -17,15 +17,31 @@ const defaultScrollbackCapacity = 10_000
 // before vt10x destroys it during a scroll-up operation.
 type scrollbackLine []vt10x.Glyph
 
+// dedupWindow is the number of recently pushed lines whose text content is
+// tracked for deduplication. Alt-screen TUI apps (like OpenCode) repaint the
+// entire screen every ~100ms, causing the same conversation rows to be pushed
+// repeatedly across successive repaints. The dedup window prevents this.
+const dedupWindow = 200
+
 // scrollbackBuffer is a ring buffer that captures terminal rows as they scroll
 // off the top of the vt10x viewport. vt10x has no built-in scrollback — its
 // scrollUp() clears lines before rotating them — so we snapshot rows before
 // each Write() and push any that scrolled off into this buffer.
+//
+// The buffer maintains a dedup set of recently pushed line texts to prevent
+// the same content from being stored repeatedly (common with alt-screen TUI
+// apps that do full-screen repaints).
 type scrollbackBuffer struct {
 	lines []scrollbackLine
 	cap   int // max capacity
 	start int // index of the oldest line
 	len   int // number of lines currently stored
+
+	// recentTexts is a ring of text content for the last dedupWindow pushes,
+	// used to evict stale entries from recentSet.
+	recentTexts []string
+	recentSet   map[string]int // text → count in recentTexts ring
+	recentIdx   int            // next write position in recentTexts
 }
 
 func newScrollbackBuffer(capacity int) *scrollbackBuffer {
@@ -33,14 +49,44 @@ func newScrollbackBuffer(capacity int) *scrollbackBuffer {
 		capacity = defaultScrollbackCapacity
 	}
 	return &scrollbackBuffer{
-		lines: make([]scrollbackLine, capacity),
-		cap:   capacity,
+		lines:       make([]scrollbackLine, capacity),
+		cap:         capacity,
+		recentTexts: make([]string, dedupWindow),
+		recentSet:   make(map[string]int, dedupWindow),
 	}
 }
 
 // Push appends a glyph row to the buffer, taking ownership of the slice.
+// Rows whose text content matches a recently pushed line are skipped to
+// prevent duplicate content from alt-screen TUI repaints.
 // When full, the oldest line is overwritten.
 func (b *scrollbackBuffer) Push(glyphs scrollbackLine) {
+	text := glyphsToText(glyphs)
+
+	// Dedup: skip if this exact text was pushed recently.
+	if text != "" {
+		if b.recentSet[text] > 0 {
+			return
+		}
+	}
+
+	// Record in dedup ring.
+	if text != "" {
+		// Evict the old entry at this ring position.
+		old := b.recentTexts[b.recentIdx]
+		if old != "" {
+			if c := b.recentSet[old]; c <= 1 {
+				delete(b.recentSet, old)
+			} else {
+				b.recentSet[old] = c - 1
+			}
+		}
+		b.recentTexts[b.recentIdx] = text
+		b.recentSet[text]++
+		b.recentIdx = (b.recentIdx + 1) % dedupWindow
+	}
+
+	// Append to ring buffer.
 	idx := (b.start + b.len) % b.cap
 	b.lines[idx] = glyphs
 	if b.len == b.cap {

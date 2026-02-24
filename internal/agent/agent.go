@@ -50,6 +50,26 @@ type AgentAdapter interface {
 	DenyKeystroke() []byte
 }
 
+// ScreenFilter is an optional interface that agents can implement to crop
+// screen output before it is sent to Telegram. Agents with sidebar panels
+// (e.g. OpenCode) implement this to extract only the conversation area.
+type ScreenFilter interface {
+	FilterScreen(lines []string) []string
+}
+
+// FilterScreen runs the adapter's screen filter if it implements ScreenFilter,
+// otherwise returns lines unchanged.
+func FilterScreen(agentType config.AgentType, lines []string) []string {
+	a, err := Get(agentType)
+	if err != nil {
+		return lines
+	}
+	if f, ok := a.(ScreenFilter); ok {
+		return f.FilterScreen(lines)
+	}
+	return lines
+}
+
 // registry maps agent type identifiers to their adapter implementations.
 var registry = map[config.AgentType]AgentAdapter{}
 

@@ -6,6 +6,8 @@ package attention
 import (
 	"context"
 	"time"
+
+	"github.com/openconductorhq/openconductor/internal/logging"
 )
 
 const (
@@ -73,6 +75,9 @@ func (d *Detector) Check(ctx context.Context, projectName string, lastLines []st
 
 	// L2 escalation: use LLM to resolve uncertain heuristic results.
 	if result == Uncertain && d.classifier != nil {
+		logging.Debug("attention: escalating uncertain result to L2",
+			"project", projectName,
+		)
 		return d.classifyUncertain(ctx, projectName, lastLines), false
 	}
 

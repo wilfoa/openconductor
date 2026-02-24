@@ -31,14 +31,16 @@ func newHandler(mgr *session.Manager, state *topicState, projects []config.Proje
 	}
 }
 
-// HandleMessage processes a text message from a Telegram Forum Topic.
-func (h *handler) HandleMessage(msg *tgbotapi.Message) {
-	if msg.Text == "" {
+// HandleInbound processes an inbound text message from a Telegram Forum Topic.
+// threadID is the message_thread_id extracted from raw JSON (the library does
+// not parse this field).
+func (h *handler) HandleInbound(text string, threadID int) {
+	if text == "" {
 		return
 	}
 
-	threadID := getMessageThreadID(msg)
 	if threadID == 0 {
+		logging.Debug("telegram: inbound message has no thread ID (not a topic message)")
 		return
 	}
 
@@ -57,9 +59,12 @@ func (h *handler) HandleMessage(msg *tgbotapi.Message) {
 	// Route to the most recently created session for this project.
 	s := sessions[len(sessions)-1]
 
-	// Write the text to the agent's PTY followed by a newline.
-	s.Write([]byte(msg.Text + "\n"))
-	logging.Info("telegram: forwarded message to agent", "project", project, "session", s.ID, "len", len(msg.Text))
+	// Write the text to the agent's PTY, then send Enter as a separate write
+	// so the TUI processes the text characters before receiving the submit key.
+	// PTYs expect \r (0x0D) for Enter, not \n (0x0A).
+	s.Write([]byte(text))
+	s.Write([]byte("\r"))
+	logging.Info("telegram: forwarded message to agent", "project", project, "session", s.ID, "len", len(text))
 }
 
 // HandleCallback processes an inline keyboard callback (permission or question).
@@ -113,9 +118,17 @@ func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQ
 		}
 
 	case "opt":
-		// Question option: send the number + enter to select it.
-		s.Write([]byte(action + "\n"))
+		// Question option: send the number, then Enter separately.
+		s.Write([]byte(action))
+		s.Write([]byte("\r"))
 		actionLabel = fmt.Sprintf("Selected: %s", action)
+
+	case "reply":
+		// Quick-reply action from Attention/Error keyboards.
+		// Send the action text, then Enter separately.
+		s.Write([]byte(action))
+		s.Write([]byte("\r"))
+		actionLabel = fmt.Sprintf("Replied: %s", action)
 
 	default:
 		h.answerCallback(bot, query.ID, "Unknown callback type")
@@ -184,6 +197,30 @@ func PermissionKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
 			tgbotapi.NewInlineKeyboardButtonData("Allow Once", FormatCallbackData("perm", project, "allow")),
 			tgbotapi.NewInlineKeyboardButtonData("Allow Always", FormatCallbackData("perm", project, "allowall")),
 			tgbotapi.NewInlineKeyboardButtonData("Deny", FormatCallbackData("perm", project, "deny")),
+		),
+	)
+}
+
+// AttentionKeyboard returns an inline keyboard with common quick replies
+// for when the agent needs user input.
+func AttentionKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("yes", FormatCallbackData("reply", project, "yes")),
+			tgbotapi.NewInlineKeyboardButtonData("no", FormatCallbackData("reply", project, "no")),
+			tgbotapi.NewInlineKeyboardButtonData("continue", FormatCallbackData("reply", project, "continue")),
+			tgbotapi.NewInlineKeyboardButtonData("skip", FormatCallbackData("reply", project, "skip")),
+		),
+	)
+}
+
+// ErrorKeyboard returns an inline keyboard for error states.
+func ErrorKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("retry", FormatCallbackData("reply", project, "retry")),
+			tgbotapi.NewInlineKeyboardButtonData("skip", FormatCallbackData("reply", project, "skip")),
+			tgbotapi.NewInlineKeyboardButtonData("abort", FormatCallbackData("reply", project, "abort")),
 		),
 	)
 }

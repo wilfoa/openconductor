@@ -17,6 +17,7 @@ import (
 	"github.com/openconductorhq/openconductor/internal/agent"
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/logging"
 	"github.com/openconductorhq/openconductor/internal/session"
 	"github.com/openconductorhq/openconductor/internal/telegram"
 )
@@ -318,16 +319,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.statusbar.ctrlCHint = false
 		}
 
-		// Ctrl+J / Ctrl+K: switch to next/prev tab.
+		// Ctrl+J / Ctrl+K: switch to prev/next tab.
 		// Works regardless of which panel is focused.
 		if isKey(msg, tea.KeyCtrlJ) {
-			if cmd := a.switchTab(1); cmd != nil {
+			if cmd := a.switchTab(-1); cmd != nil {
 				return a, cmd
 			}
 			return a, nil
 		}
 		if isKey(msg, tea.KeyCtrlK) {
-			if cmd := a.switchTab(-1); cmd != nil {
+			if cmd := a.switchTab(1); cmd != nil {
 				return a, cmd
 			}
 			return a, nil
@@ -820,24 +821,11 @@ func (a *App) toggleFocus() {
 	}
 }
 
-// inactiveTabStyle returns the appropriate inactive tab style based on the
-// project's current session state. Attention/error/done states get colored
-// borders and text; idle/working uses the default subtle style.
-func inactiveTabStyle(state SessionState) lipgloss.Style {
-	switch state {
-	case StateNeedsAttention:
-		return tabAttentionStyle
-	case StateNeedsPermission:
-		return tabPermissionStyle
-	case StateAsking:
-		return tabAskingStyle
-	case StateError:
-		return tabErrorStyle
-	case StateDone:
-		return tabDoneStyle
-	default:
-		return tabStyle
-	}
+// inactiveTabStyle returns the style for an inactive tab. All inactive tabs
+// use the same subtle charcoal border for visual consistency — the badge
+// character (◆ ● ! ? ✓) already communicates session state.
+func inactiveTabStyle(_ SessionState) lipgloss.Style {
+	return tabStyle
 }
 
 // tabBarView renders the tab bar using the lipgloss border technique.
@@ -1112,7 +1100,11 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		// Alt-screen TUI app: no traditional scroll, but the screen may have
 		// been fully repainted. Push old non-blank rows that disappeared from
 		// the new screen, so the user can scroll back to see previous content.
-		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts)
+		//
+		// Skip TUI chrome: row 0 (header) and the last 2 rows (status bar +
+		// footer). These change frequently (timer ticks, token counters) and
+		// would pollute the scrollback buffer with noise.
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 1, 2)
 	}
 
 	// Store current snapshot for next comparison.
@@ -1125,15 +1117,21 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 // present in the new screen. This captures content that disappeared during a
 // TUI app full-screen repaint. Returns the number of lines pushed.
 //
-// To avoid flooding scrollback with identical TUI frames (headers, footers,
-// status bars), a row is only pushed if it:
+// chromeSkipFirst and chromeSkipLast specify the number of rows to exclude from
+// the top and bottom of the screen respectively. TUI apps typically have fixed
+// chrome (header, status bar, footer) that changes frequently (timer ticks,
+// token counters) and should not be pushed to scrollback.
+//
+// To avoid flooding scrollback with identical TUI frames, a row is only pushed
+// if it:
 //   - is non-blank in the old screen
+//   - is outside the chrome skip zones
 //   - does NOT appear at the same position in the new screen
 //   - does NOT appear ANYWHERE in the new screen (dedup against full content)
 //
 // At least minAltDiffRows rows must qualify — small diffs (1-2 rows) are
 // typically just cursor blinks or status updates, not meaningful content loss.
-func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scrollbackLine, curTexts []string) int {
+func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scrollbackLine, curTexts []string, chromeSkipFirst, chromeSkipLast int) int {
 	const minAltDiffRows = 3
 
 	// Build a set of all current screen text for dedup.
@@ -1144,13 +1142,27 @@ func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scro
 		}
 	}
 
+	// Determine the content row range (excluding TUI chrome).
+	startRow := chromeSkipFirst
+	endRow := len(oldTexts) - chromeSkipLast
+	if startRow < 0 {
+		startRow = 0
+	}
+	if endRow > len(oldTexts) {
+		endRow = len(oldTexts)
+	}
+	if startRow >= endRow {
+		return 0
+	}
+
 	// Collect old rows that disappeared.
 	type candidate struct {
 		row    int
 		glyphs scrollbackLine
 	}
 	var candidates []candidate
-	for i, oldText := range oldTexts {
+	for i := startRow; i < endRow; i++ {
+		oldText := oldTexts[i]
 		if oldText == "" {
 			continue
 		}
@@ -1350,6 +1362,14 @@ func (a *App) checkAttention() {
 		prevState := a.sessionStates[sessionID]
 
 		event, isWorking := a.detector.Check(ctx, sessionID, lines, pid, string(s.Project.Agent))
+		logging.Debug("attention check",
+			"session", sessionID,
+			"project", projectName,
+			"agent", string(s.Project.Agent),
+			"prevState", prevState.String(),
+			"hasEvent", event != nil,
+			"isWorking", isWorking,
+		)
 		if event != nil {
 			// Auto-approve permission requests when the project is configured
 			// to do so and the classifier identifies the category as allowed.
@@ -1371,7 +1391,20 @@ func (a *App) checkAttention() {
 			}
 
 			state := attentionEventToState(event)
+			logging.Debug("attention event",
+				"session", sessionID,
+				"eventType", event.Type.String(),
+				"detail", event.Detail,
+				"source", event.Source,
+				"newState", state.String(),
+				"prevState", prevState.String(),
+			)
 			if state != prevState {
+				logging.Debug("attention state transition",
+					"session", sessionID,
+					"from", prevState.String(),
+					"to", state.String(),
+				)
 				// State transition — apply sticky timer for attention states.
 				if isAttentionState(state) {
 					a.stateStickUntil[sessionID] = now.Add(stateStickDuration)
@@ -1425,6 +1458,8 @@ func (a *App) checkAttention() {
 
 // sendTelegramEvent sends an event to the Telegram bridge channel if configured.
 // Non-blocking; the bridge handles dedup and rate limiting.
+// Screen lines are filtered through the agent adapter's ScreenFilter (if any)
+// to extract only the conversation area before sending.
 func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, detail string, lines []string) {
 	if a.telegramCh == nil {
 		return
@@ -1433,6 +1468,11 @@ func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, d
 	kind := stateToEventKind(state)
 	if kind < 0 {
 		return
+	}
+
+	// Filter screen lines through the agent adapter to remove sidebar noise.
+	if s := a.mgr.GetSession(sessionID); s != nil {
+		lines = agent.FilterScreen(s.Project.Agent, lines)
 	}
 
 	select {

@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -123,37 +124,124 @@ func (b *Bot) Stop() {
 	b.wg.Wait()
 }
 
-// pollLoop receives Telegram updates and routes them.
+// rawUpdate is a partial Telegram Update parsed from raw JSON so we can
+// extract fields the go-telegram-bot-api/v5 library does not expose
+// (notably message_thread_id).
+type rawUpdate struct {
+	UpdateID      int             `json:"update_id"`
+	Message       *rawMessage     `json:"message"`
+	CallbackQuery json.RawMessage `json:"callback_query"`
+}
+
+// rawMessage captures the fields we need from an incoming message,
+// including message_thread_id which the library's Message struct lacks.
+type rawMessage struct {
+	MessageID       int    `json:"message_id"`
+	MessageThreadID int    `json:"message_thread_id"`
+	Text            string `json:"text"`
+	Chat            struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+}
+
+// pollLoop receives Telegram updates via raw HTTP calls (not the library's
+// GetUpdatesChan) so we can parse message_thread_id which the v5 library
+// does not support.
 func (b *Bot) pollLoop() {
 	defer b.wg.Done()
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 30
-
-	updates := b.api.GetUpdatesChan(u)
+	offset := 0
+	client := &http.Client{Timeout: 40 * time.Second}
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", url.PathEscape(b.token))
 
 	for {
 		select {
 		case <-b.ctx.Done():
 			return
-		case update, ok := <-updates:
-			if !ok {
+		default:
+		}
+
+		payload := map[string]interface{}{
+			"offset":  offset,
+			"timeout": 30,
+		}
+		body, _ := json.Marshal(payload)
+
+		req, err := http.NewRequestWithContext(b.ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+		if err != nil {
+			if b.ctx.Err() != nil {
 				return
 			}
-			b.handleUpdate(update)
+			logging.Error("telegram: poll request error", "err", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			if b.ctx.Err() != nil {
+				return
+			}
+			logging.Error("telegram: poll error", "err", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			logging.Error("telegram: poll read error", "err", err)
+			continue
+		}
+
+		var result struct {
+			OK     bool            `json:"ok"`
+			Result json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal(respBody, &result); err != nil || !result.OK {
+			logging.Error("telegram: poll parse error", "err", err, "ok", result.OK)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// Parse updates from raw JSON.
+		var rawUpdates []rawUpdate
+		if err := json.Unmarshal(result.Result, &rawUpdates); err != nil {
+			logging.Error("telegram: poll unmarshal updates error", "err", err)
+			continue
+		}
+
+		// Also parse using the library types for callback queries (which
+		// the library handles correctly).
+		var libUpdates []tgbotapi.Update
+		json.Unmarshal(result.Result, &libUpdates)
+
+		for i, ru := range rawUpdates {
+			if ru.UpdateID >= offset {
+				offset = ru.UpdateID + 1
+			}
+			b.handleRawUpdate(ru, libUpdates[i])
 		}
 	}
 }
 
-// handleUpdate dispatches a single Telegram update.
-func (b *Bot) handleUpdate(update tgbotapi.Update) {
-	if update.CallbackQuery != nil {
-		b.hdlr.HandleCallback(b.api, update.CallbackQuery)
+// handleRawUpdate dispatches a single update using both raw and library-parsed data.
+func (b *Bot) handleRawUpdate(raw rawUpdate, lib tgbotapi.Update) {
+	// Callback queries: use the library's parsed type (it handles these correctly).
+	if lib.CallbackQuery != nil {
+		b.hdlr.HandleCallback(b.api, lib.CallbackQuery)
 		return
 	}
 
-	if update.Message != nil && update.Message.Chat.ID == b.cfg.ChatID {
-		b.hdlr.HandleMessage(update.Message)
+	// Text messages: use raw parsing to get message_thread_id.
+	if raw.Message != nil && raw.Message.Chat.ID == b.cfg.ChatID {
+		logging.Debug("telegram: inbound message",
+			"text_len", len(raw.Message.Text),
+			"thread_id", raw.Message.MessageThreadID,
+			"chat_id", raw.Message.Chat.ID,
+		)
+		b.hdlr.HandleInbound(raw.Message.Text, raw.Message.MessageThreadID)
 	}
 }
 
@@ -204,8 +292,12 @@ func (b *Bot) sendEvent(e Event) {
 		}
 	case EventAttention:
 		messages = FormatAttention(e.Project, e.Detail, e.Screen)
+		kb := AttentionKeyboard(e.Project)
+		keyboard = &kb
 	case EventError:
 		messages = FormatError(e.Project, e.Detail, e.Screen)
+		kb := ErrorKeyboard(e.Project)
+		keyboard = &kb
 	case EventDone:
 		messages = FormatDone(e.Project, e.Screen)
 	}
@@ -322,25 +414,6 @@ func (b *Bot) rawAPICall(method string, payload map[string]interface{}) error {
 	}
 
 	return nil
-}
-
-// getMessageThreadID extracts the message_thread_id from a raw update JSON.
-// The go-telegram-bot-api v5 library does not parse this field, so we
-// re-decode the raw update data. This is called from the handler.
-func getMessageThreadID(msg *tgbotapi.Message) int {
-	// The library doesn't expose message_thread_id, but the JSON field is
-	// present in the update. We use a workaround: encode and re-decode.
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return 0
-	}
-	var raw struct {
-		MessageThreadID int `json:"message_thread_id"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return 0
-	}
-	return raw.MessageThreadID
 }
 
 // FormatCallbackData creates callback data strings with size safety.
