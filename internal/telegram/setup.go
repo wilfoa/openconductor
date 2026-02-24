@@ -65,11 +65,17 @@ func RunSetup() error {
 	fmt.Println()
 	fmt.Println("  Step 2: Set up your Telegram group")
 	fmt.Println()
-	fmt.Println("  You need a supergroup with Forum Topics enabled:")
+	fmt.Println("  First, disable privacy mode so the bot can read group messages:")
+	fmt.Println("    → Message @BotFather: /setprivacy")
+	fmt.Println("    → Select @" + botName + " → Disable")
+	fmt.Println()
+	fmt.Println("  Then set up the group:")
 	fmt.Println("    1. Create a group (or use an existing one)")
 	fmt.Println("    2. Open Group Settings > Topics > enable Forum Topics")
 	fmt.Println("    3. Add @" + botName + " to the group as admin")
 	fmt.Println("       (needs: Manage Topics, Post Messages)")
+	fmt.Println()
+	fmt.Println("  If the bot was already in the group, remove and re-add it.")
 	fmt.Println()
 
 	// ── Step 3: Auto-discover chat ID ───────────────────────────
@@ -147,11 +153,11 @@ func validateToken(token string) (string, error) {
 func discoverChatID(token string) (int64, string, error) {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", url.PathEscape(token))
 
-	// Clear any pending updates first.
+	// Clear any pending updates first so we only see messages sent after
+	// the wizard reaches this step.
 	clearURL := apiURL + "?offset=-1&limit=1&timeout=1"
 	resp, err := http.Get(clearURL)
 	if err == nil {
-		// Read the response to get the latest update_id.
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
@@ -162,7 +168,6 @@ func discoverChatID(token string) (int64, string, error) {
 			} `json:"result"`
 		}
 		if json.Unmarshal(body, &clear) == nil && len(clear.Result) > 0 {
-			// Acknowledge the last update so we only see new ones.
 			ackURL := fmt.Sprintf("%s?offset=%d&limit=1&timeout=1", apiURL, clear.Result[0].UpdateID+1)
 			ackResp, _ := http.Get(ackURL)
 			if ackResp != nil {
@@ -172,11 +177,16 @@ func discoverChatID(token string) (int64, string, error) {
 		}
 	}
 
+	// Also request my_chat_member updates (bot added/removed from groups)
+	// so we can detect the group even from the "bot was added" event.
+	allowedUpdates := `["message","my_chat_member"]`
+
 	deadline := time.Now().Add(2 * time.Minute)
 	offset := 0
 
 	for time.Now().Before(deadline) {
-		pollURL := fmt.Sprintf("%s?offset=%d&limit=10&timeout=10", apiURL, offset)
+		pollURL := fmt.Sprintf("%s?offset=%d&limit=10&timeout=10&allowed_updates=%s",
+			apiURL, offset, url.QueryEscape(allowedUpdates))
 		resp, err := http.Get(pollURL)
 		if err != nil {
 			time.Sleep(2 * time.Second)
@@ -190,18 +200,8 @@ func discoverChatID(token string) (int64, string, error) {
 		}
 
 		var updates struct {
-			OK     bool `json:"ok"`
-			Result []struct {
-				UpdateID int `json:"update_id"`
-				Message  *struct {
-					Chat struct {
-						ID    int64  `json:"id"`
-						Title string `json:"title"`
-						Type  string `json:"type"`
-					} `json:"chat"`
-					IsTopicMessage bool `json:"is_topic_message"`
-				} `json:"message"`
-			} `json:"result"`
+			OK     bool              `json:"ok"`
+			Result []json.RawMessage `json:"result"`
 		}
 		if err := json.Unmarshal(body, &updates); err != nil {
 			continue
@@ -210,24 +210,71 @@ func discoverChatID(token string) (int64, string, error) {
 			continue
 		}
 
-		for _, u := range updates.Result {
-			if u.UpdateID >= offset {
-				offset = u.UpdateID + 1
+		for _, raw := range updates.Result {
+			// Extract update_id to advance the offset.
+			var base struct {
+				UpdateID int `json:"update_id"`
 			}
-			if u.Message == nil {
+			if json.Unmarshal(raw, &base) == nil && base.UpdateID >= offset {
+				offset = base.UpdateID + 1
+			}
+
+			// Try message.chat first (normal messages).
+			chatID, title, chatType := extractChat(raw, "message")
+			if chatID == 0 {
+				// Try my_chat_member.chat (bot added/removed events).
+				chatID, title, chatType = extractChat(raw, "my_chat_member")
+			}
+
+			if chatID == 0 {
 				continue
 			}
-			chat := u.Message.Chat
-			// Accept supergroup chats. Forum Topics are only available in supergroups.
-			if chat.Type == "supergroup" {
-				return chat.ID, chat.Title, nil
+
+			if chatType == "supergroup" {
+				return chatID, title, nil
+			}
+
+			// Helpful feedback for common misconfigurations.
+			if chatType == "group" {
+				fmt.Printf("\r  Found group \"%s\" but it's not a supergroup.\n", title)
+				fmt.Println("  Enable Forum Topics in group settings (this converts it to a supergroup).")
+				fmt.Println("  Then send another message.")
+				fmt.Println()
+			} else if chatType == "private" {
+				fmt.Println("\r  Got a direct message — please send a message in the group instead.")
+				fmt.Println()
 			}
 		}
 	}
 
 	return 0, "", fmt.Errorf("timed out waiting for a message (2 minutes). Make sure you:\n" +
 		"    - Added the bot to the group as admin\n" +
-		"    - Sent a message in the group (not a DM to the bot)")
+		"    - Sent a message in the group (not a DM to the bot)\n" +
+		"    - Enabled Forum Topics (converts the group to a supergroup)")
+}
+
+// extractChat pulls chat ID, title, and type from a nested update field.
+// field is "message" or "my_chat_member".
+func extractChat(raw json.RawMessage, field string) (int64, string, string) {
+	var wrapper map[string]json.RawMessage
+	if json.Unmarshal(raw, &wrapper) != nil {
+		return 0, "", ""
+	}
+	inner, ok := wrapper[field]
+	if !ok {
+		return 0, "", ""
+	}
+	var obj struct {
+		Chat struct {
+			ID    int64  `json:"id"`
+			Title string `json:"title"`
+			Type  string `json:"type"`
+		} `json:"chat"`
+	}
+	if json.Unmarshal(inner, &obj) != nil {
+		return 0, "", ""
+	}
+	return obj.Chat.ID, obj.Chat.Title, obj.Chat.Type
 }
 
 // saveSetup updates the OpenConductor config file with Telegram settings.
