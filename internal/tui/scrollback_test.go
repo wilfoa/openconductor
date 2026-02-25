@@ -800,24 +800,57 @@ func TestScrollbackDedup_BlankLinesBypassDedup(t *testing.T) {
 	}
 }
 
-func TestScrollbackDedup_WindowEvictsOldEntries(t *testing.T) {
-	buf := newScrollbackBuffer(10_000)
+func TestScrollbackDedup_BufferEvictsOnWraparound(t *testing.T) {
+	// With buffer-wide dedup, a line can only be re-pushed after it is
+	// evicted from the ring buffer (i.e. overwritten by wraparound).
+	buf := newScrollbackBuffer(5)
 
-	// Push a line, then push dedupWindow unique lines to evict it from
-	// the dedup ring, then push the original line again — it should succeed.
 	buf.Push(makeGlyphs("original line"))
 	if buf.Len() != 1 {
 		t.Fatalf("expected len=1, got %d", buf.Len())
 	}
 
-	for i := 0; i < dedupWindow; i++ {
-		buf.Push(makeGlyphs("filler line %d", i))
+	// "original line" is still in the buffer — re-push should be rejected.
+	buf.Push(makeGlyphs("original line"))
+	if buf.Len() != 1 {
+		t.Fatalf("expected len=1 (dedup), got %d", buf.Len())
+	}
+
+	// Fill the buffer to capacity to evict "original line" via wraparound.
+	buf.Push(makeGlyphs("filler 1"))
+	buf.Push(makeGlyphs("filler 2"))
+	buf.Push(makeGlyphs("filler 3"))
+	buf.Push(makeGlyphs("filler 4")) // buffer full (cap=5)
+	buf.Push(makeGlyphs("filler 5")) // overwrites "original line"
+
+	if buf.Len() != 5 {
+		t.Fatalf("expected len=5, got %d", buf.Len())
+	}
+
+	// Now "original line" has been evicted — re-push should succeed.
+	buf.Push(makeGlyphs("original line"))
+	newest := glyphsToText(buf.Line(buf.Len() - 1))
+	if newest != "original line" {
+		t.Fatalf("expected newest line to be %q after re-push, got %q", "original line", newest)
+	}
+}
+
+func TestScrollbackDedup_NoEvictionWhileInBuffer(t *testing.T) {
+	// Verify that a line cannot be re-pushed as long as it remains in the buffer,
+	// even after many other unique lines have been pushed.
+	buf := newScrollbackBuffer(100)
+
+	buf.Push(makeGlyphs("persistent line"))
+
+	// Push 50 unique lines — "persistent line" is still in the buffer.
+	for i := 0; i < 50; i++ {
+		buf.Push(makeGlyphs("other line %d", i))
 	}
 
 	beforeLen := buf.Len()
-	buf.Push(makeGlyphs("original line")) // should succeed — evicted from dedup
-	if buf.Len() != beforeLen+1 {
-		t.Fatalf("expected len=%d after re-push, got %d", beforeLen+1, buf.Len())
+	buf.Push(makeGlyphs("persistent line")) // should be rejected — still in buffer
+	if buf.Len() != beforeLen {
+		t.Fatalf("expected len=%d (dedup), got %d", beforeLen, buf.Len())
 	}
 }
 

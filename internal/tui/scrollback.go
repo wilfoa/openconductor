@@ -17,31 +17,28 @@ const defaultScrollbackCapacity = 10_000
 // before vt10x destroys it during a scroll-up operation.
 type scrollbackLine []vt10x.Glyph
 
-// dedupWindow is the number of recently pushed lines whose text content is
-// tracked for deduplication. Alt-screen TUI apps (like OpenCode) repaint the
-// entire screen every ~100ms, causing the same conversation rows to be pushed
-// repeatedly across successive repaints. The dedup window prevents this.
-const dedupWindow = 200
-
 // scrollbackBuffer is a ring buffer that captures terminal rows as they scroll
 // off the top of the vt10x viewport. vt10x has no built-in scrollback — its
 // scrollUp() clears lines before rotating them — so we snapshot rows before
 // each Write() and push any that scrolled off into this buffer.
 //
-// The buffer maintains a dedup set of recently pushed line texts to prevent
-// the same content from being stored repeatedly (common with alt-screen TUI
-// apps that do full-screen repaints).
+// The buffer maintains a dedup set covering ALL lines currently stored. When
+// a line is overwritten (ring wraps), its text is removed from the set. This
+// prevents the same content from being stored repeatedly — critical for
+// alt-screen TUI apps (like OpenCode) that do full-screen repaints every
+// ~100ms, which would otherwise flood the buffer with duplicate conversation
+// rows.
 type scrollbackBuffer struct {
 	lines []scrollbackLine
 	cap   int // max capacity
 	start int // index of the oldest line
 	len   int // number of lines currently stored
 
-	// recentTexts is a ring of text content for the last dedupWindow pushes,
-	// used to evict stale entries from recentSet.
-	recentTexts []string
-	recentSet   map[string]int // text → count in recentTexts ring
-	recentIdx   int            // next write position in recentTexts
+	// lineTexts stores the text content of each ring slot, parallel to lines.
+	// Used to maintain textSet: when a slot is overwritten, its old text is
+	// decremented/removed from textSet before the new text is added.
+	lineTexts []string
+	textSet   map[string]int // text → count of occurrences in buffer
 }
 
 func newScrollbackBuffer(capacity int) *scrollbackBuffer {
@@ -49,50 +46,54 @@ func newScrollbackBuffer(capacity int) *scrollbackBuffer {
 		capacity = defaultScrollbackCapacity
 	}
 	return &scrollbackBuffer{
-		lines:       make([]scrollbackLine, capacity),
-		cap:         capacity,
-		recentTexts: make([]string, dedupWindow),
-		recentSet:   make(map[string]int, dedupWindow),
+		lines:     make([]scrollbackLine, capacity),
+		cap:       capacity,
+		lineTexts: make([]string, capacity),
+		textSet:   make(map[string]int, capacity),
 	}
 }
 
 // Push appends a glyph row to the buffer, taking ownership of the slice.
-// Rows whose text content matches a recently pushed line are skipped to
+// Rows whose text content already exists in the buffer are skipped to
 // prevent duplicate content from alt-screen TUI repaints.
-// When full, the oldest line is overwritten.
+// When full, the oldest line is overwritten (and its text removed from
+// the dedup set).
 func (b *scrollbackBuffer) Push(glyphs scrollbackLine) {
 	text := glyphsToText(glyphs)
 
-	// Dedup: skip if this exact text was pushed recently.
+	// Dedup: skip if this exact text is already in the buffer.
+	// Blank lines bypass dedup so that multiple blank separators are preserved.
 	if text != "" {
-		if b.recentSet[text] > 0 {
+		if b.textSet[text] > 0 {
 			return
 		}
 	}
 
-	// Record in dedup ring.
-	if text != "" {
-		// Evict the old entry at this ring position.
-		old := b.recentTexts[b.recentIdx]
+	// Compute the ring slot to write into.
+	idx := (b.start + b.len) % b.cap
+
+	// If the ring is full, we're overwriting the oldest line — remove its
+	// text from the dedup set so that content evicted from scrollback can
+	// be re-added if it appears again later.
+	if b.len == b.cap {
+		old := b.lineTexts[idx]
 		if old != "" {
-			if c := b.recentSet[old]; c <= 1 {
-				delete(b.recentSet, old)
+			if c := b.textSet[old]; c <= 1 {
+				delete(b.textSet, old)
 			} else {
-				b.recentSet[old] = c - 1
+				b.textSet[old] = c - 1
 			}
 		}
-		b.recentTexts[b.recentIdx] = text
-		b.recentSet[text]++
-		b.recentIdx = (b.recentIdx + 1) % dedupWindow
-	}
-
-	// Append to ring buffer.
-	idx := (b.start + b.len) % b.cap
-	b.lines[idx] = glyphs
-	if b.len == b.cap {
 		b.start = (b.start + 1) % b.cap
 	} else {
 		b.len++
+	}
+
+	// Store the line and update the dedup set.
+	b.lines[idx] = glyphs
+	b.lineTexts[idx] = text
+	if text != "" {
+		b.textSet[text]++
 	}
 }
 
@@ -110,10 +111,14 @@ func (b *scrollbackBuffer) Line(i int) scrollbackLine {
 	return b.lines[(b.start+i)%b.cap]
 }
 
-// Clear discards all stored lines.
+// Clear discards all stored lines and resets the dedup set.
 func (b *scrollbackBuffer) Clear() {
 	b.start = 0
 	b.len = 0
+	b.textSet = make(map[string]int, b.cap)
+	for i := range b.lineTexts {
+		b.lineTexts[i] = ""
+	}
 }
 
 // ── Scroll shift detection ──────────────────────────────────────
