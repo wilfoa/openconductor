@@ -1,73 +1,38 @@
 # OpenConductor
 
-[![CI](https://github.com/openconductorhq/openconductor/actions/workflows/ci.yml/badge.svg)](https://github.com/openconductorhq/openconductor/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/openconductorhq/openconductor)](https://goreportcard.com/report/github.com/openconductorhq/openconductor)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/openconductorhq/openconductor)](go.mod)
-
-A terminal multiplexer for AI coding agents. Run Claude Code, OpenCode, Codex,
-and Gemini CLI side by side -- one terminal, all your projects.
-
-OpenConductor embeds each agent in its own PTY with full vt10x terminal
-emulation, watches for moments the agent needs you (input prompts, permission
-requests, errors), and notifies you so you can context-switch only when it
-matters.
-
 ![OpenConductor demo](assets/demo.gif)
+
+A terminal multiplexer for AI coding agents. Run Claude Code, OpenCode, Codex, and Gemini CLI side by side — one terminal, all your projects.
+
+## Overview
+
+OpenConductor is a Go-based TUI that manages multiple AI coding agent processes in parallel. Each project runs its own agent in a real PTY with full terminal emulation. A two-layer attention detection system watches every agent and notifies you exactly when you're needed.
 
 ## Features
 
-- **Multi-tab layout** -- Browser-style tabs with a project sidebar. Switch
-  between agents with `Ctrl+J`/`Ctrl+K`.
-- **Multi-session** -- Open the same project multiple times. Each Enter in the
-  sidebar spawns a new agent process. Sessions are shown as individual tabs;
-  the sidebar rolls up aggregate state.
-- **Real terminal emulation** -- Each agent runs in a real PTY backed by vt10x.
-  Full color, cursor positioning, and alternate screen support.
-- **Attention detection** -- Two-layer system: fast heuristic pattern matching
-  (L1), with optional LLM classification (L2) for ambiguous cases.
-- **Desktop notifications** -- Get notified when an agent needs input, hits an
-  error, or finishes its task. Per-project cooldown prevents spam.
-- **Telegram integration** -- Monitor and interact with your agents remotely
-  via a Telegram bot. Per-project Forum Topics, inline permission buttons,
-  and formatted screen snapshots.
-- **Agent-specific heuristics** -- Recognizes Claude Code's spinner
-  (`Thinking...`), OpenCode's `esc interrupt` indicator, and more to
-  distinguish "working" from "idle," eliminating false positives.
-- **Scrollback buffer** -- Scroll up through agent output history with the
-  mouse wheel. Smart pinning keeps your position when new output arrives.
-- **Mouse support** -- Click tabs and sidebar items. Drag the sidebar border
-  to resize. Scroll wheel navigates terminal scrollback.
-- **Bootstrap CLI** -- `openconductor bootstrap <repo>` seeds agent config
-  files (CLAUDE.md, .codex/instructions.md, GEMINI.md) into your repo with
-  auto-detected language context.
-- **File logging** -- Diagnostics go to `~/.openconductor/openconductor.log`.
-  Crash recovery with full stack traces. Use `--debug` for verbose output.
+- **Tabbed workspace**: Project sidebar on the left, full terminal view on the right. Each project gets its own agent process with color, cursor positioning, and alternate screen support (powered by [vt10x](https://github.com/hinshun/vt10x))
+- **Multiple sessions**: Spawn multiple agent sessions per project. The sidebar rolls up aggregate state across sessions
+- **Attention detection**: Two-layer system — fast agent-specific heuristics (L1) every 500ms, plus an LLM classifier (L2) for ambiguous cases, throttled to once per 5s with backoff
+- **Auto-approve**: Per-project configurable permission auto-approval with three levels: `off`, `safe`, `full`
+- **Desktop notifications**: Per-project cooldown so you don't get spammed
+- **Telegram control center**: Bidirectional bridge to a Telegram supergroup — monitor agents, approve permissions, answer questions, and send input from your phone
+- **Scrollback + mouse**: Scroll with mouse wheel, smart pinning keeps your place. Click tabs, drag sidebar border to resize
+- **Repo bootstrapping**: Seed `CLAUDE.md`, `.mcp.json`, or agent-specific config into any repository with auto-detected project context
+- **Structured logging**: JSON output to `~/.openconductor/openconductor.log`, `--debug` for verbose diagnostics
 
-## Getting started
+## Installation
 
-### Requirements
+### Pre-built binaries
 
-- Go 1.24+
-- At least one AI coding agent installed:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
-  - [OpenCode](https://github.com/opencode-ai/opencode) (`opencode`)
-  - [Codex](https://github.com/openai/codex) (`codex`)
-  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`)
+Grab a binary from the [Releases](https://github.com/openconductorhq/openconductor/releases) page — Linux and macOS, amd64 and arm64.
 
-### Install
-
-**Pre-built binaries** are available on the
-[Releases](https://github.com/openconductorhq/openconductor/releases) page
-(Linux and macOS, amd64 and arm64).
-
-Or install with Go:
+### Using Go
 
 ```bash
 go install github.com/openconductorhq/openconductor/cmd/openconductor@latest
 ```
 
-Or build from source:
+### Building from source
 
 ```bash
 git clone https://github.com/openconductorhq/openconductor.git
@@ -75,129 +40,181 @@ cd openconductor
 make build
 ```
 
-### Run
+### Prerequisites
+
+- Go 1.24+
+- At least one AI coding agent:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
+  - [OpenCode](https://github.com/opencode-ai/opencode) (`opencode`)
+  - [Codex](https://github.com/openai/codex) (`codex`)
+  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`)
+
+## Usage
 
 ```bash
-openconductor            # normal mode
-openconductor --debug    # verbose logging
-```
+# Launch the TUI
+openconductor
 
-On first launch you'll see an empty sidebar. Press `a` to add a project --
-pick a name, point it at a repo, and choose an agent. OpenConductor starts the
-agent immediately. Add as many projects as you like; switch between them with
-`Ctrl+J`/`Ctrl+K` or click the tabs.
+# Launch with debug logging
+openconductor --debug
 
-### Bootstrap agent configs
-
-Seed agent-specific configuration files into a repository:
-
-```bash
+# Bootstrap agent config for a repo
 openconductor bootstrap ~/code/my-project --agent claude-code
+
+# Set up Telegram bot
+openconductor telegram setup
 ```
 
-This creates `CLAUDE.md` and `.mcp.json` with project context auto-detected
-from the repo (language, build system, etc.). Also supports `codex` and
-`gemini`.
+### Command-line flags
 
-### Telegram setup
+Flag | Description
+---|---
+`--debug` | Enable verbose debug logging to `~/.openconductor/openconductor.log`
+`--help`, `-h` | Display help information
 
-Connect a Telegram bot for remote monitoring:
+## Keyboard shortcuts
+
+Shortcut | Action
+---|---
+`Ctrl+S` | Toggle focus between sidebar and terminal
+`Ctrl+J` / `Ctrl+K` | Next / previous tab
+`j` / `k` | Navigate sidebar (when focused)
+`Enter` | New session for selected project
+`a` | Add project
+`d` | Delete project
+`Ctrl+C` | Press twice to exit
+
+Mouse: click tabs and sidebar items, drag sidebar border to resize, scroll terminal with mouse wheel.
+
+## Attention detection
+
+OpenConductor uses a two-layer system to determine each agent's state: working, waiting for input, asking a question, error, or idle.
+
+### Layer 1: Heuristics
+
+Agent-specific pattern matching runs every 500ms. Catches:
+- Permission prompts (`[Y/n]`, `(yes/no)`)
+- Error messages and stack traces
+- Agent spinners (Claude Code's `Thinking...`, OpenCode's `esc interrupt`)
+- Idle/completion states
+
+Each agent implements the `AttentionChecker` interface — adding a new agent's heuristics is a single file.
+
+### Layer 2: LLM classifier
+
+When L1 is uncertain, the last ~20 terminal lines are sent to an LLM for structured classification. Throttled to once per 5 seconds with exponential backoff.
+
+## Telegram
+
+OpenConductor bridges every project to a Telegram supergroup with [Forum Topics](https://telegram.org/blog/topics-in-groups-collectible-usernames). Each project gets its own topic thread. You monitor agents, approve permissions, answer questions, and send freeform input — all from your phone.
 
 ```bash
 openconductor telegram setup
 ```
 
-The interactive wizard walks you through creating a bot, configuring a Forum
-group, and linking projects to topics. See
-[docs/TELEGRAM_INTEGRATION.md](docs/TELEGRAM_INTEGRATION.md) for details.
+The interactive wizard handles bot creation, group configuration, and chat ID discovery. See [docs/TELEGRAM_INTEGRATION.md](docs/TELEGRAM_INTEGRATION.md) for the full guide.
 
-## Keybindings
+### Events
 
-| Key | Action |
+Every meaningful state change is pushed to the project's topic thread as a formatted HTML message with a screen snapshot.
+
+| Event | Trigger | Keyboard |
+|---|---|---|
+| Response | Agent finishes responding | — |
+| Permission request | Agent needs approval to run a tool or write a file | `[Allow Once]` `[Allow Always]` `[Deny]` |
+| Question | Agent asks the user to choose an option | Numbered buttons parsed from screen (e.g. `[1. Jest]` `[2. Vitest]`) |
+| Needs attention | Agent is stuck or waiting for input | `[yes]` `[no]` `[continue]` `[skip]` |
+| Error | Agent hit an error | `[retry]` `[skip]` `[abort]` |
+| Task complete | Session finished | — |
+
+### Inbound actions
+
+| Action | How |
 |---|---|
-| `Ctrl+S` | Toggle sidebar / terminal focus |
-| `Ctrl+J` / `Ctrl+K` | Next / previous tab |
-| `j` / `k` | Navigate sidebar (when focused) |
-| `Enter` | Open new session for selected project |
-| `a` | Add project |
-| `d` | Delete project |
-| `Ctrl+C` | Press twice to exit |
+| Approve permissions | Tap an inline button — agent continues immediately |
+| Answer numbered questions | Tap a numbered button — option is typed into the agent's terminal |
+| Quick-reply to attention/errors | Tap a quick-reply button — keyword is sent to the agent |
+| Free text input | Send any message in a project's thread — typed directly into the agent's PTY |
 
-Mouse: click tabs and sidebar items. Drag sidebar border to resize.
-Scroll wheel in terminal area navigates scrollback history.
+After every button press, the original message is edited to show what action was taken and by whom.
+
+### Example: permission request
+
+```
+🔒  my-api
+
+  Claude wants to write to src/main.go
+
+  Allow this action?
+  (y)es / (n)o / (a)lways
+
+  [ Allow Once ] [ Allow Always ] [ Deny ]
+```
+
+After tapping "Allow Once":
+
+```
+🔒  my-api
+
+  Claude wants to write to src/main.go
+
+  Allow this action?
+  (y)es / (n)o / (a)lways
+
+  Allowed once by Alice
+```
+
+### Message formatting
+
+- TUI chrome and borders are stripped from screen content automatically
+- Messages exceeding 4000 characters are split on newline boundaries
+- Inline keyboards attach to the last message chunk
+- 3-second minimum interval between messages per project, duplicate content suppressed
 
 ## Architecture
 
-```
-cmd/openconductor/    Entry point, CLI flags
-internal/
-  agent/              AgentAdapter interface + per-agent CLI wrappers
-  attention/          Two-layer attention detection (heuristics + LLM)
-  bootstrap/          Repo scaffolding with embedded Go templates
-  config/             YAML config loader + validation
-  llm/                LLM client abstraction (Anthropic, OpenAI, Google)
-  logging/            File-based structured logger (slog + JSON)
-  notification/       Desktop notifications via beeep
-  permission/         Permission request detection + auto-approve
-  session/            Agent process lifecycle, PTY management, vt10x state
-  telegram/           Bidirectional Telegram bot bridge
-  tui/                Bubble Tea app -- tabs, sidebar, terminal, status bar
-```
+- **cmd/openconductor**: CLI entry point and flag parsing
+- **internal/agent**: `AgentAdapter` interface + per-agent implementations (Claude Code, OpenCode, Codex, Gemini)
+- **internal/attention**: Two-layer attention detection (heuristics + LLM classifier)
+- **internal/bootstrap**: Repo scaffolding with embedded Go templates
+- **internal/config**: YAML config loader and validation
+- **internal/llm**: LLM client abstraction (Anthropic, OpenAI, Google)
+- **internal/logging**: File-based structured logger (slog + JSON)
+- **internal/notification**: Desktop notifications via beeep
+- **internal/permission**: Permission request detection + auto-approve
+- **internal/session**: Agent process lifecycle, PTY management, vt10x terminal state
+- **internal/telegram**: Bidirectional Telegram bot bridge
+- **internal/tui**: Bubble Tea app — tabs, sidebar, terminal, status bar
 
-**Key dependencies:**
+### Built with
 
-| Library | Purpose |
-|---|---|
-| [Bubble Tea](https://github.com/charmbracelet/bubbletea) | TUI framework (Elm architecture) |
-| [Lipgloss](https://github.com/charmbracelet/lipgloss) | Terminal styling and layout |
-| [vt10x](https://github.com/hinshun/vt10x) | VT100/VT220 terminal emulation |
-| [creack/pty](https://github.com/creack/pty) | PTY allocation and management |
-| [beeep](https://github.com/gen2brain/beeep) | Cross-platform desktop notifications |
-
-### Attention detection pipeline
-
-```
-Terminal screen buffer
-        |
-        v
- +----------------+    Certain    +-----------+
- | Agent-specific  |------------->|  Emit     |
- | heuristics      |              |  event    |
- +-------+--------+              +-----------+
-         | No / Working                ^
-         v                             |
- +----------------+    Certain    +----+------+
- |   Generic      |------------->|  Emit     |
- |  patterns      |              |  event    |
- +-------+--------+              +-----------+
-         | Uncertain                   ^
-         v                             |
- +----------------+    Classified +----+------+
- |  L2 LLM       |------------->|  Emit     |
- |  classifier    |  (optional)  |  event    |
- +----------------+              +-----------+
-```
-
-**L1 heuristics** match patterns like `[Y/n]`, `(yes/no)`, `error:`, stack
-traces, and agent-specific spinners. Fast, runs every 500ms.
-
-**L2 LLM classifier** fires only when L1 returns `Uncertain`. Sends the
-last ~20 terminal lines to an LLM for structured classification. Throttled
-to once per 5 seconds with backoff.
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) — TUI framework
+- [Lipgloss](https://github.com/charmbracelet/lipgloss) — Terminal styling
+- [vt10x](https://github.com/hinshun/vt10x) — VT100/VT220 terminal emulation
+- [creack/pty](https://github.com/creack/pty) — PTY allocation
+- [beeep](https://github.com/gen2brain/beeep) — Desktop notifications
 
 ## Development
 
 ```bash
 make build       # Build binary
-make test        # Run tests with race detector
-make lint        # Run golangci-lint
+make test        # Tests with race detector
+make lint        # golangci-lint
 make coverage    # Tests + coverage report
 make check       # fmt + vet + lint + test (run before pushing)
-make help        # Show all targets
+make help        # All available targets
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide — code structure, adding agent adapters, testing conventions, review process.
 
 ## License
 
-[MIT](LICENSE) -- Copyright (c) 2025 The OpenConductor Authors
+[MIT](LICENSE) — Copyright (c) 2025 The OpenConductor Authors.
