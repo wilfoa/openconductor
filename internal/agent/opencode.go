@@ -216,10 +216,12 @@ func isModelSelectorLine(lower string) bool {
 // FilterScreen extracts the conversation panel from the OpenCode TUI by
 // detecting and removing the right sidebar (Context, MCP, LSP, Todo panels).
 //
-// Two detection strategies are tried in order:
-//  1. Vertical border: scan for │/┃ characters appearing on ≥50% of lines.
+// Three detection strategies are tried in order:
+//  1. Vertical border: scan for │/┃/█/■ characters appearing on ≥50% of lines.
 //  2. Whitespace gap: find a sustained drop in per-column text density
 //     (the gap between content and sidebar) followed by a rise (sidebar).
+//  3. Sidebar content: detect known sidebar patterns at consistent column
+//     offsets when the boundary has no visible separator.
 //
 // Crop every line to the detected boundary.
 func (a *opencodeAdapter) FilterScreen(lines []string) []string {
@@ -244,17 +246,35 @@ func (a *opencodeAdapter) FilterScreen(lines []string) []string {
 		runeLines[i] = []rune(line)
 	}
 
-	// Strategy 1: vertical border character.
+	// Strategy 1: vertical border or scrollbar character.
 	dividerCol := findVerticalBorder(runeLines, maxWidth, len(lines))
+	strategy := "border"
 
 	// Strategy 2: whitespace gap between content and sidebar.
 	if dividerCol < 0 {
 		dividerCol = findContentGap(runeLines, maxWidth, len(lines))
+		strategy = "gap"
+	}
+
+	// Strategy 3: detect known sidebar content patterns.
+	if dividerCol < 0 {
+		dividerCol = findSidebarContent(lines, maxWidth)
+		strategy = "content"
 	}
 
 	if dividerCol < 0 {
+		logging.Debug("filterscreen: no sidebar detected",
+			"lines", len(lines),
+			"maxWidth", maxWidth,
+		)
 		return lines
 	}
+
+	logging.Debug("filterscreen: sidebar detected",
+		"strategy", strategy,
+		"dividerCol", dividerCol,
+		"maxWidth", maxWidth,
+	)
 
 	// Crop each line to the divider column (exclusive).
 	result := make([]string, len(lines))
@@ -353,11 +373,78 @@ func findContentGap(runeLines [][]rune, maxWidth, lineCount int) int {
 	return -1
 }
 
-// isVerticalBorder returns true for vertical box-drawing characters used as
-// panel dividers.
+// sidebarPatterns are substrings that appear exclusively in OpenCode's right
+// sidebar panel. When these are found at consistent column offsets and no
+// border/gap was detected, we use the leftmost match offset as the crop point.
+var sidebarPatterns = []string{
+	"Context",
+	"tokens",
+	"% used",
+	"spent",
+	"▼ MCP",
+	"▼ Todo",
+	"▼ Modified Files",
+	"Connected",
+	"LSPs will activate",
+}
+
+// findSidebarContent detects the sidebar by looking for known sidebar text
+// patterns. It finds the leftmost column where a sidebar pattern starts and
+// uses that (minus a small margin) as the crop point. Returns -1 if fewer
+// than 2 patterns are found or they start in the left half of the screen.
+func findSidebarContent(lines []string, maxWidth int) int {
+	minCol := maxWidth // leftmost column where a sidebar pattern was found
+	matches := 0
+
+	for _, line := range lines {
+		for _, pat := range sidebarPatterns {
+			idx := strings.Index(line, pat)
+			if idx < 0 {
+				continue
+			}
+			// Convert byte offset to rune offset.
+			runeIdx := utf8.RuneCountInString(line[:idx])
+			// Only count if in the right 50% of the screen.
+			if runeIdx >= maxWidth/2 {
+				matches++
+				if runeIdx < minCol {
+					minCol = runeIdx
+				}
+			}
+		}
+	}
+
+	// Need at least 2 sidebar patterns to be confident.
+	if matches < 2 || minCol >= maxWidth {
+		return -1
+	}
+
+	// Crop 1 column before the first sidebar pattern to remove any
+	// separator space.
+	if minCol > 0 {
+		minCol--
+	}
+	return minCol
+}
+
+// isVerticalBorder returns true for characters commonly used as panel dividers
+// or scrollbars in terminal UIs. This includes box-drawing verticals, block
+// elements (used for scrollbar tracks/thumbs), and geometric shapes (used for
+// scrollbar indicators in TUI frameworks like OpenTUI).
 func isVerticalBorder(r rune) bool {
+	// Box-drawing vertical characters.
 	switch r {
 	case '│', '┃', '║', '╎', '╏', '┆', '┇', '┊', '┋':
+		return true
+	}
+	// U+2580–U+259F: Block Elements (▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓).
+	// Used for scrollbar tracks (░▒) and thumbs (█▓▌▐).
+	if r >= 0x2580 && r <= 0x259F {
+		return true
+	}
+	// Geometric shapes commonly used as scrollbar indicators.
+	switch r {
+	case '■', '▮': // U+25A0 BLACK SQUARE, U+25AE BLACK VERTICAL RECTANGLE
 		return true
 	}
 	return false

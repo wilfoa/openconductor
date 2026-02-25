@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -317,6 +318,171 @@ func TestFilterScreen_GapDetection_NoSidebarContent(t *testing.T) {
 	for i, line := range filtered {
 		if line != lines[i] {
 			t.Errorf("line %d incorrectly cropped: got %q", i, line)
+		}
+	}
+}
+
+// ── Scrollbar-based sidebar detection ───────────────────────────
+
+func TestFilterScreen_ScrollbarBorder_CropsSidebar(t *testing.T) {
+	// Simulate OpenCode's layout where the conversation and sidebar are
+	// separated by a scrollbar character (■ or █) instead of a box-drawing │.
+	// This is the layout that OpenCode v1.2.x uses with OpenTUI.
+	pad := func(s string, w int) string {
+		runes := []rune(s)
+		if len(runes) >= w {
+			return string(runes[:w])
+		}
+		return s + strings.Repeat(" ", w-len(runes))
+	}
+	const convW = 80 // conversation panel width
+	const sideW = 40 // sidebar width
+
+	// ■ at column 80 acts as the scrollbar, sidebar starts at column 82.
+	lines := []string{
+		pad("  opencode v1.0", convW) + "■ " + pad("Project tab icon cleanup", sideW),
+		pad("  │  # Build all packages", convW) + "■ " + pad("Context", sideW),
+		pad("  │", convW) + "■ " + pad("95,326 tokens", sideW),
+		pad("  │  $ go build ./... 2>&1", convW) + "■ " + pad("48% used", sideW),
+		pad("", convW) + "■ " + pad("$0.00 spent", sideW),
+		pad("  │  All tests pass.", convW) + "■ " + pad("", sideW),
+		pad("  │", convW) + "■ " + pad("▼ MCP", sideW),
+		pad("  │  Build clean.", convW) + "■ " + pad("• context7 Connected", sideW),
+		pad("", convW) + "■ " + pad("• playwright Connected", sideW),
+		pad("  > _                  ctrl+p commands", convW) + "■ " + pad("LSP", sideW),
+	}
+
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	for i, line := range filtered {
+		if strings.Contains(line, "Context") {
+			t.Errorf("line %d contains sidebar 'Context': %q", i, line)
+		}
+		if strings.Contains(line, "tokens") {
+			t.Errorf("line %d contains sidebar 'tokens': %q", i, line)
+		}
+		if strings.Contains(line, "MCP") {
+			t.Errorf("line %d contains sidebar 'MCP': %q", i, line)
+		}
+		if strings.Contains(line, "playwright") {
+			t.Errorf("line %d contains sidebar 'playwright': %q", i, line)
+		}
+	}
+
+	// Conversation content should be preserved.
+	found := false
+	for _, line := range filtered {
+		if strings.Contains(line, "Build all packages") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("filtered output missing conversation content 'Build all packages'")
+	}
+}
+
+func TestFilterScreen_FullBlockScrollbar(t *testing.T) {
+	// Test with █ (FULL BLOCK) as the scrollbar character.
+	pad := func(s string, w int) string {
+		runes := []rune(s)
+		if len(runes) >= w {
+			return string(runes[:w])
+		}
+		return s + strings.Repeat(" ", w-len(runes))
+	}
+
+	lines := make([]string, 12)
+	for i := range lines {
+		conv := pad(fmt.Sprintf("  Line %d of conversation", i), 70)
+		sidebar := pad(fmt.Sprintf("sidebar %d", i), 30)
+		lines[i] = conv + "█" + sidebar
+	}
+
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	for i, line := range filtered {
+		if strings.Contains(line, "sidebar") {
+			t.Errorf("line %d contains sidebar content: %q", i, line)
+		}
+	}
+}
+
+// ── Content-based sidebar detection (fallback) ──────────────────
+
+func TestFilterScreen_ContentDetection_NoSeparator(t *testing.T) {
+	// Simulate an OpenCode layout where there is NO visible separator between
+	// conversation and sidebar — just a thin space gap of ~2 characters.
+	// Neither border detection nor gap detection should work, but content
+	// detection should catch the known sidebar patterns.
+	pad := func(s string, w int) string {
+		runes := []rune(s)
+		if len(runes) >= w {
+			return string(runes[:w])
+		}
+		return s + strings.Repeat(" ", w-len(runes))
+	}
+	const convW = 90
+	const sideW = 30
+
+	lines := []string{
+		pad("  opencode v1.0", convW) + pad("Dev data import script", sideW),
+		pad("  │  # Commit all changes", convW) + pad("Context", sideW),
+		pad("  │", convW) + pad("98,441 tokens", sideW),
+		pad("  │  $ git commit -m \"feat\"", convW) + pad("49% used", sideW),
+		pad("  │  Discount system:", convW) + pad("$0.00 spent", sideW),
+		pad("  │  - Remove fixed-amount", convW) + pad("▼ MCP", sideW),
+		pad("  │  - Add duration field", convW) + pad("• context7 Connected", sideW),
+		pad("  │  - One-time auto-deact", convW) + pad("• playwright Connected", sideW),
+		pad("  │", convW) + pad("• polybugger Connected", sideW),
+		pad("  │  Dev domain migration:", convW) + pad("LSP", sideW),
+		pad("  │  - Move dev to dev.ahavtz", convW) + pad("LSPs will activate", sideW),
+		pad("  > _ ctrl+p commands ctrl+t", convW) + pad("▼ Modified Files", sideW),
+	}
+
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	for i, line := range filtered {
+		if strings.Contains(line, "tokens") {
+			t.Errorf("line %d contains sidebar 'tokens': %q", i, line)
+		}
+		if strings.Contains(line, "MCP") {
+			t.Errorf("line %d contains sidebar 'MCP': %q", i, line)
+		}
+		if strings.Contains(line, "Modified Files") {
+			t.Errorf("line %d contains sidebar 'Modified Files': %q", i, line)
+		}
+	}
+
+	// Conversation should be preserved.
+	found := false
+	for _, line := range filtered {
+		if strings.Contains(line, "Commit all changes") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("filtered output missing conversation 'Commit all changes'")
+	}
+}
+
+func TestFilterScreen_ContentDetection_FewPatterns_NotEnough(t *testing.T) {
+	// Only 1 sidebar pattern — not enough to trigger content detection.
+	// The word "Context" in conversation should not cause false cropping.
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("  Line %d. Context is important.%s", i, strings.Repeat(" ", 50))
+	}
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	for i, line := range filtered {
+		if !strings.Contains(line, "Context is important") {
+			t.Errorf("line %d lost conversation content: %q", i, line)
 		}
 	}
 }
