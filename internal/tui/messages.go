@@ -127,3 +127,10 @@ type SystemTabRequestMsg struct {
 type SystemTabExitedMsg struct {
 	Name string
 }
+
+// historyLoadedMsg delivers pre-loaded conversation history to be pushed
+// into the session's scrollback buffer.
+type historyLoadedMsg struct {
+	SessionID string
+	Lines     []string
+}

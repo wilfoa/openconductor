@@ -900,3 +900,60 @@ func TestPushAltScreenDiff_ChromeSkipLargerThanScreen(t *testing.T) {
 		t.Fatalf("expected 0 pushed for oversized skip, got %d", pushed)
 	}
 }
+
+// ── textToGlyphs tests ─────────────────────────────────────────
+
+func TestTextToGlyphs_BasicString(t *testing.T) {
+	glyphs := textToGlyphs("hello")
+	if len(glyphs) != 5 {
+		t.Fatalf("expected 5 glyphs, got %d", len(glyphs))
+	}
+	got := glyphsToText(glyphs)
+	if got != "hello" {
+		t.Errorf("round-trip: expected %q, got %q", "hello", got)
+	}
+}
+
+func TestTextToGlyphs_EmptyString(t *testing.T) {
+	glyphs := textToGlyphs("")
+	if len(glyphs) != 0 {
+		t.Fatalf("expected 0 glyphs for empty string, got %d", len(glyphs))
+	}
+}
+
+func TestTextToGlyphs_Unicode(t *testing.T) {
+	glyphs := textToGlyphs("── You ──")
+	got := glyphsToText(glyphs)
+	if got != "── You ──" {
+		t.Errorf("expected %q, got %q", "── You ──", got)
+	}
+}
+
+func TestTextToGlyphs_PushedToScrollback(t *testing.T) {
+	// Verify that textToGlyphs output works with the scrollback buffer.
+	buf := newScrollbackBuffer(100)
+	lines := []string{
+		"── You ──────────────",
+		"Fix the login bug",
+		"",
+		"── Assistant ─────────",
+		"I'll help you fix it.",
+	}
+	for _, line := range lines {
+		buf.Push(textToGlyphs(line))
+	}
+
+	if buf.Len() != 5 {
+		t.Fatalf("expected 5 lines in scrollback, got %d", buf.Len())
+	}
+
+	got := glyphsToText(buf.Line(0))
+	if !strings.HasPrefix(got, "── You") {
+		t.Errorf("first line should be You header, got %q", got)
+	}
+
+	got = glyphsToText(buf.Line(1))
+	if got != "Fix the login bug" {
+		t.Errorf("second line: expected %q, got %q", "Fix the login bug", got)
+	}
+}

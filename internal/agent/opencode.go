@@ -4,11 +4,15 @@
 package agent
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/logging"
 )
 
 // opencodeAdapter implements AgentAdapter for the OpenCode CLI.
@@ -193,4 +197,154 @@ func isVerticalBorder(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// ── History loading ─────────────────────────────────────────────
+
+// openCodeDBPath returns the path to the OpenCode SQLite database.
+func openCodeDBPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+}
+
+// LoadHistory reads the most recent OpenCode session for the given repo
+// directory and returns the conversation as text lines for scrollback
+// pre-population.
+//
+// It shells out to the system sqlite3 CLI (available by default on macOS)
+// to avoid adding a Go SQLite dependency.
+func (a *opencodeAdapter) LoadHistory(repoPath string) ([]string, error) {
+	dbPath := openCodeDBPath()
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, nil // no DB → no history
+	}
+
+	sqlite3, err := exec.LookPath("sqlite3")
+	if err != nil {
+		logging.Debug("opencode: sqlite3 not found, skipping history load")
+		return nil, nil
+	}
+
+	// Find the most recent session for this directory.
+	// OpenCode stores absolute paths in session.directory.
+	absRepo, err := filepath.Abs(repoPath)
+	if err != nil {
+		absRepo = repoPath
+	}
+
+	sessionQuery := `SELECT id FROM session WHERE directory = '` +
+		sqliteEscape(absRepo) +
+		`' AND parent_id IS NULL ORDER BY time_updated DESC LIMIT 1`
+
+	cmd := exec.Command(sqlite3, "-json", dbPath, sessionQuery)
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return nil, nil
+	}
+
+	var sessions []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(out, &sessions); err != nil || len(sessions) == 0 {
+		return nil, nil
+	}
+	sessionID := sessions[0].ID
+
+	// Load all text parts for this session, ordered by message and part time.
+	partsQuery := `SELECT ` +
+		`json_extract(m.data, '$.role') as role, ` +
+		`json_extract(p.data, '$.type') as type, ` +
+		`json_extract(p.data, '$.text') as text ` +
+		`FROM message m JOIN part p ON p.message_id = m.id ` +
+		`WHERE m.session_id = '` + sqliteEscape(sessionID) + `' ` +
+		`AND json_extract(p.data, '$.type') = 'text' ` +
+		`ORDER BY m.time_created, p.time_created`
+
+	cmd = exec.Command(sqlite3, "-json", dbPath, partsQuery)
+	out, err = cmd.Output()
+	if err != nil || len(out) == 0 {
+		return nil, nil
+	}
+
+	var parts []struct {
+		Role string `json:"role"`
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(out, &parts); err != nil {
+		logging.Debug("opencode: failed to parse history parts", "err", err)
+		return nil, nil
+	}
+
+	return formatHistory(parts), nil
+}
+
+// historyPart is a text part from the OpenCode DB used by formatHistory.
+type historyPart struct {
+	Role string
+	Text string
+}
+
+// formatHistory converts a sequence of role+text parts into readable text
+// lines with role headers.
+func formatHistory(parts []struct {
+	Role string `json:"role"`
+	Type string `json:"type"`
+	Text string `json:"text"`
+}) []string {
+	if len(parts) == 0 {
+		return nil
+	}
+
+	const headerWidth = 60
+
+	var lines []string
+	lastRole := ""
+
+	for _, p := range parts {
+		if p.Text == "" {
+			continue
+		}
+
+		// Insert a role header when the role changes.
+		if p.Role != lastRole {
+			if len(lines) > 0 {
+				lines = append(lines, "") // blank separator
+			}
+			label := roleLabel(p.Role)
+			pad := headerWidth - len(label) - 4 // "── " + label + " " + padding
+			if pad < 2 {
+				pad = 2
+			}
+			header := "── " + label + " " + strings.Repeat("─", pad)
+			lines = append(lines, header)
+			lastRole = p.Role
+		}
+
+		// Wrap the text content into lines.
+		for _, line := range strings.Split(p.Text, "\n") {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+// roleLabel returns a human-readable label for a message role.
+func roleLabel(role string) string {
+	switch role {
+	case "user":
+		return "You"
+	case "assistant":
+		return "Assistant"
+	case "system":
+		return "System"
+	default:
+		return role
+	}
+}
+
+// sqliteEscape escapes single quotes for use in SQLite string literals.
+func sqliteEscape(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }

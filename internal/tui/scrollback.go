@@ -181,6 +181,21 @@ func detectScrollShift(oldTexts, newTexts []string) int {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+// textToGlyphs converts a plain text string to a glyph slice with default
+// colors. Used for pre-populating scrollback with history lines.
+func textToGlyphs(text string) scrollbackLine {
+	runes := []rune(text)
+	glyphs := make(scrollbackLine, len(runes))
+	for i, r := range runes {
+		glyphs[i] = vt10x.Glyph{
+			Char: r,
+			FG:   vt10x.DefaultFG,
+			BG:   vt10x.DefaultBG,
+		}
+	}
+	return glyphs
+}
+
 // glyphsToText converts a glyph slice to its text content, trimming trailing
 // spaces. Used for scroll shift detection.
 func glyphsToText(glyphs []vt10x.Glyph) string {

@@ -70,6 +70,27 @@ func FilterScreen(agentType config.AgentType, lines []string) []string {
 	return lines
 }
 
+// HistoryProvider is an optional interface that agents can implement to supply
+// previous conversation history for scrollback pre-population. When a session
+// tab opens, the app calls LoadHistory to get text lines that are pushed into
+// the scrollback buffer so the user can scroll up to see prior context.
+type HistoryProvider interface {
+	LoadHistory(repoPath string) ([]string, error)
+}
+
+// LoadHistory calls the adapter's LoadHistory if it implements HistoryProvider,
+// otherwise returns nil.
+func LoadHistory(agentType config.AgentType, repoPath string) ([]string, error) {
+	a, err := Get(agentType)
+	if err != nil {
+		return nil, nil
+	}
+	if h, ok := a.(HistoryProvider); ok {
+		return h.LoadHistory(repoPath)
+	}
+	return nil, nil
+}
+
 // registry maps agent type identifiers to their adapter implementations.
 var registry = map[config.AgentType]AgentAdapter{}
 

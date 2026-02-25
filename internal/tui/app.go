@@ -609,10 +609,31 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update sidebar to show this project has an open tab.
 		if s := a.mgr.GetSession(msg.SessionID); s != nil {
 			a.sidebar.openTabs[s.Project.Name] = true
+			// Load conversation history in the background so the user can
+			// scroll up to see prior context immediately.
+			cmds = append(cmds, a.loadHistoryCmd(msg.SessionID, s.Project))
 		}
 		// Begin listening for output from this session.
 		cmds = append(cmds, a.waitForSessionOutput(msg.SessionID))
 		return a, tea.Batch(cmds...)
+
+	case historyLoadedMsg:
+		if len(msg.Lines) > 0 {
+			sb := a.scrollbacks[msg.SessionID]
+			if sb == nil {
+				sb = newScrollbackBuffer(defaultScrollbackCapacity)
+				a.scrollbacks[msg.SessionID] = sb
+			}
+			for _, line := range msg.Lines {
+				glyphs := textToGlyphs(line)
+				sb.Push(glyphs)
+			}
+			logging.Info("scrollback: pre-populated history",
+				"session", msg.SessionID,
+				"lines", len(msg.Lines),
+			)
+		}
+		return a, nil
 
 	case sessionOutputMsg:
 		// VT is already written by the session's ReadLoop (no DeferVTWrite).
@@ -921,6 +942,24 @@ func (a *App) startSessionCmd(project config.Project) tea.Cmd {
 			}
 		}
 		return sessionStartedMsg{SessionID: s.ID}
+	}
+}
+
+// loadHistoryCmd returns a tea.Cmd that loads conversation history from the
+// agent's data store (e.g. OpenCode's SQLite DB) in the background.
+func (a *App) loadHistoryCmd(sessionID string, project config.Project) tea.Cmd {
+	agentType := project.Agent
+	repoPath := project.Repo
+	return func() tea.Msg {
+		lines, err := agent.LoadHistory(agentType, repoPath)
+		if err != nil {
+			logging.Debug("scrollback: history load failed",
+				"session", sessionID,
+				"err", err,
+			)
+			return historyLoadedMsg{SessionID: sessionID}
+		}
+		return historyLoadedMsg{SessionID: sessionID, Lines: lines}
 	}
 }
 

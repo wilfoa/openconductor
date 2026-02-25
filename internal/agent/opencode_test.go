@@ -318,3 +318,159 @@ func TestFilterScreen_GapDetection_NoSidebarContent(t *testing.T) {
 		}
 	}
 }
+
+// ── History loading ─────────────────────────────────────────────
+
+func TestFormatHistory_BasicConversation(t *testing.T) {
+	parts := []struct {
+		Role string `json:"role"`
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{
+		{Role: "user", Type: "text", Text: "Fix the login bug"},
+		{Role: "assistant", Type: "text", Text: "I'll help you fix the login bug.\nLet me look at the code."},
+		{Role: "user", Type: "text", Text: "Thanks, also fix the signup page"},
+	}
+
+	lines := formatHistory(parts)
+	if len(lines) == 0 {
+		t.Fatal("expected non-empty history")
+	}
+
+	// Check role headers exist.
+	foundYou := false
+	foundAssistant := false
+	for _, line := range lines {
+		if strings.Contains(line, "── You") {
+			foundYou = true
+		}
+		if strings.Contains(line, "── Assistant") {
+			foundAssistant = true
+		}
+	}
+	if !foundYou {
+		t.Error("expected '── You' header in history")
+	}
+	if !foundAssistant {
+		t.Error("expected '── Assistant' header in history")
+	}
+
+	// Check content is present.
+	fullText := strings.Join(lines, "\n")
+	if !strings.Contains(fullText, "Fix the login bug") {
+		t.Error("expected user message content in history")
+	}
+	if !strings.Contains(fullText, "I'll help you") {
+		t.Error("expected assistant message content in history")
+	}
+}
+
+func TestFormatHistory_EmptyParts(t *testing.T) {
+	parts := []struct {
+		Role string `json:"role"`
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{}
+	lines := formatHistory(parts)
+	if lines != nil {
+		t.Errorf("expected nil for empty parts, got %v", lines)
+	}
+}
+
+func TestFormatHistory_SkipsEmptyText(t *testing.T) {
+	parts := []struct {
+		Role string `json:"role"`
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{
+		{Role: "user", Type: "text", Text: "Hello"},
+		{Role: "assistant", Type: "text", Text: ""},
+		{Role: "assistant", Type: "text", Text: "World"},
+	}
+	lines := formatHistory(parts)
+	// Empty text part should be skipped, not create an extra blank.
+	fullText := strings.Join(lines, "\n")
+	if !strings.Contains(fullText, "Hello") || !strings.Contains(fullText, "World") {
+		t.Errorf("expected content, got %q", fullText)
+	}
+}
+
+func TestFormatHistory_ConsecutiveSameRole(t *testing.T) {
+	// Multiple text parts from the same role should NOT repeat the header.
+	parts := []struct {
+		Role string `json:"role"`
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{
+		{Role: "assistant", Type: "text", Text: "Part 1"},
+		{Role: "assistant", Type: "text", Text: "Part 2"},
+	}
+	lines := formatHistory(parts)
+	headerCount := 0
+	for _, line := range lines {
+		if strings.Contains(line, "── Assistant") {
+			headerCount++
+		}
+	}
+	if headerCount != 1 {
+		t.Errorf("expected 1 Assistant header for consecutive parts, got %d", headerCount)
+	}
+}
+
+func TestSqliteEscape(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"hello", "hello"},
+		{"it's", "it''s"},
+		{"a'b'c", "a''b''c"},
+		{"no quotes", "no quotes"},
+	}
+	for _, tt := range tests {
+		got := sqliteEscape(tt.input)
+		if got != tt.expected {
+			t.Errorf("sqliteEscape(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestLoadHistory_TopLevel_UnknownAgent(t *testing.T) {
+	// Unknown agent should return nil, nil.
+	lines, err := LoadHistory("unknown-agent", "/some/path")
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if lines != nil {
+		t.Errorf("expected nil lines, got %v", lines)
+	}
+}
+
+func TestLoadHistory_TopLevel_ClaudeCode(t *testing.T) {
+	// Claude Code doesn't implement HistoryProvider, should return nil.
+	lines, err := LoadHistory("claude-code", "/some/path")
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if lines != nil {
+		t.Errorf("expected nil lines for claude-code, got %v", lines)
+	}
+}
+
+func TestRoleLabel(t *testing.T) {
+	tests := []struct {
+		role     string
+		expected string
+	}{
+		{"user", "You"},
+		{"assistant", "Assistant"},
+		{"system", "System"},
+		{"unknown", "unknown"},
+	}
+	for _, tt := range tests {
+		got := roleLabel(tt.role)
+		if got != tt.expected {
+			t.Errorf("roleLabel(%q) = %q, want %q", tt.role, got, tt.expected)
+		}
+	}
+}
