@@ -138,11 +138,11 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		"questionDialog", hasQuestionDialog,
 	)
 
-	if hasEscInterrupt {
-		// Agent is actively working — suppress generic patterns.
-		return attention.Working, nil
-	}
-
+	// Permission and question dialogs take priority over the working
+	// signal. When OpenCode renders a modal overlay it only redraws the
+	// dialog cells — the underlying "esc interrupt" progress text can
+	// remain in the vt10x buffer. The agent cannot continue until the
+	// user responds, so these must win.
 	if hasPermissionRequired || hasAllowOnce {
 		// Permission dialog is visible.
 		return attention.Certain, &attention.AttentionEvent{
@@ -159,6 +159,11 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 			Detail: "opencode question dialog detected",
 			Source: "heuristic",
 		}
+	}
+
+	if hasEscInterrupt {
+		// Agent is actively working — suppress generic patterns.
+		return attention.Working, nil
 	}
 
 	if hasIdleShortcuts {

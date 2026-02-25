@@ -160,6 +160,9 @@ func (m *Manager) StopSession(id string) {
 	}
 	if len(m.projectSessions[projectName]) == 0 {
 		delete(m.projectSessions, projectName)
+		// Reset instance counter so the next session starts fresh
+		// without a stale index suffix.
+		delete(m.nextInstance, projectName)
 	}
 
 	if m.active == id {

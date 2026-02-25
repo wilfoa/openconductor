@@ -513,6 +513,55 @@ func TestOpenCode_IdleWithShortcuts(t *testing.T) {
 	}
 }
 
+func TestOpenCode_PermissionOverridesEscInterrupt(t *testing.T) {
+	// When a permission modal overlays the screen, "esc interrupt" from the
+	// underlying progress bar can remain in the vt10x buffer. Permission
+	// must take priority — the agent cannot continue until the user responds.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"some output",
+		"· · · · ■ ■  esc interrupt",
+		"",
+		"⚠ Permission required",
+		"← Access external directory ~/.pub-cache/hosted/pub.dev/mapbox_maps_flutter",
+		"Patterns",
+		"- /Users/amir/.pub-cache/hosted/pub.dev/mapbox_maps_flutter-2.18.0/lib/src/*",
+		"Allow once   Allow always   Reject       ctrl+f  fullscreen  s select  enter confirm",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil {
+		t.Fatal("expected permission event, got nil")
+	}
+	if event.Type != attention.NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event.Type)
+	}
+}
+
+func TestOpenCode_QuestionOverridesEscInterrupt(t *testing.T) {
+	// Same overlay issue: question dialog must override working signal.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"· · · · ■ ■  esc interrupt",
+		"Which framework?",
+		"1. Jest",
+		"2. Vitest",
+		"↕ select  enter submit  esc dismiss",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil {
+		t.Fatal("expected question event, got nil")
+	}
+	if event.Type != attention.NeedsAnswer {
+		t.Errorf("expected NeedsAnswer, got %v", event.Type)
+	}
+}
+
 func TestOpenCode_EscInterruptSuppressesGenericError(t *testing.T) {
 	// When OpenCode is working (esc interrupt visible), error content
 	// in the output should be suppressed.
