@@ -16,14 +16,6 @@ import (
 	"github.com/openconductorhq/openconductor/internal/session"
 )
 
-// ptySubmitDelay is the pause between writing text and sending Enter (\r) to
-// the PTY. TUI apps (Bubble Tea in particular) process stdin reads in batches
-// through their event loop. Without a delay the text and Enter may land in the
-// same read, and the Enter can be handled before the input component has
-// committed the preceding characters — causing the submission to be silently
-// ignored. 50 ms is long enough for the TUI to run at least one Update cycle.
-const ptySubmitDelay = 50 * time.Millisecond
-
 // handler routes incoming Telegram messages and callback queries to the
 // appropriate agent session.
 type handler struct {
@@ -192,12 +184,16 @@ func (h *handler) answerCallback(bot *tgbotapi.BotAPI, callbackID string, text s
 	}
 }
 
-// writeWithEnter writes text to the session's PTY, pauses for ptySubmitDelay,
-// then sends Enter (\r). The delay ensures the TUI's event loop processes the
-// text characters before receiving the submit key.
+// writeWithEnter writes text to the session's PTY, pauses for the agent's
+// configured submit delay, then sends Enter (\r). The delay ensures the TUI's
+// event loop processes the text characters before receiving the submit key.
+// The delay comes from the agent adapter's SubmitDelay interface; agents that
+// don't need a delay (e.g. Claude Code) return 0.
 func writeWithEnter(s *session.Session, text string) {
 	s.Write([]byte(text))
-	time.Sleep(ptySubmitDelay)
+	if d := agent.GetSubmitDelay(s.Project.Agent); d > 0 {
+		time.Sleep(d)
+	}
 	s.Write([]byte("\r"))
 }
 

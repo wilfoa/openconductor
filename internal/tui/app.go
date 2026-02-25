@@ -1140,10 +1140,11 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		// been fully repainted. Push old non-blank rows that disappeared from
 		// the new screen, so the user can scroll back to see previous content.
 		//
-		// Skip TUI chrome: row 0 (header) and the last 2 rows (status bar +
-		// footer). These change frequently (timer ticks, token counters) and
-		// would pollute the scrollback buffer with noise.
-		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 1, 2)
+		// Skip TUI chrome rows configured by the agent adapter (e.g. OpenCode
+		// skips row 0 header and last 2 rows for status bar + footer). These
+		// change frequently and would pollute the scrollback buffer with noise.
+		chromeTop, chromeBottom := agent.ChromeSkipRows(s.Project.Agent)
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, chromeTop, chromeBottom)
 	}
 
 	// Store current snapshot for next comparison.
@@ -1400,7 +1401,15 @@ func (a *App) checkAttention() {
 
 		prevState := a.sessionStates[sessionID]
 
-		event, isWorking := a.detector.Check(ctx, sessionID, lines, pid, string(s.Project.Agent))
+		// Look up the agent adapter and cast to AttentionChecker if supported.
+		var checker attention.AttentionChecker
+		if adapter, err := agent.Get(s.Project.Agent); err == nil {
+			if c, ok := adapter.(attention.AttentionChecker); ok {
+				checker = c
+			}
+		}
+
+		event, isWorking := a.detector.Check(ctx, sessionID, lines, pid, checker)
 		logging.Debug("attention check",
 			"session", sessionID,
 			"project", projectName,
@@ -1415,7 +1424,11 @@ func (a *App) checkAttention() {
 			if event.Type == attention.NeedsPermission && a.autoApprover != nil {
 				adapter, adapterErr := agent.Get(s.Project.Agent)
 				if adapterErr == nil {
-					result := a.autoApprover.CheckAndApprove(ctx, s.Project, lines, adapter)
+					keystrokes := attention.ApprovalKeystrokes{
+						Approve:        adapter.ApproveKeystroke(),
+						ApproveSession: adapter.ApproveSessionKeystroke(),
+					}
+					result := a.autoApprover.CheckAndApprove(ctx, s.Project, lines, keystrokes)
 					if result.ShouldApprove {
 						// Send the approval keystroke to the PTY and treat
 						// the session as Working — no notification needed.

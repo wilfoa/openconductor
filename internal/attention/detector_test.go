@@ -5,6 +5,7 @@ package attention
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -20,11 +21,44 @@ func (m *mockLLMClient) Classify(_ context.Context, _ string) (string, error) {
 	return m.response, m.err
 }
 
+// testClaudeChecker mimics the Claude Code adapter's CheckAttention for testing.
+type testClaudeChecker struct{}
+
+func (c *testClaudeChecker) CheckAttention(lastLines []string) (HeuristicResult, *AttentionEvent) {
+	hasSpinner := false
+	hasPrompt := false
+	scanned := 0
+	for i := len(lastLines) - 1; i >= 0 && scanned < 5; i-- {
+		trimmed := strings.TrimSpace(lastLines[i])
+		if trimmed == "" {
+			continue
+		}
+		scanned++
+		// Simple spinner detection for test purposes.
+		if len(trimmed) > 2 && (trimmed[0] == '*' || strings.HasPrefix(trimmed, "✦ ") || strings.HasPrefix(trimmed, "· ")) {
+			if strings.HasSuffix(trimmed, "…") || strings.HasSuffix(trimmed, "...") {
+				hasSpinner = true
+				break
+			}
+		}
+		if !hasPrompt && (strings.HasSuffix(lastLines[i], "> ") || trimmed == ">") {
+			hasPrompt = true
+		}
+	}
+	if hasSpinner {
+		return Working, nil
+	}
+	if hasPrompt {
+		return Certain, &AttentionEvent{Type: NeedsInput, Detail: "claude code idle", Source: "heuristic"}
+	}
+	return No, nil
+}
+
 func TestDetector_Check_CertainHeuristic(t *testing.T) {
 	d := NewDetector()
 
 	lines := []string{"", "Error: build failed"}
-	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, "")
+	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, nil)
 
 	if event == nil {
 		t.Fatal("expected event, got nil")
@@ -47,7 +81,7 @@ func TestDetector_Check_NoEvent(t *testing.T) {
 	d := NewDetector()
 
 	lines := []string{"Building...", "Compiling..."}
-	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, "")
+	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, nil)
 
 	if event != nil {
 		t.Errorf("expected nil event, got %v", event)
@@ -62,7 +96,7 @@ func TestDetector_Check_UncertainWithoutClassifier(t *testing.T) {
 
 	// Prompt suffix triggers Uncertain, but no classifier is set.
 	lines := []string{"", "Enter choice> "}
-	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, "")
+	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, nil)
 
 	if event != nil {
 		t.Errorf("expected nil event without classifier, got %v", event)
@@ -79,7 +113,7 @@ func TestDetector_Check_UncertainWithClassifier(t *testing.T) {
 
 	// Prompt suffix triggers Uncertain → escalates to LLM.
 	lines := []string{"", "Enter choice> "}
-	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, "")
+	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, nil)
 
 	if event == nil {
 		t.Fatal("expected event from classifier, got nil")
@@ -104,7 +138,7 @@ func TestDetector_Check_ClassifierSaysWorking(t *testing.T) {
 	d.SetClassifier(NewClassifier(mock))
 
 	lines := []string{"", "Enter choice> "}
-	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, "")
+	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, nil)
 
 	// WORKING means no attention needed → nil event, not isWorking
 	// (the classifier said WORKING, but that's LLM-level — isWorking
@@ -120,9 +154,10 @@ func TestDetector_Check_ClassifierSaysWorking(t *testing.T) {
 func TestDetector_Check_AgentWorking(t *testing.T) {
 	d := NewDetector()
 
-	// Claude Code spinner → positive working signal.
+	// Claude Code spinner → positive working signal via checker.
 	lines := []string{"✦ Thinking…"}
-	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, AgentClaudeCode)
+	checker := &testClaudeChecker{}
+	event, isWorking := d.Check(context.Background(), "proj1", lines, 0, checker)
 
 	if event != nil {
 		t.Errorf("expected nil event, got %v", event)

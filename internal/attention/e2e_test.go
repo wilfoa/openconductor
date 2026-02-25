@@ -6,6 +6,7 @@ package attention
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +14,58 @@ import (
 // for the duration of the test. Using a real live PID ensures CheckProcess
 // returns Running, not Exited.
 func livePID() int { return os.Getpid() }
+
+// testOpenCodeChecker mimics the OpenCode adapter's CheckAttention for e2e tests.
+type testOpenCodeChecker struct{}
+
+func (c *testOpenCodeChecker) CheckAttention(lastLines []string) (HeuristicResult, *AttentionEvent) {
+	hasEscInterrupt := false
+	hasIdleShortcuts := false
+	hasPermissionRequired := false
+	hasAllowOnce := false
+	hasQuestionDialog := false
+
+	for i := len(lastLines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lastLines[i])
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "esc interrupt") {
+			hasEscInterrupt = true
+		}
+		if strings.Contains(lower, "ctrl+p commands") || strings.Contains(lower, "ctrl+t variants") {
+			hasIdleShortcuts = true
+		}
+		if strings.Contains(lower, "permission required") {
+			hasPermissionRequired = true
+		}
+		if strings.Contains(lower, "allow once") || strings.Contains(lower, "allow always") {
+			hasAllowOnce = true
+		}
+		if (strings.Contains(lower, "enter submit") || strings.Contains(lower, "enter confirm")) && strings.Contains(lower, "esc dismiss") {
+			hasQuestionDialog = true
+		}
+	}
+
+	if hasEscInterrupt {
+		return Working, nil
+	}
+	if hasPermissionRequired || hasAllowOnce {
+		return Certain, &AttentionEvent{Type: NeedsPermission, Detail: "opencode permission dialog detected", Source: "heuristic"}
+	}
+	if hasQuestionDialog {
+		return Certain, &AttentionEvent{Type: NeedsAnswer, Detail: "opencode question dialog detected", Source: "heuristic"}
+	}
+	if hasIdleShortcuts {
+		return Certain, &AttentionEvent{Type: NeedsInput, Detail: "opencode is idle, waiting for prompt", Source: "heuristic"}
+	}
+	return No, nil
+}
+
+// e2eClaudeChecker and e2eOpenCodeChecker are used by all e2e tests.
+var e2eClaudeChecker AttentionChecker = &testClaudeChecker{}
+var e2eOpenCodeChecker AttentionChecker = &testOpenCodeChecker{}
 
 // E2E-style tests that simulate full Detector.Check() scenarios with
 // realistic terminal output from real agents. These test the complete
@@ -25,7 +78,7 @@ func TestE2E_ClaudeCode_WelcomeScreen(t *testing.T) {
 	d := NewDetector()
 	lines := simulateClaudeCodeWelcome()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentClaudeCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false for welcome screen")
@@ -43,7 +96,7 @@ func TestE2E_ClaudeCode_Thinking(t *testing.T) {
 	d := NewDetector()
 	lines := simulateClaudeCodeThinking()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentClaudeCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
 
 	if event != nil {
 		t.Errorf("expected nil event while thinking, got %v", event)
@@ -59,7 +112,7 @@ func TestE2E_ClaudeCode_FinishedAnswer(t *testing.T) {
 	d := NewDetector()
 	lines := simulateClaudeCodeFinished()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentClaudeCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false after answer")
@@ -77,7 +130,7 @@ func TestE2E_ClaudeCode_ToolUsePermission(t *testing.T) {
 	d := NewDetector()
 	lines := simulateClaudeCodePermission()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentClaudeCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false for permission prompt")
@@ -96,7 +149,7 @@ func TestE2E_ClaudeCode_WorkingWithErrors(t *testing.T) {
 	d := NewDetector()
 	lines := simulateClaudeCodeFixingErrors()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentClaudeCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
 
 	if event != nil {
 		t.Errorf("expected nil event (spinner suppresses errors), got %v", event)
@@ -112,7 +165,7 @@ func TestE2E_ClaudeCode_StateTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	// Phase 1: Welcome screen → NeedsInput
-	event, isWorking := d.Check(ctx, "proj1", simulateClaudeCodeWelcome(), livePID(), AgentClaudeCode)
+	event, isWorking := d.Check(ctx, "proj1", simulateClaudeCodeWelcome(), livePID(), e2eClaudeChecker)
 	if event == nil || event.Type != NeedsInput {
 		t.Fatalf("phase 1 (welcome): expected NeedsInput, got event=%v", event)
 	}
@@ -121,7 +174,7 @@ func TestE2E_ClaudeCode_StateTransitions(t *testing.T) {
 	}
 
 	// Phase 2: User types, agent starts thinking → Working
-	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodeThinking(), livePID(), AgentClaudeCode)
+	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodeThinking(), livePID(), e2eClaudeChecker)
 	if event != nil {
 		t.Errorf("phase 2 (thinking): expected nil event, got %v", event)
 	}
@@ -130,7 +183,7 @@ func TestE2E_ClaudeCode_StateTransitions(t *testing.T) {
 	}
 
 	// Phase 3: Agent finishes → NeedsInput
-	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodeFinished(), livePID(), AgentClaudeCode)
+	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodeFinished(), livePID(), e2eClaudeChecker)
 	if event == nil || event.Type != NeedsInput {
 		t.Fatalf("phase 3 (finished): expected NeedsInput, got event=%v", event)
 	}
@@ -145,7 +198,7 @@ func TestE2E_OpenCode_Working(t *testing.T) {
 	d := NewDetector()
 	lines := simulateOpenCodeWorking()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eOpenCodeChecker)
 
 	if event != nil {
 		t.Errorf("expected nil event while working, got %v", event)
@@ -159,7 +212,7 @@ func TestE2E_OpenCode_Idle(t *testing.T) {
 	d := NewDetector()
 	lines := simulateOpenCodeIdle()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eOpenCodeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false when idle")
@@ -177,7 +230,7 @@ func TestE2E_OpenCode_PermissionDialog(t *testing.T) {
 	d := NewDetector()
 	lines := simulateOpenCodeExternalDirPermission()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eOpenCodeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false for permission dialog")
@@ -195,7 +248,7 @@ func TestE2E_OpenCode_QuestionDialog(t *testing.T) {
 	d := NewDetector()
 	lines := simulateOpenCodeQuestion()
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eOpenCodeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false for question dialog")
@@ -215,7 +268,7 @@ func TestE2E_OpenCode_QuestionDialogEnterConfirm(t *testing.T) {
 	lines := simulateOpenCodeQuestion()
 	lines[13] = "↕ select  enter confirm  esc dismiss"
 
-	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), AgentOpenCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eOpenCodeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false for question dialog (enter confirm)")
@@ -233,13 +286,13 @@ func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 	ctx := context.Background()
 
 	// Phase 1: Idle → NeedsInput
-	event, _ := d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), AgentOpenCode)
+	event, _ := d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), e2eOpenCodeChecker)
 	if event == nil || event.Type != NeedsInput {
 		t.Fatalf("phase 1 (idle): expected NeedsInput, got %v", event)
 	}
 
 	// Phase 2: Working → isWorking=true
-	event, isWorking := d.Check(ctx, "proj1", simulateOpenCodeWorking(), livePID(), AgentOpenCode)
+	event, isWorking := d.Check(ctx, "proj1", simulateOpenCodeWorking(), livePID(), e2eOpenCodeChecker)
 	if event != nil {
 		t.Errorf("phase 2 (working): expected nil event, got %v", event)
 	}
@@ -248,19 +301,19 @@ func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 	}
 
 	// Phase 3: Permission dialog → NeedsPermission
-	event, _ = d.Check(ctx, "proj1", simulateOpenCodeExternalDirPermission(), livePID(), AgentOpenCode)
+	event, _ = d.Check(ctx, "proj1", simulateOpenCodeExternalDirPermission(), livePID(), e2eOpenCodeChecker)
 	if event == nil || event.Type != NeedsPermission {
 		t.Fatalf("phase 3 (permission): expected NeedsPermission, got %v", event)
 	}
 
 	// Phase 4: Question dialog → NeedsAnswer
-	event, _ = d.Check(ctx, "proj1", simulateOpenCodeQuestion(), livePID(), AgentOpenCode)
+	event, _ = d.Check(ctx, "proj1", simulateOpenCodeQuestion(), livePID(), e2eOpenCodeChecker)
 	if event == nil || event.Type != NeedsAnswer {
 		t.Fatalf("phase 4 (question): expected NeedsAnswer, got %v", event)
 	}
 
 	// Phase 5: Back to idle
-	event, _ = d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), AgentOpenCode)
+	event, _ = d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), e2eOpenCodeChecker)
 	if event == nil || event.Type != NeedsInput {
 		t.Fatalf("phase 5 (idle again): expected NeedsInput, got %v", event)
 	}
@@ -275,7 +328,7 @@ func TestE2E_ProcessExited(t *testing.T) {
 	// Use a PID that almost certainly doesn't exist.
 	// CheckProcess returns Exited for non-existent PIDs.
 	deadPID := 99999999
-	event, isWorking := d.Check(context.Background(), "proj1", lines, deadPID, AgentClaudeCode)
+	event, isWorking := d.Check(context.Background(), "proj1", lines, deadPID, e2eClaudeChecker)
 
 	if isWorking {
 		t.Error("expected isWorking=false for exited process")

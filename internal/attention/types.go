@@ -72,6 +72,22 @@ const (
 	Working
 )
 
+// AttentionChecker is an optional interface that agent adapters can implement
+// to provide agent-specific attention heuristics. When passed to
+// CheckHeuristics, the checker is called before generic patterns to detect
+// working/idle/permission/question states using patterns specific to the
+// agent's TUI layout.
+//
+// Implementations should return:
+//   - (Working, nil): agent is actively working — suppress generic patterns.
+//   - (Certain, event): agent-specific condition detected with high confidence.
+//   - (No, nil): no agent-specific signal — fall through to generic patterns
+//     (only for truly unknown agents; callers should skip generic patterns
+//     when a checker is provided but returns No).
+type AttentionChecker interface {
+	CheckAttention(lastLines []string) (HeuristicResult, *AttentionEvent)
+}
+
 // AttentionEvent represents a detected event that requires user attention.
 type AttentionEvent struct {
 	// ProjectName is the name of the project that needs attention.

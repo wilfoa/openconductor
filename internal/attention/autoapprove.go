@@ -6,7 +6,6 @@ package attention
 import (
 	"context"
 
-	"github.com/openconductorhq/openconductor/internal/agent"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/logging"
 	"github.com/openconductorhq/openconductor/internal/permission"
@@ -38,12 +37,24 @@ type AutoApproveResult struct {
 	Parsed *permission.ParsedPermission
 }
 
+// ApprovalKeystrokes holds the raw bytes needed to approve a permission
+// request via the agent's PTY. The caller extracts these from the agent
+// adapter so this package doesn't depend on the agent package.
+type ApprovalKeystrokes struct {
+	// Approve is sent for a single approval (e.g. "y\n" for Claude Code).
+	Approve []byte
+	// ApproveSession is sent for session-wide approval (e.g. "A" for
+	// OpenCode). Nil if the agent does not support session-wide approval.
+	ApproveSession []byte
+}
+
 // CheckAndApprove classifies the permission being requested and decides
 // whether to auto-approve it.
 //
 //   - project: the project configuration (provides ApprovalLevel and AgentType).
 //   - lines: the most recent visible terminal lines used for classification.
-//   - adapter: the agent adapter for the project (provides approval keystrokes).
+//   - keystrokes: the agent's approval keystrokes (extracted from the adapter
+//     by the caller to avoid an import cycle with the agent package).
 //
 // Returns an AutoApproveResult. When ShouldApprove is false the caller should
 // notify the user normally.
@@ -51,7 +62,7 @@ func (a *AutoApprover) CheckAndApprove(
 	ctx context.Context,
 	project config.Project,
 	lines []string,
-	adapter agent.AgentAdapter,
+	keystrokes ApprovalKeystrokes,
 ) AutoApproveResult {
 	// Fast exit: auto-approve is disabled for this project.
 	if project.AutoApprove == config.ApprovalOff || project.AutoApprove == "" {
@@ -80,9 +91,9 @@ func (a *AutoApprover) CheckAndApprove(
 	// Use session-wide approval when the agent supports it, so subsequent
 	// prompts of the same type are also handled without OpenConductor
 	// needing to classify them again.
-	keystroke := adapter.ApproveSessionKeystroke()
+	keystroke := keystrokes.ApproveSession
 	if keystroke == nil {
-		keystroke = adapter.ApproveKeystroke()
+		keystroke = keystrokes.Approve
 	}
 
 	logging.Info("auto-approve: approved",

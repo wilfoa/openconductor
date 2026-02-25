@@ -49,8 +49,8 @@ func (d *Detector) CheckInterval() time.Duration {
 //
 // lastLines should be the most recent visible terminal lines (e.g. from
 // session.GetScreenLines()). pid is the agent process ID for liveness
-// checking. agentType identifies the coding agent (e.g. "claude-code",
-// "opencode") for agent-specific pattern matching.
+// checking. checker is an optional AttentionChecker (typically an agent
+// adapter) for agent-specific pattern matching; pass nil for generic-only.
 //
 // Returns (event, isWorking):
 //   - event != nil: attention is needed, isWorking is false.
@@ -58,10 +58,10 @@ func (d *Detector) CheckInterval() time.Duration {
 //     signal from agent-specific heuristics like spinner or progress bar).
 //   - event == nil, isWorking == false: no signal detected; caller should
 //     keep the current state (e.g. idle stays idle).
-func (d *Detector) Check(ctx context.Context, projectName string, lastLines []string, pid int, agentType string) (event *AttentionEvent, isWorking bool) {
+func (d *Detector) Check(ctx context.Context, projectName string, lastLines []string, pid int, checker AttentionChecker) (event *AttentionEvent, isWorking bool) {
 	processState := CheckProcess(pid)
 
-	result, evt := CheckHeuristics(lastLines, processState, agentType)
+	result, evt := CheckHeuristics(lastLines, processState, checker)
 
 	if result == Certain && evt != nil {
 		evt.ProjectName = projectName

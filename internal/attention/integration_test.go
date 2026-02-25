@@ -223,7 +223,7 @@ func TestIntegrationFullPipeline(t *testing.T) {
 		"> ",
 	}
 
-	event, isWorking := detector.Check(ctx, "test-proj", lines, 0, "")
+	event, isWorking := detector.Check(ctx, "test-proj", lines, 0, nil)
 	t.Logf("Full pipeline result: event=%v isWorking=%v", event, isWorking)
 
 	if isWorking {

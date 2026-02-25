@@ -8,6 +8,7 @@ package agent
 import (
 	"fmt"
 	"os/exec"
+	"time"
 
 	"github.com/openconductorhq/openconductor/internal/config"
 )
@@ -68,6 +69,53 @@ func FilterScreen(agentType config.AgentType, lines []string) []string {
 		return f.FilterScreen(lines)
 	}
 	return lines
+}
+
+// ChromeLayout is an optional interface that agents can implement to describe
+// fixed TUI chrome rows (header, footer, status bar) that should be excluded
+// from scrollback capture. When pushing alt-screen diffs, rows in the chrome
+// zones change frequently (timer ticks, token counters) and would pollute
+// the scrollback buffer with noise.
+type ChromeLayout interface {
+	// ChromeSkipRows returns the number of rows to skip from the top and
+	// bottom of the screen when capturing scrollback from alt-screen diffs.
+	ChromeSkipRows() (top int, bottom int)
+}
+
+// ChromeSkipRows returns the chrome skip values for the given agent type.
+// If the adapter does not implement ChromeLayout, returns (0, 0).
+func ChromeSkipRows(agentType config.AgentType) (top int, bottom int) {
+	a, err := Get(agentType)
+	if err != nil {
+		return 0, 0
+	}
+	if c, ok := a.(ChromeLayout); ok {
+		return c.ChromeSkipRows()
+	}
+	return 0, 0
+}
+
+// SubmitDelay is an optional interface that agents can implement to specify
+// the pause between writing text and sending Enter to the PTY. TUI apps
+// with event-loop-based stdin processing (e.g. Bubble Tea) may need a delay
+// so the text is committed before the submit key arrives.
+type SubmitDelay interface {
+	// SubmitDelay returns the duration to wait between writing text and
+	// sending Enter (\r) to the PTY. Return 0 for no delay.
+	SubmitDelay() time.Duration
+}
+
+// GetSubmitDelay returns the submit delay for the given agent type.
+// If the adapter does not implement SubmitDelay, returns 0.
+func GetSubmitDelay(agentType config.AgentType) time.Duration {
+	a, err := Get(agentType)
+	if err != nil {
+		return 0
+	}
+	if d, ok := a.(SubmitDelay); ok {
+		return d.SubmitDelay()
+	}
+	return 0
 }
 
 // HistoryProvider is an optional interface that agents can implement to supply

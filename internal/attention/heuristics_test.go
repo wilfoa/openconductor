@@ -5,6 +5,10 @@ package attention
 
 import "testing"
 
+// All tests use nil checker (generic patterns only, no agent-specific checks).
+// Agent-specific attention tests live in agent/opencode_test.go and
+// agent/claude_test.go alongside their adapter implementations.
+
 func TestCheckHeuristics_PermissionPatterns(t *testing.T) {
 	tests := []struct {
 		name string
@@ -22,7 +26,7 @@ func TestCheckHeuristics_PermissionPatterns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lines := []string{"", "", tt.line}
-			result, event := CheckHeuristics(lines, Running, "")
+			result, event := CheckHeuristics(lines, Running, nil)
 			if result != Certain {
 				t.Errorf("expected Certain, got %v", result)
 			}
@@ -50,7 +54,7 @@ func TestCheckHeuristics_ErrorPatterns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lines := []string{"", tt.line}
-			result, event := CheckHeuristics(lines, Running, "")
+			result, event := CheckHeuristics(lines, Running, nil)
 			if result != Certain {
 				t.Errorf("expected Certain, got %v", result)
 			}
@@ -78,7 +82,7 @@ func TestCheckHeuristics_DonePatterns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lines := []string{"", tt.line}
-			result, event := CheckHeuristics(lines, Running, "")
+			result, event := CheckHeuristics(lines, Running, nil)
 			if result != Certain {
 				t.Errorf("expected Certain, got %v", result)
 			}
@@ -94,7 +98,7 @@ func TestCheckHeuristics_DonePatterns(t *testing.T) {
 
 func TestCheckHeuristics_PromptSuffix_Uncertain(t *testing.T) {
 	lines := []string{"", "Enter your choice> "}
-	result, event := CheckHeuristics(lines, Running, "")
+	result, event := CheckHeuristics(lines, Running, nil)
 	if result != Uncertain {
 		t.Errorf("expected Uncertain, got %v", result)
 	}
@@ -108,7 +112,7 @@ func TestCheckHeuristics_PromptSuffix_Uncertain(t *testing.T) {
 
 func TestCheckHeuristics_ProcessExited(t *testing.T) {
 	lines := []string{"some normal output"}
-	result, event := CheckHeuristics(lines, Exited, "")
+	result, event := CheckHeuristics(lines, Exited, nil)
 	if result != Certain {
 		t.Errorf("expected Certain, got %v", result)
 	}
@@ -122,7 +126,7 @@ func TestCheckHeuristics_ProcessExited(t *testing.T) {
 
 func TestCheckHeuristics_NoMatch(t *testing.T) {
 	lines := []string{"Building project...", "Compiling main.go", "Running tests"}
-	result, event := CheckHeuristics(lines, Running, "")
+	result, event := CheckHeuristics(lines, Running, nil)
 	if result != No {
 		t.Errorf("expected No, got %v", result)
 	}
@@ -133,7 +137,7 @@ func TestCheckHeuristics_NoMatch(t *testing.T) {
 
 func TestCheckHeuristics_EmptyLines(t *testing.T) {
 	lines := []string{"", "", ""}
-	result, event := CheckHeuristics(lines, Running, "")
+	result, event := CheckHeuristics(lines, Running, nil)
 	if result != No {
 		t.Errorf("expected No, got %v", result)
 	}
@@ -144,12 +148,11 @@ func TestCheckHeuristics_EmptyLines(t *testing.T) {
 
 func TestCheckHeuristics_ScansMultipleLines(t *testing.T) {
 	// Error is on 2nd-to-last non-empty line, not the last.
-	// Old code only scanned 1 line and would miss this.
 	lines := []string{
 		"Error: build failed",
 		"see log for details",
 	}
-	result, event := CheckHeuristics(lines, Running, "")
+	result, event := CheckHeuristics(lines, Running, nil)
 	if result != Certain {
 		t.Errorf("expected Certain, got %v", result)
 	}
@@ -163,7 +166,7 @@ func TestCheckHeuristics_ScansMultipleLines(t *testing.T) {
 
 func TestCheckHeuristics_CaseInsensitive(t *testing.T) {
 	lines := []string{"", "ERROR: Something Bad"}
-	result, event := CheckHeuristics(lines, Running, "")
+	result, event := CheckHeuristics(lines, Running, nil)
 	if result != Certain {
 		t.Errorf("expected Certain, got %v", result)
 	}
@@ -179,7 +182,7 @@ func TestCheckHeuristics_PermissionPriorityOverError(t *testing.T) {
 		"Error: something failed",
 		"Do you want to proceed? [y/n]",
 	}
-	result, event := CheckHeuristics(lines, Running, "")
+	result, event := CheckHeuristics(lines, Running, nil)
 	if result != Certain {
 		t.Errorf("expected Certain, got %v", result)
 	}
@@ -188,237 +191,53 @@ func TestCheckHeuristics_PermissionPriorityOverError(t *testing.T) {
 	}
 }
 
-// ── Claude Code Agent-Specific Tests ─────────────────────────────
+// ── Checker Integration Tests ────────────────────────────────────
 
-func TestClaudeCode_SpinnerWorking(t *testing.T) {
-	tests := []struct {
-		name string
-		line string
-	}{
-		{"star prefix", "✦ Sublimating…"},
-		{"dot prefix", "· Thinking…"},
-		{"asterisk prefix", "* Reading…"},
-		{"three dots", "✦ Processing..."},
-		{"dot three dots", "· Analyzing..."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lines := []string{"some output above", "", tt.line, ""}
-			result, event := CheckHeuristics(lines, Running, AgentClaudeCode)
-			if result != Working {
-				t.Errorf("expected Working, got %v", result)
-			}
-			if event != nil {
-				t.Errorf("expected nil event, got %v", event)
-			}
-		})
-	}
+// mockChecker is a test AttentionChecker that returns configurable results.
+type mockChecker struct {
+	result HeuristicResult
+	event  *AttentionEvent
 }
 
-func TestClaudeCode_SpinnerNotMatched(t *testing.T) {
-	tests := []struct {
-		name string
-		line string
-	}{
-		{"no prefix", "Sublimating…"},
-		{"lowercase after dot", "· lowercase…"},
-		{"no ellipsis", "✦ Reading"},
-		{"just dot", "·"},
-		{"normal output", "Building project..."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lines := []string{tt.line}
-			result, _ := CheckHeuristics(lines, Running, AgentClaudeCode)
-			if result == Working {
-				t.Errorf("did not expect Working for line %q", tt.line)
-			}
-		})
-	}
+func (m *mockChecker) CheckAttention(lastLines []string) (HeuristicResult, *AttentionEvent) {
+	return m.result, m.event
 }
 
-func TestClaudeCode_SpinnerSuppressesGenericError(t *testing.T) {
-	// When Claude Code shows a spinner AND output contains "error:",
-	// the spinner takes priority — agent is working, not stuck on error.
-	lines := []string{
-		"error: some compile error in output",
-		"✦ Fixing…",
-	}
-	result, event := CheckHeuristics(lines, Running, AgentClaudeCode)
+func TestCheckHeuristics_CheckerWorkingSuppressesGeneric(t *testing.T) {
+	// When a checker returns Working, generic error patterns are suppressed.
+	checker := &mockChecker{result: Working, event: nil}
+	lines := []string{"error: some compile error in output"}
+	result, event := CheckHeuristics(lines, Running, checker)
 	if result != Working {
-		t.Errorf("expected Working (spinner suppresses error), got %v", result)
+		t.Errorf("expected Working, got %v", result)
 	}
 	if event != nil {
 		t.Errorf("expected nil event, got %v", event)
 	}
 }
 
-func TestClaudeCode_PromptIdleCertain(t *testing.T) {
-	// When Claude Code shows "> " without a spinner, it's idle — Certain.
-	tests := []struct {
-		name  string
-		lines []string
-	}{
-		{
-			"bare prompt",
-			[]string{"The answer is March 5th, 2026.", "", "> "},
-		},
-		{
-			"prompt with trailing space",
-			[]string{"some output", "> "},
-		},
-		{
-			"trimmed to just >",
-			[]string{"some output", ">"},
-		},
-		{
-			"welcome screen prompt",
-			[]string{
-				"╭────────────────────────────────────────╮",
-				"│ ✻ Welcome to Claude Code!              │",
-				"╰────────────────────────────────────────╯",
-				"",
-				"> ",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, event := CheckHeuristics(tt.lines, Running, AgentClaudeCode)
-			if result != Certain {
-				t.Errorf("expected Certain, got %v", result)
-			}
-			if event == nil {
-				t.Fatal("expected event, got nil")
-			}
-			if event.Type != NeedsInput {
-				t.Errorf("expected NeedsInput, got %v", event.Type)
-			}
-			if event.Source != "heuristic" {
-				t.Errorf("expected source 'heuristic', got %q", event.Source)
-			}
-		})
-	}
-}
-
-func TestClaudeCode_SpinnerOverridesPrompt(t *testing.T) {
-	// When both spinner and "> " are visible, spinner wins — Working.
-	lines := []string{
-		"> ",
-		"✦ Thinking…",
-	}
-	result, event := CheckHeuristics(lines, Running, AgentClaudeCode)
-	if result != Working {
-		t.Errorf("expected Working (spinner overrides prompt), got %v", result)
-	}
-	if event != nil {
-		t.Errorf("expected nil event, got %v", event)
-	}
-}
-
-func TestClaudeCode_NoPromptNoSpinnerReturnsNo(t *testing.T) {
-	// No spinner, no prompt — returns No. Known agent types do not fall
-	// through to generic patterns (avoids false positives from broad
-	// patterns like "error:" in normal output).
-	lines := []string{"Building project..."}
-	result, event := CheckHeuristics(lines, Running, AgentClaudeCode)
+func TestCheckHeuristics_CheckerNoSkipsGeneric(t *testing.T) {
+	// When a checker is provided but returns No, generic patterns are skipped.
+	checker := &mockChecker{result: No, event: nil}
+	lines := []string{"error: build failed"}
+	result, event := CheckHeuristics(lines, Running, checker)
 	if result != No {
-		t.Errorf("expected No for known agent with no signal, got %v", result)
+		t.Errorf("expected No (generic patterns skipped), got %v", result)
 	}
 	if event != nil {
 		t.Errorf("expected nil event, got %v", event)
 	}
 }
 
-func TestClaudeCode_ProcessExitedOverridesSpinner(t *testing.T) {
-	// Process state always wins — even if spinner text is visible, exited
-	// means exited.
+func TestCheckHeuristics_ProcessExitedOverridesChecker(t *testing.T) {
+	// Process state always wins — even if a checker would return Working.
+	checker := &mockChecker{result: Working, event: nil}
 	lines := []string{"✦ Sublimating…"}
-	result, event := CheckHeuristics(lines, Exited, AgentClaudeCode)
+	result, event := CheckHeuristics(lines, Exited, checker)
 	if result != Certain {
 		t.Errorf("expected Certain, got %v", result)
 	}
 	if event == nil || event.Type != NeedsReview {
 		t.Errorf("expected NeedsReview, got %v", event)
-	}
-}
-
-// ── OpenCode Agent-Specific Tests ────────────────────────────────
-
-func TestOpenCode_EscInterruptWorking(t *testing.T) {
-	lines := []string{
-		"· · · · ■ ■  esc interrupt",
-		"",
-	}
-	result, event := CheckHeuristics(lines, Running, AgentOpenCode)
-	if result != Working {
-		t.Errorf("expected Working, got %v", result)
-	}
-	if event != nil {
-		t.Errorf("expected nil event, got %v", event)
-	}
-}
-
-func TestOpenCode_IdleWithShortcuts(t *testing.T) {
-	lines := []string{
-		"   ┃  Build  Claude Opus 4.5 (latest) Anthropic · max",
-		"   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-		"                                ctrl+t variants  tab agents  ctrl+p commands",
-	}
-	result, event := CheckHeuristics(lines, Running, AgentOpenCode)
-	if result != Certain {
-		t.Errorf("expected Certain, got %v", result)
-	}
-	if event == nil {
-		t.Fatal("expected event, got nil")
-	}
-	if event.Type != NeedsInput {
-		t.Errorf("expected NeedsInput, got %v", event.Type)
-	}
-}
-
-func TestOpenCode_EscInterruptSuppressesGenericError(t *testing.T) {
-	// When OpenCode is working (esc interrupt visible), generic error
-	// patterns in the output should be suppressed.
-	lines := []string{
-		"error: build failed",
-		"· · · · ■ ■  esc interrupt",
-	}
-	result, event := CheckHeuristics(lines, Running, AgentOpenCode)
-	if result != Working {
-		t.Errorf("expected Working, got %v", result)
-	}
-	if event != nil {
-		t.Errorf("expected nil event, got %v", event)
-	}
-}
-
-func TestOpenCode_NoAgentSignals(t *testing.T) {
-	// OpenCode output without specific signals returns No. Known agent
-	// types do not fall through to generic patterns.
-	lines := []string{"some random output"}
-	result, event := CheckHeuristics(lines, Running, AgentOpenCode)
-	if result != No {
-		t.Errorf("expected No for known agent with no signal, got %v", result)
-	}
-	if event != nil {
-		t.Errorf("expected nil event, got %v", event)
-	}
-}
-
-func TestOpenCode_CtrlPCommandsAlone(t *testing.T) {
-	// Just ctrl+p commands without esc interrupt → idle.
-	lines := []string{
-		"ctrl+p commands",
-	}
-	result, event := CheckHeuristics(lines, Running, AgentOpenCode)
-	if result != Certain {
-		t.Errorf("expected Certain, got %v", result)
-	}
-	if event == nil || event.Type != NeedsInput {
-		t.Errorf("expected NeedsInput, got %v", event)
 	}
 }

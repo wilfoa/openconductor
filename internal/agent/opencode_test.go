@@ -6,6 +6,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/openconductorhq/openconductor/internal/attention"
 )
 
 // ── FilterScreen (opencode sidebar cropping) ────────────────────
@@ -472,5 +474,109 @@ func TestRoleLabel(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("roleLabel(%q) = %q, want %q", tt.role, got, tt.expected)
 		}
+	}
+}
+
+// ── CheckAttention (opencode attention heuristics) ──────────────
+
+func TestOpenCode_EscInterruptWorking(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"· · · · ■ ■  esc interrupt",
+		"",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Working {
+		t.Errorf("expected Working, got %v", result)
+	}
+	if event != nil {
+		t.Errorf("expected nil event, got %v", event)
+	}
+}
+
+func TestOpenCode_IdleWithShortcuts(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"   ┃  Build  Claude Opus 4.5 (latest) Anthropic · max",
+		"   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+		"                                ctrl+t variants  tab agents  ctrl+p commands",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput, got %v", event.Type)
+	}
+}
+
+func TestOpenCode_EscInterruptSuppressesGenericError(t *testing.T) {
+	// When OpenCode is working (esc interrupt visible), error content
+	// in the output should be suppressed.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"error: build failed",
+		"· · · · ■ ■  esc interrupt",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Working {
+		t.Errorf("expected Working, got %v", result)
+	}
+	if event != nil {
+		t.Errorf("expected nil event, got %v", event)
+	}
+}
+
+func TestOpenCode_NoAgentSignals(t *testing.T) {
+	// OpenCode output without specific signals returns No.
+	adapter := &opencodeAdapter{}
+	lines := []string{"some random output"}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.No {
+		t.Errorf("expected No for no signal, got %v", result)
+	}
+	if event != nil {
+		t.Errorf("expected nil event, got %v", event)
+	}
+}
+
+func TestOpenCode_CtrlPCommandsAlone(t *testing.T) {
+	// Just ctrl+p commands without esc interrupt → idle.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"ctrl+p commands",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput, got %v", event)
+	}
+}
+
+// ── ChromeSkipRows ──────────────────────────────────────────────
+
+func TestOpenCode_ChromeSkipRows(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	top, bottom := adapter.ChromeSkipRows()
+	if top != 1 {
+		t.Errorf("expected top=1, got %d", top)
+	}
+	if bottom != 2 {
+		t.Errorf("expected bottom=2, got %d", bottom)
+	}
+}
+
+// ── SubmitDelay ─────────────────────────────────────────────────
+
+func TestOpenCode_SubmitDelay(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	delay := adapter.SubmitDelay()
+	if delay != 50*1_000_000 { // 50ms in nanoseconds
+		t.Errorf("expected 50ms, got %v", delay)
 	}
 }

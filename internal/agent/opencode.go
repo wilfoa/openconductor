@@ -9,8 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/logging"
 )
@@ -47,6 +49,128 @@ func (a *opencodeAdapter) DenyKeystroke() []byte { return []byte("d") }
 // BootstrapFiles returns no bootstrap files for OpenCode.
 func (a *opencodeAdapter) BootstrapFiles() []BootstrapFile {
 	return nil
+}
+
+// ChromeSkipRows returns the number of fixed TUI chrome rows at the top and
+// bottom of OpenCode's alt-screen layout. Row 0 is the header bar, and the
+// last 2 rows are the status bar and footer shortcuts.
+func (a *opencodeAdapter) ChromeSkipRows() (top int, bottom int) {
+	return 1, 2
+}
+
+// SubmitDelay returns the pause between writing text and Enter for OpenCode.
+// OpenCode's Bubble Tea event loop needs ~50ms to process the input text
+// before receiving the submit key.
+func (a *opencodeAdapter) SubmitDelay() time.Duration {
+	return 50 * time.Millisecond
+}
+
+// CheckAttention detects OpenCode's working/idle/permission/question state
+// from its terminal output.
+//
+// Working: OpenCode shows a progress bar with "esc interrupt" at the bottom
+// while an LLM is actively generating a response.
+//
+// Permission dialog: OpenCode overlays a modal with the header
+// "Permission required" (with a ⚠ prefix) and buttons
+// "Allow once  Allow always  Reject" at the bottom. The action being
+// requested appears as "← <Action> <detail>" inside the modal.
+// Example screenshot content:
+//
+//	⚠ Permission required
+//	← Access external directory ~/Downloads/...
+//	Patterns
+//	- /path/to/glob/*
+//	Allow once  Allow always  Reject    ctrl+f fullscreen  ⌘ select  enter confirm
+//
+// Question dialog: OpenCode shows a multi-option question modal when the agent
+// needs a decision from the user. The footer is uniquely:
+//
+//	↕ select  enter submit  esc dismiss
+//
+// Idle/done: The progress bar disappears and the bottom shows keyboard
+// shortcuts like "ctrl+t variants  tab agents  ctrl+p commands" without
+// "esc interrupt". This means the agent has finished and is waiting for
+// the user's next prompt.
+func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.HeuristicResult, *attention.AttentionEvent) {
+	hasEscInterrupt := false
+	hasIdleShortcuts := false
+	hasPermissionRequired := false
+	hasAllowOnce := false
+	hasQuestionDialog := false
+
+	// Scan all visible lines (not just a few) because the permission
+	// and question dialogs span multiple rows and header text may appear
+	// higher up the screen while the button row is at the bottom.
+	for i := len(lastLines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lastLines[i])
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+
+		if strings.Contains(lower, "esc interrupt") {
+			hasEscInterrupt = true
+		}
+		if strings.Contains(lower, "ctrl+p commands") || strings.Contains(lower, "ctrl+t variants") {
+			hasIdleShortcuts = true
+		}
+		if strings.Contains(lower, "permission required") {
+			hasPermissionRequired = true
+		}
+		// "Allow once" appears in the button row of the permission dialog.
+		if strings.Contains(lower, "allow once") || strings.Contains(lower, "allow always") {
+			hasAllowOnce = true
+		}
+		// "enter submit  esc dismiss" or "enter confirm  esc dismiss" is
+		// the footer of OpenCode's question/selection dialog. Match either
+		// variant paired with "esc dismiss".
+		if (strings.Contains(lower, "enter submit") || strings.Contains(lower, "enter confirm")) && strings.Contains(lower, "esc dismiss") {
+			hasQuestionDialog = true
+		}
+	}
+
+	logging.Debug("heuristic: opencode scan result",
+		"escInterrupt", hasEscInterrupt,
+		"idleShortcuts", hasIdleShortcuts,
+		"permissionRequired", hasPermissionRequired,
+		"allowOnce", hasAllowOnce,
+		"questionDialog", hasQuestionDialog,
+	)
+
+	if hasEscInterrupt {
+		// Agent is actively working — suppress generic patterns.
+		return attention.Working, nil
+	}
+
+	if hasPermissionRequired || hasAllowOnce {
+		// Permission dialog is visible.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsPermission,
+			Detail: "opencode permission dialog detected",
+			Source: "heuristic",
+		}
+	}
+
+	if hasQuestionDialog {
+		// Question dialog is visible — agent is asking for a decision.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsAnswer,
+			Detail: "opencode question dialog detected",
+			Source: "heuristic",
+		}
+	}
+
+	if hasIdleShortcuts {
+		// Agent is idle, waiting for user input.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsInput,
+			Detail: "opencode is idle, waiting for prompt",
+			Source: "heuristic",
+		}
+	}
+
+	return attention.No, nil
 }
 
 // FilterScreen extracts the conversation panel from the OpenCode TUI by
