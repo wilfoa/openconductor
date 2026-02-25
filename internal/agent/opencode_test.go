@@ -186,3 +186,135 @@ func TestFilterScreen_TopLevel_UnknownAgent(t *testing.T) {
 		t.Errorf("expected unchanged for unknown agent, got %q", filtered[0])
 	}
 }
+
+// ── Gap-based sidebar detection (no vertical border) ────────────
+
+// simulateGapScreen builds a screen where the sidebar is separated from the
+// main content by a wide gap of spaces (no vertical border character).
+func simulateGapScreen(contentWidth, gapWidth, sidebarWidth, height int) []string {
+	lines := make([]string, height)
+	for i := 0; i < height; i++ {
+		content := strings.Repeat("C", contentWidth-i%5) // vary content length
+		gap := strings.Repeat(" ", gapWidth+i%5)         // gap fills the rest
+		sidebar := strings.Repeat("S", sidebarWidth)
+		lines[i] = content + gap + sidebar
+	}
+	return lines
+}
+
+func TestFilterScreen_GapDetection_CropsSidebar(t *testing.T) {
+	// 60-char content + ~30-char gap + 30-char sidebar = ~120 total.
+	lines := simulateGapScreen(60, 30, 30, 15)
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	for i, line := range filtered {
+		if strings.Contains(line, "S") {
+			t.Errorf("line %d still contains sidebar content: %q", i, line)
+		}
+		if !strings.Contains(line, "C") {
+			t.Errorf("line %d missing conversation content: %q", i, line)
+		}
+	}
+}
+
+func TestFilterScreen_GapDetection_RealisticOpenCode(t *testing.T) {
+	// Realistic OpenCode layout WITHOUT a vertical border — just a space gap.
+	pad := func(s string, w int) string {
+		if len(s) >= w {
+			return s[:w]
+		}
+		return s + strings.Repeat(" ", w-len(s))
+	}
+	const contentW = 120
+	const sidebarW = 40
+
+	lines := []string{
+		pad("  Task title search", contentW) + pad("Dev data import script search", sidebarW),
+		pad("  ┃", contentW) + pad("Context", sidebarW),
+		pad("  ┃  # Commit all changes", contentW) + pad("98,441 tokens", sidebarW),
+		pad("  ┃", contentW) + pad("49% used", sidebarW),
+		pad("  ┃  $ git commit -m \"feat: refactor\"", contentW) + pad("$0.00 spent", sidebarW),
+		pad("  ┃  Discount system:", contentW) + pad("▼ MCP", sidebarW),
+		pad("  ┃  - Remove fixed-amount type", contentW) + pad("• context7 Connected", sidebarW),
+		pad("  ┃  - Add duration field", contentW) + pad("• playwright Connected", sidebarW),
+		pad("  ┃  - One-time discounts auto-deactivate", contentW) + pad("• polybugger Connected", sidebarW),
+		pad("  ┃  - Alembic migration dc01disc0unt01", contentW) + pad("• sequential-thinking Connected", sidebarW),
+		pad("  ┃", contentW) + pad("", sidebarW),
+		pad("  ┃  Dev domain migration:", contentW) + pad("LSP", sidebarW),
+		pad("  ┃  - Move dev to dev.ahavtz.org.il", contentW) + pad("LSPs will activate as files are read", sidebarW),
+		pad("  ┃  - Update terraform, deploy scripts", contentW) + pad("", sidebarW),
+		pad("  ┃", contentW) + pad("▼ Modified Files", sidebarW),
+	}
+
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	// Sidebar content should be removed.
+	for i, line := range filtered {
+		if strings.Contains(line, "context7") {
+			t.Errorf("line %d contains sidebar 'context7': %q", i, line)
+		}
+		if strings.Contains(line, "tokens") {
+			t.Errorf("line %d contains sidebar 'tokens': %q", i, line)
+		}
+		if strings.Contains(line, "playwright") {
+			t.Errorf("line %d contains sidebar 'playwright': %q", i, line)
+		}
+		if strings.Contains(line, "Modified Files") {
+			t.Errorf("line %d contains sidebar 'Modified Files': %q", i, line)
+		}
+	}
+
+	// Conversation content should be preserved.
+	foundCommit := false
+	foundMigration := false
+	for _, line := range filtered {
+		if strings.Contains(line, "Commit all changes") {
+			foundCommit = true
+		}
+		if strings.Contains(line, "domain migration") {
+			foundMigration = true
+		}
+	}
+	if !foundCommit {
+		t.Error("filtered output missing 'Commit all changes'")
+	}
+	if !foundMigration {
+		t.Error("filtered output missing 'domain migration'")
+	}
+}
+
+func TestFilterScreen_GapDetection_NarrowGapIgnored(t *testing.T) {
+	// A gap that's too narrow (< 8 columns) should not trigger detection.
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = "content" + "     " + "more content" + strings.Repeat(" ", 50)
+	}
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	// Lines should be unchanged.
+	for i, line := range filtered {
+		if line != lines[i] {
+			t.Errorf("line %d incorrectly cropped: got %q", i, line)
+		}
+	}
+}
+
+func TestFilterScreen_GapDetection_NoSidebarContent(t *testing.T) {
+	// Content followed by trailing whitespace only (no sidebar) should
+	// not trigger gap detection because there's no density rise after the gap.
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = "some content here" + strings.Repeat(" ", 100)
+	}
+	adapter := &opencodeAdapter{}
+	filtered := adapter.FilterScreen(lines)
+
+	for i, line := range filtered {
+		if line != lines[i] {
+			t.Errorf("line %d incorrectly cropped: got %q", i, line)
+		}
+	}
+}

@@ -48,9 +48,12 @@ func (a *opencodeAdapter) BootstrapFiles() []BootstrapFile {
 // FilterScreen extracts the conversation panel from the OpenCode TUI by
 // detecting and removing the right sidebar (Context, MCP, LSP, Todo panels).
 //
-// Strategy: scan from the right for the first column where a vertical
-// box-drawing character (│) appears on a majority of lines — that column
-// is the sidebar divider. Crop every line to that boundary.
+// Two detection strategies are tried in order:
+//  1. Vertical border: scan for │/┃ characters appearing on ≥50% of lines.
+//  2. Whitespace gap: find a sustained drop in per-column text density
+//     (the gap between content and sidebar) followed by a rise (sidebar).
+//
+// Crop every line to the detected boundary.
 func (a *opencodeAdapter) FilterScreen(lines []string) []string {
 	if len(lines) == 0 {
 		return lines
@@ -73,30 +76,15 @@ func (a *opencodeAdapter) FilterScreen(lines []string) []string {
 		runeLines[i] = []rune(line)
 	}
 
-	// Scan from the right (within the rightmost 40% of the screen) looking
-	// for the first column where │ appears on ≥50% of non-empty lines.
-	threshold := len(lines) / 2
-	if threshold < 3 {
-		threshold = 3
-	}
-	startCol := maxWidth * 60 / 100 // only look in the right 40%
+	// Strategy 1: vertical border character.
+	dividerCol := findVerticalBorder(runeLines, maxWidth, len(lines))
 
-	dividerCol := -1
-	for col := maxWidth - 1; col >= startCol; col-- {
-		count := 0
-		for _, rl := range runeLines {
-			if col < len(rl) && isVerticalBorder(rl[col]) {
-				count++
-			}
-		}
-		if count >= threshold {
-			dividerCol = col
-			break
-		}
+	// Strategy 2: whitespace gap between content and sidebar.
+	if dividerCol < 0 {
+		dividerCol = findContentGap(runeLines, maxWidth, len(lines))
 	}
 
 	if dividerCol < 0 {
-		// No sidebar detected — return lines unchanged.
 		return lines
 	}
 
@@ -110,6 +98,91 @@ func (a *opencodeAdapter) FilterScreen(lines []string) []string {
 		}
 	}
 	return result
+}
+
+// findVerticalBorder scans from the right (within the rightmost 40% of the
+// screen) for a column where a vertical box-drawing character appears on
+// ≥50% of lines. Returns the column index, or -1 if not found.
+func findVerticalBorder(runeLines [][]rune, maxWidth, lineCount int) int {
+	threshold := lineCount / 2
+	if threshold < 3 {
+		threshold = 3
+	}
+	startCol := maxWidth * 60 / 100
+
+	for col := maxWidth - 1; col >= startCol; col-- {
+		count := 0
+		for _, rl := range runeLines {
+			if col < len(rl) && isVerticalBorder(rl[col]) {
+				count++
+			}
+		}
+		if count >= threshold {
+			return col
+		}
+	}
+	return -1
+}
+
+// findContentGap detects the sidebar by looking for a sustained drop in
+// per-column text density (a "gap" of whitespace columns) followed by a
+// rise (sidebar content). This handles layouts where the sidebar has no
+// visible vertical border — just a wide space gap.
+//
+// Returns the column at the start of the gap (the crop point), or -1.
+func findContentGap(runeLines [][]rune, maxWidth, lineCount int) int {
+	const (
+		minGapWidth      = 8 // gap must be at least this many columns wide
+		gapDensityCeil   = 2 // gap columns have at most this many lines with content
+		sidebarDensityLo = 3 // sidebar must have content on at least this many lines
+	)
+
+	// Count non-blank lines.
+	nonBlank := 0
+	for _, rl := range runeLines {
+		for _, r := range rl {
+			if r != ' ' && r != 0 {
+				nonBlank++
+				break
+			}
+		}
+	}
+	if nonBlank < 4 {
+		return -1
+	}
+
+	// Build per-column density (number of lines with a non-space character).
+	density := make([]int, maxWidth)
+	for _, rl := range runeLines {
+		for col := 0; col < len(rl) && col < maxWidth; col++ {
+			if rl[col] != ' ' && rl[col] != 0 {
+				density[col]++
+			}
+		}
+	}
+
+	// Scan from the 40% mark rightward looking for: content → gap → sidebar.
+	startSearch := maxWidth * 40 / 100
+
+	gapStart := -1
+	gapLen := 0
+	for col := startSearch; col < maxWidth; col++ {
+		if density[col] <= gapDensityCeil {
+			if gapStart < 0 {
+				gapStart = col
+			}
+			gapLen++
+		} else {
+			// Hit content after a gap — is this the sidebar?
+			if gapLen >= minGapWidth && density[col] >= sidebarDensityLo {
+				return gapStart
+			}
+			gapStart = -1
+			gapLen = 0
+		}
+	}
+
+	return -1
 }
 
 // isVerticalBorder returns true for vertical box-drawing characters used as
