@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"unicode"
 )
 
 // maxMessageLen is Telegram's maximum message length. We leave room for HTML tags.
@@ -112,14 +113,27 @@ func FormatActionTaken(original string, action string, user string) string {
 }
 
 // cleanScreen extracts meaningful text from terminal screen lines, trimming
-// blanks and wrapping in a <pre> block.
+// blanks, removing decorative TUI borders, and wrapping in a <pre> block.
 func cleanScreen(lines []string) string {
+	// Filter out blank and decorative lines.
+	var filtered []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			filtered = append(filtered, line)
+			continue
+		}
+		if isDecorativeLine(line) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+
 	// Trim leading and trailing empty lines.
-	start, end := 0, len(lines)-1
-	for start <= end && strings.TrimSpace(lines[start]) == "" {
+	start, end := 0, len(filtered)-1
+	for start <= end && strings.TrimSpace(filtered[start]) == "" {
 		start++
 	}
-	for end >= start && strings.TrimSpace(lines[end]) == "" {
+	for end >= start && strings.TrimSpace(filtered[end]) == "" {
 		end--
 	}
 	if start > end {
@@ -128,12 +142,41 @@ func cleanScreen(lines []string) string {
 
 	var sb strings.Builder
 	for i := start; i <= end; i++ {
-		sb.WriteString(html.EscapeString(lines[i]))
+		sb.WriteString(html.EscapeString(filtered[i]))
 		if i < end {
 			sb.WriteByte('\n')
 		}
 	}
 	return sb.String()
+}
+
+// isDecorativeLine returns true if a line consists entirely of box-drawing
+// characters and whitespace. These are TUI panel borders (e.g. ╹▀▀▀▀▀▀▀▀)
+// that carry no text content and should not be sent to Telegram.
+func isDecorativeLine(line string) bool {
+	hasBoxChar := false
+	for _, r := range line {
+		if isBoxDrawing(r) {
+			hasBoxChar = true
+		} else if !unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return hasBoxChar
+}
+
+// isBoxDrawing returns true for Unicode box-drawing and block-element
+// characters commonly used in TUI borders.
+func isBoxDrawing(r rune) bool {
+	// U+2500–U+257F: Box Drawing
+	if r >= 0x2500 && r <= 0x257F {
+		return true
+	}
+	// U+2580–U+259F: Block Elements (▀ ▄ █ ░ ▒ ▓ etc.)
+	if r >= 0x2580 && r <= 0x259F {
+		return true
+	}
+	return false
 }
 
 // splitMessage splits a long message into Telegram-safe chunks. The header

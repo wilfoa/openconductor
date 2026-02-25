@@ -6,6 +6,7 @@ package telegram
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -14,6 +15,14 @@ import (
 	"github.com/openconductorhq/openconductor/internal/logging"
 	"github.com/openconductorhq/openconductor/internal/session"
 )
+
+// ptySubmitDelay is the pause between writing text and sending Enter (\r) to
+// the PTY. TUI apps (Bubble Tea in particular) process stdin reads in batches
+// through their event loop. Without a delay the text and Enter may land in the
+// same read, and the Enter can be handled before the input component has
+// committed the preceding characters — causing the submission to be silently
+// ignored. 50 ms is long enough for the TUI to run at least one Update cycle.
+const ptySubmitDelay = 50 * time.Millisecond
 
 // handler routes incoming Telegram messages and callback queries to the
 // appropriate agent session.
@@ -59,11 +68,7 @@ func (h *handler) HandleInbound(text string, threadID int) {
 	// Route to the most recently created session for this project.
 	s := sessions[len(sessions)-1]
 
-	// Write the text to the agent's PTY, then send Enter as a separate write
-	// so the TUI processes the text characters before receiving the submit key.
-	// PTYs expect \r (0x0D) for Enter, not \n (0x0A).
-	s.Write([]byte(text))
-	s.Write([]byte("\r"))
+	writeWithEnter(s, text)
 	logging.Info("telegram: forwarded message to agent", "project", project, "session", s.ID, "len", len(text))
 }
 
@@ -118,16 +123,13 @@ func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQ
 		}
 
 	case "opt":
-		// Question option: send the number, then Enter separately.
-		s.Write([]byte(action))
-		s.Write([]byte("\r"))
+		// Question option: send the number, then Enter.
+		writeWithEnter(s, action)
 		actionLabel = fmt.Sprintf("Selected: %s", action)
 
 	case "reply":
 		// Quick-reply action from Attention/Error keyboards.
-		// Send the action text, then Enter separately.
-		s.Write([]byte(action))
-		s.Write([]byte("\r"))
+		writeWithEnter(s, action)
 		actionLabel = fmt.Sprintf("Replied: %s", action)
 
 	default:
@@ -188,6 +190,15 @@ func (h *handler) answerCallback(bot *tgbotapi.BotAPI, callbackID string, text s
 	if _, err := bot.Request(cb); err != nil {
 		logging.Debug("telegram: failed to answer callback", "err", err)
 	}
+}
+
+// writeWithEnter writes text to the session's PTY, pauses for ptySubmitDelay,
+// then sends Enter (\r). The delay ensures the TUI's event loop processes the
+// text characters before receiving the submit key.
+func writeWithEnter(s *session.Session, text string) {
+	s.Write([]byte(text))
+	time.Sleep(ptySubmitDelay)
+	s.Write([]byte("\r"))
 }
 
 // PermissionKeyboard returns an inline keyboard for permission requests.

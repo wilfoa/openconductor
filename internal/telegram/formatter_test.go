@@ -530,3 +530,80 @@ func TestFormatPermission_NoReplyHint(t *testing.T) {
 		}
 	}
 }
+
+// ── Decorative line filtering ───────────────────────────────────
+
+func TestCleanScreen_SkipsBoxDrawingBorders(t *testing.T) {
+	lines := []string{
+		"  hello world",
+		"  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+		"  goodbye",
+	}
+	got := cleanScreen(lines)
+	if strings.Contains(got, "▀") {
+		t.Errorf("decorative border line should be filtered out, got %q", got)
+	}
+	if !strings.Contains(got, "hello") || !strings.Contains(got, "goodbye") {
+		t.Errorf("text content should be preserved, got %q", got)
+	}
+}
+
+func TestCleanScreen_SkipsHorizontalDividers(t *testing.T) {
+	lines := []string{
+		"content above",
+		"  ─────────────────────────────────",
+		"  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+		"  ═══════════════════════════════════",
+		"content below",
+	}
+	got := cleanScreen(lines)
+	if strings.Contains(got, "─") || strings.Contains(got, "━") || strings.Contains(got, "═") {
+		t.Errorf("horizontal dividers should be filtered out, got %q", got)
+	}
+	if !strings.Contains(got, "content above") || !strings.Contains(got, "content below") {
+		t.Errorf("text content should be preserved, got %q", got)
+	}
+}
+
+func TestCleanScreen_KeepsMixedTextAndBoxChars(t *testing.T) {
+	// Lines with box-drawing AND real text should be kept.
+	lines := []string{
+		"│ Status: running │",
+		"├── file1.go",
+	}
+	got := cleanScreen(lines)
+	if !strings.Contains(got, "Status") {
+		t.Errorf("lines mixing box chars and text should be kept, got %q", got)
+	}
+	if !strings.Contains(got, "file1.go") {
+		t.Errorf("tree-style lines should be kept, got %q", got)
+	}
+}
+
+func TestIsDecorativeLine(t *testing.T) {
+	tests := []struct {
+		line     string
+		expected bool
+	}{
+		{"  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀", true},
+		{"╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀", true},
+		{"───────────────────────", true},
+		{"━━━━━━━━━━━━━━━━━━━━━━━", true},
+		{"  ═══════════════════  ", true},
+		{"╭──────────────────────╮", true},
+		{"╰──────────────────────╯", true},
+		{"│ some text │", false}, // has text
+		{"hello world", false},   // no box chars
+		{"├── file.go", false},   // has text
+		{"   ", false},           // all whitespace, no box chars
+		{"", false},              // empty
+		{"  █████████████████  ", true}, // block elements only
+		{"░░░░░░░░░░░░░░░░░░░░", true},  // light shade blocks
+	}
+	for _, tt := range tests {
+		got := isDecorativeLine(tt.line)
+		if got != tt.expected {
+			t.Errorf("isDecorativeLine(%q) = %v, want %v", tt.line, got, tt.expected)
+		}
+	}
+}
