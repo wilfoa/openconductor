@@ -37,6 +37,15 @@ func (c *testOpenCodeChecker) CheckAttention(lastLines []string) (HeuristicResul
 		if strings.Contains(lower, "ctrl+p commands") || strings.Contains(lower, "ctrl+t variants") {
 			hasIdleShortcuts = true
 		}
+		// Model selector footer: "Build  Claude Opus 4.6 Anthropic · max"
+		if strings.Contains(lower, " · ") {
+			for _, p := range []string{"anthropic", "openai", "google", "groq", "bedrock", "openrouter", "copilot", "local", "vertexai"} {
+				if strings.Contains(lower, p) {
+					hasIdleShortcuts = true
+					break
+				}
+			}
+		}
 		if strings.Contains(lower, "permission required") {
 			hasPermissionRequired = true
 		}
@@ -48,14 +57,15 @@ func (c *testOpenCodeChecker) CheckAttention(lastLines []string) (HeuristicResul
 		}
 	}
 
-	if hasEscInterrupt {
-		return Working, nil
-	}
+	// Permission and question dialogs take priority over working signal.
 	if hasPermissionRequired || hasAllowOnce {
 		return Certain, &AttentionEvent{Type: NeedsPermission, Detail: "opencode permission dialog detected", Source: "heuristic"}
 	}
 	if hasQuestionDialog {
 		return Certain, &AttentionEvent{Type: NeedsAnswer, Detail: "opencode question dialog detected", Source: "heuristic"}
+	}
+	if hasEscInterrupt {
+		return Working, nil
 	}
 	if hasIdleShortcuts {
 		return Certain, &AttentionEvent{Type: NeedsInput, Detail: "opencode is idle, waiting for prompt", Source: "heuristic"}
@@ -281,6 +291,45 @@ func TestE2E_OpenCode_QuestionDialogEnterConfirm(t *testing.T) {
 	}
 }
 
+func TestE2E_OpenCode_PermissionWithEscInterruptOverlay(t *testing.T) {
+	// When a permission modal overlays the screen, "esc interrupt" from the
+	// underlying progress bar can remain in the vt10x buffer. Permission
+	// must take priority.
+	d := NewDetector()
+	lines := simulateOpenCodePermissionWithOverlay()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eOpenCodeChecker)
+
+	if isWorking {
+		t.Error("expected isWorking=false for permission dialog (even with esc interrupt)")
+	}
+	if event == nil {
+		t.Fatal("expected attention event for permission dialog, got nil")
+	}
+	if event.Type != NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event.Type)
+	}
+}
+
+func TestE2E_OpenCode_ModelSelectorIdle(t *testing.T) {
+	// When OpenCode shows the model selector footer without "ctrl+p commands",
+	// it should still be detected as idle.
+	d := NewDetector()
+	lines := simulateOpenCodeModelSelectorIdle()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eOpenCodeChecker)
+
+	if isWorking {
+		t.Error("expected isWorking=false for model selector idle")
+	}
+	if event == nil {
+		t.Fatal("expected attention event for model selector idle, got nil")
+	}
+	if event.Type != NeedsInput {
+		t.Errorf("expected NeedsInput, got %v", event.Type)
+	}
+}
+
 func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 	d := NewDetector()
 	ctx := context.Background()
@@ -312,10 +361,22 @@ func TestE2E_OpenCode_StateTransitions(t *testing.T) {
 		t.Fatalf("phase 4 (question): expected NeedsAnswer, got %v", event)
 	}
 
-	// Phase 5: Back to idle
+	// Phase 5: Permission with overlay — should still detect permission
+	event, _ = d.Check(ctx, "proj1", simulateOpenCodePermissionWithOverlay(), livePID(), e2eOpenCodeChecker)
+	if event == nil || event.Type != NeedsPermission {
+		t.Fatalf("phase 5 (permission+overlay): expected NeedsPermission, got %v", event)
+	}
+
+	// Phase 6: Model selector idle
+	event, _ = d.Check(ctx, "proj1", simulateOpenCodeModelSelectorIdle(), livePID(), e2eOpenCodeChecker)
+	if event == nil || event.Type != NeedsInput {
+		t.Fatalf("phase 6 (model selector idle): expected NeedsInput, got %v", event)
+	}
+
+	// Phase 7: Back to classic idle (ctrl+p commands)
 	event, _ = d.Check(ctx, "proj1", simulateOpenCodeIdle(), livePID(), e2eOpenCodeChecker)
 	if event == nil || event.Type != NeedsInput {
-		t.Fatalf("phase 5 (idle again): expected NeedsInput, got %v", event)
+		t.Fatalf("phase 7 (idle again): expected NeedsInput, got %v", event)
 	}
 }
 
@@ -532,5 +593,71 @@ func simulateOpenCodeQuestion() []string {
 	for i := 14; i < 24; i++ {
 		lines[i] = ""
 	}
+	return lines
+}
+
+// ── OpenCode Permission With Overlay Scenario ───────────────────────────────
+//
+// Reconstructed from a real terminal capture (screenshot confirmed).
+// When OpenCode renders a permission modal, it only redraws the dialog
+// cells. The underlying "esc interrupt" progress text from the actively
+// generating model can remain in the vt10x buffer on a line not covered
+// by the modal overlay.
+
+func simulateOpenCodePermissionWithOverlay() []string {
+	lines := make([]string, 24)
+	lines[0] = "  It's mapbox_maps_flutter v2.x (version 85.0.0). Let me find the API:"
+	lines[1] = ""
+	lines[2] = "  # Find mapbox package cache location"
+	lines[3] = "  $ find /Users/amir/.pub-cache -type d -name \"mapbox_maps_flutter*\""
+	lines[4] = "  /Users/amir/.pub-cache/hosted/pub.dev/mapbox_maps_flutter-2.18.0"
+	lines[5] = ""
+	lines[6] = "  ● Read settings.dart [offset=640, limit=50]"
+	lines[7] = "  ● Grep \"scaleBarSettings\" in .../lib/src"
+	// The "esc interrupt" from the underlying progress bar is still in the buffer.
+	lines[8] = "  · · · · ■ ■  esc interrupt"
+	lines[9] = ""
+	lines[10] = "  ■ Build · claude-opus-4-6"
+	lines[11] = ""
+	// Permission dialog overlaid on top.
+	lines[12] = "  ⚠ Permission required"
+	lines[13] = "  ← Access external directory ~/.pub-cache/hosted/pub.dev/mapbox_maps_flutter-2.18.0/lib/src"
+	lines[14] = ""
+	lines[15] = "  Patterns"
+	lines[16] = "  - /Users/amir/.pub-cache/hosted/pub.dev/mapbox_maps_flutter-2.18.0/lib/src/*"
+	lines[17] = ""
+	lines[18] = "  Allow once   Allow always   Reject"
+	lines[19] = ""
+	for i := 20; i < 23; i++ {
+		lines[i] = ""
+	}
+	lines[23] = "  ctrl+f  fullscreen  s select  enter confirm"
+	return lines
+}
+
+// ── OpenCode Model Selector Idle Scenario ───────────────────────────────────
+//
+// Reconstructed from a real terminal capture (screenshot confirmed).
+// When OpenCode is idle, some versions show the model selector footer
+// ("Build  Claude Opus 4.6 Anthropic · max") instead of the keyboard
+// shortcuts ("ctrl+p commands").
+
+func simulateOpenCodeModelSelectorIdle() []string {
+	lines := make([]string, 24)
+	lines[0] = "  All tests pass. Here's a summary:"
+	lines[1] = ""
+	lines[2] = "  Bug 1 — Permission dialog not detected"
+	lines[3] = "  Bug 2 — Stale session index after closing all tabs"
+	lines[4] = ""
+	lines[5] = "  Want me to commit these?"
+	lines[6] = ""
+	lines[7] = "  ■ Build · claude-opus-4-6 · 5m 20s"
+	lines[8] = ""
+	for i := 9; i < 22; i++ {
+		lines[i] = ""
+	}
+	// Model selector footer — no "ctrl+p commands" or "esc interrupt".
+	lines[22] = "  Build  Claude Opus 4.6 Anthropic · max"
+	lines[23] = ""
 	return lines
 }

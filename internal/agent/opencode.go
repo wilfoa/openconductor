@@ -88,10 +88,11 @@ func (a *opencodeAdapter) SubmitDelay() time.Duration {
 //
 //	↕ select  enter submit  esc dismiss
 //
-// Idle/done: The progress bar disappears and the bottom shows keyboard
-// shortcuts like "ctrl+t variants  tab agents  ctrl+p commands" without
-// "esc interrupt". This means the agent has finished and is waiting for
-// the user's next prompt.
+// Idle/done: The progress bar disappears and the bottom shows either
+// keyboard shortcuts like "ctrl+t variants  tab agents  ctrl+p commands"
+// or the model selector "Build  Claude Opus 4.6 Anthropic · max"
+// without "esc interrupt". This means the agent has finished and is
+// waiting for the user's next prompt.
 func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.HeuristicResult, *attention.AttentionEvent) {
 	hasEscInterrupt := false
 	hasIdleShortcuts := false
@@ -113,6 +114,12 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 			hasEscInterrupt = true
 		}
 		if strings.Contains(lower, "ctrl+p commands") || strings.Contains(lower, "ctrl+t variants") {
+			hasIdleShortcuts = true
+		}
+		// Model selector footer visible when idle: "Build  Claude Opus 4.6 Anthropic · max".
+		// The middle-dot separator + provider name is unique to the model selector
+		// and does not appear during working state (which shows "esc interrupt").
+		if isModelSelectorLine(lower) {
 			hasIdleShortcuts = true
 		}
 		if strings.Contains(lower, "permission required") {
@@ -176,6 +183,34 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	}
 
 	return attention.No, nil
+}
+
+// knownProviders are lowercase LLM provider names that appear in the
+// OpenCode model selector footer (e.g., "Build  Claude Opus 4.6 Anthropic · max").
+var knownProviders = []string{
+	"anthropic", "openai", "google", "groq", "bedrock",
+	"openrouter", "copilot", "local", "vertexai",
+}
+
+// isModelSelectorLine returns true if the line matches OpenCode's idle-state
+// model selector footer. The format is:
+//
+//	<mode>  <model_name> <provider> · <setting>
+//
+// We match by looking for a known provider name followed by " · " on the
+// same line. This pattern does not appear during working state (which shows
+// "esc interrupt") or in modal dialogs.
+func isModelSelectorLine(lower string) bool {
+	// The middle-dot separator " · " (U+00B7) is the key distinguisher.
+	if !strings.Contains(lower, " · ") {
+		return false
+	}
+	for _, p := range knownProviders {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // FilterScreen extracts the conversation panel from the OpenCode TUI by

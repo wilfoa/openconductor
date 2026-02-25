@@ -579,6 +579,20 @@ func TestOpenCode_EscInterruptSuppressesGenericError(t *testing.T) {
 	}
 }
 
+func TestOpenCode_ProviderNameInConversation_NotIdle(t *testing.T) {
+	// "Anthropic" appearing in conversation text (without " · " separator)
+	// should NOT trigger idle detection.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"  I'm using the Anthropic API to call Claude.",
+		"  The OpenAI client is similar.",
+	}
+	result, _ := adapter.CheckAttention(lines)
+	if result != attention.No {
+		t.Errorf("expected No for provider name in conversation, got %v", result)
+	}
+}
+
 func TestOpenCode_NoAgentSignals(t *testing.T) {
 	// OpenCode output without specific signals returns No.
 	adapter := &opencodeAdapter{}
@@ -589,6 +603,61 @@ func TestOpenCode_NoAgentSignals(t *testing.T) {
 	}
 	if event != nil {
 		t.Errorf("expected nil event, got %v", event)
+	}
+}
+
+func TestOpenCode_ModelSelectorIdle(t *testing.T) {
+	// When OpenCode is idle, the footer shows the model selector instead of
+	// "ctrl+p commands". The provider + " · " pattern should trigger idle.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"  I've fixed the bug in main.go.",
+		"",
+		"",
+		"  Build  Claude Opus 4.6 Anthropic · max",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput, got %v", event)
+	}
+}
+
+func TestOpenCode_ModelSelectorVariants(t *testing.T) {
+	// Test multiple provider formats in the model selector.
+	adapter := &opencodeAdapter{}
+	cases := []string{
+		"  Build  GPT-4o OpenAI · max",
+		"  Build  Gemini 2.5 Google · high",
+		"  Build  Llama 4 Groq · medium",
+		"  Chat  Claude Sonnet 4 Anthropic · max",
+	}
+	for _, footer := range cases {
+		lines := []string{"output", "", footer}
+		result, event := adapter.CheckAttention(lines)
+		if result != attention.Certain {
+			t.Errorf("footer %q: expected Certain, got %v", footer, result)
+		}
+		if event == nil || event.Type != attention.NeedsInput {
+			t.Errorf("footer %q: expected NeedsInput, got %v", footer, event)
+		}
+	}
+}
+
+func TestOpenCode_ModelSelectorIgnoredDuringWorking(t *testing.T) {
+	// If "esc interrupt" is also present (e.g., modal overlay didn't cover
+	// the model line), working should still win because no permission or
+	// question dialog is active.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"  Build  Claude Opus 4.6 Anthropic · max",
+		"· · · · ■ ■  esc interrupt",
+	}
+	result, _ := adapter.CheckAttention(lines)
+	if result != attention.Working {
+		t.Errorf("expected Working when esc interrupt is present, got %v", result)
 	}
 }
 
