@@ -174,7 +174,18 @@ func runTUI(debug bool) {
 		"projects", len(cfg.Projects),
 	)
 
-	app := tui.NewApp(cfg, configPath)
+	// Load saved state (open tabs from previous session).
+	statePath := config.DefaultStatePath()
+	restoredState := config.LoadState(statePath)
+	if len(restoredState.OpenTabs) > 0 {
+		logging.Info("restoring tabs from previous session",
+			"tabs", len(restoredState.OpenTabs),
+			"active", restoredState.ActiveTab,
+		)
+	}
+
+	app := tui.NewApp(cfg, configPath, &restoredState)
+	app.SetStatePath(statePath)
 
 	// Wire L2 LLM classifier and auto-approver if an LLM is configured.
 	// Both the attention classifier and permission classifier share the same
@@ -243,7 +254,14 @@ func runTUI(debug bool) {
 	}
 
 	logging.Info("starting TUI")
-	if _, err := p.Run(); err != nil {
+	finalModel, err := p.Run()
+	// Save state regardless of how the program exited. The Ctrl+C path
+	// already saves in the Update handler, but signal-based exits and
+	// errors may bypass it. SaveState is idempotent.
+	if final, ok := finalModel.(tui.App); ok {
+		final.SaveStatePublic()
+	}
+	if err != nil {
 		// Disable kitty keyboard protocol before exiting.
 		os.Stdout.WriteString("\x1b[<u")
 		if tgBot != nil {

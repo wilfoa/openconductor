@@ -27,7 +27,7 @@ func makeTestApp() App {
 		},
 	}
 
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 80
 	app.height = 15 // bumped from 12 to accommodate 3-line tab bar
 	app.ready = true
@@ -197,7 +197,7 @@ func TestTabVisualInvariants(t *testing.T) {
 				{Name: "solo", Repo: "/tmp/solo", Agent: config.AgentClaudeCode},
 			},
 		}
-		single := NewApp(singleCfg, "")
+		single := NewApp(singleCfg, "", nil)
 		single.width = 80
 		single.height = 15
 		single.ready = true

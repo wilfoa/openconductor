@@ -31,21 +31,21 @@ func configWithProjects() *config.Config {
 }
 
 func TestNewAppFocusesSidebarWhenEmpty(t *testing.T) {
-	app := NewApp(emptyConfig(), "")
+	app := NewApp(emptyConfig(), "", nil)
 	if app.focus != focusSidebar {
 		t.Fatalf("expected focusSidebar, got %d", app.focus)
 	}
 }
 
 func TestNewAppFocusesTerminalWithProjects(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	if app.focus != focusTerminal {
 		t.Fatalf("expected focusTerminal, got %d", app.focus)
 	}
 }
 
 func TestCtrlSTogglesFocus(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	if app.focus != focusTerminal {
 		t.Fatal("precondition: expected focusTerminal")
 	}
@@ -68,7 +68,7 @@ func TestCtrlSTogglesFocus(t *testing.T) {
 }
 
 func TestCtrlSIgnoredInSidebarFormMode(t *testing.T) {
-	app := NewApp(emptyConfig(), "")
+	app := NewApp(emptyConfig(), "", nil)
 	app.focus = focusSidebar
 	app.sidebar.focused = true
 	app.sidebar.mode = sidebarForm
@@ -90,7 +90,7 @@ func TestCtrlSIgnoredInSidebarFormMode(t *testing.T) {
 }
 
 func TestAppProjectAddedUpdatesConfig(t *testing.T) {
-	app := NewApp(emptyConfig(), "")
+	app := NewApp(emptyConfig(), "", nil)
 
 	msg := ProjectAddedMsg{
 		Project: config.Project{Name: "new", Repo: "/tmp/new", Agent: config.AgentGemini},
@@ -110,7 +110,7 @@ func TestAppProjectAddedUpdatesConfig(t *testing.T) {
 }
 
 func TestAppProjectDeletedUpdatesConfig(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 
 	msg := ProjectDeletedMsg{Name: "proj1"}
 	model, _ := app.Update(msg)
@@ -125,7 +125,7 @@ func TestAppProjectDeletedUpdatesConfig(t *testing.T) {
 }
 
 func TestAppFormCancelledResetsMode(t *testing.T) {
-	app := NewApp(emptyConfig(), "")
+	app := NewApp(emptyConfig(), "", nil)
 	app.sidebar.mode = sidebarForm
 
 	model, _ := app.Update(FormCancelledMsg{})
@@ -137,7 +137,7 @@ func TestAppFormCancelledResetsMode(t *testing.T) {
 }
 
 func TestAppMouseRoutesToSidebar(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.focus = focusTerminal
 	app.sidebar.focused = false
 	app.terminal.focused = true
@@ -164,7 +164,7 @@ func TestAppMouseRoutesToSidebar(t *testing.T) {
 }
 
 func TestAppDragSidebarSeparator(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 120
 	app.height = 40
 
@@ -212,7 +212,7 @@ func TestAppDragSidebarSeparator(t *testing.T) {
 }
 
 func TestAppDragClampsMinimum(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 120
 	app.height = 40
 	app.dragging = true
@@ -232,7 +232,7 @@ func TestAppDragClampsMinimum(t *testing.T) {
 }
 
 func TestAppDragClampsMaximum(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 100
 	app.height = 40
 	app.dragging = true
@@ -253,7 +253,7 @@ func TestAppDragClampsMaximum(t *testing.T) {
 }
 
 func TestNewAppOpensFirstTab(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	if len(app.openTabs) != 1 {
 		t.Fatalf("expected 1 open tab, got %d", len(app.openTabs))
 	}
@@ -263,14 +263,96 @@ func TestNewAppOpensFirstTab(t *testing.T) {
 }
 
 func TestNewAppEmptyHasNoTabs(t *testing.T) {
-	app := NewApp(emptyConfig(), "")
+	app := NewApp(emptyConfig(), "", nil)
 	if len(app.openTabs) != 0 {
 		t.Fatalf("expected 0 open tabs, got %d", len(app.openTabs))
 	}
 }
 
+// ── Tab restore from saved state ────────────────────────────────
+
+func TestNewApp_RestoresTabs(t *testing.T) {
+	cfg := configWith3Projects() // alpha, beta, gamma
+	state := &config.AppState{
+		OpenTabs:  []string{"beta", "gamma"},
+		ActiveTab: "gamma",
+	}
+	app := NewApp(cfg, "", state)
+
+	if len(app.openTabs) != 2 {
+		t.Fatalf("expected 2 restored tabs, got %d", len(app.openTabs))
+	}
+	if app.openTabs[0] != "beta" || app.openTabs[1] != "gamma" {
+		t.Errorf("tabs: got %v, want [beta gamma]", app.openTabs)
+	}
+	// Active project index should point to gamma (index 2).
+	if cfg.Projects[app.active].Name != "gamma" {
+		t.Errorf("active project: got %q, want gamma", cfg.Projects[app.active].Name)
+	}
+	// Sidebar should mark both as open.
+	if !app.sidebar.openTabs["beta"] || !app.sidebar.openTabs["gamma"] {
+		t.Errorf("sidebar openTabs not synced: %v", app.sidebar.openTabs)
+	}
+}
+
+func TestNewApp_RestoreFiltersDeletedProjects(t *testing.T) {
+	cfg := configWithProjects() // has proj1, proj2
+	state := &config.AppState{
+		OpenTabs:  []string{"proj2", "deleted_project", "proj1"},
+		ActiveTab: "proj2",
+	}
+	app := NewApp(cfg, "", state)
+
+	// "deleted_project" should be filtered out.
+	if len(app.openTabs) != 2 {
+		t.Fatalf("expected 2 tabs (deleted filtered out), got %d: %v", len(app.openTabs), app.openTabs)
+	}
+	if app.openTabs[0] != "proj2" || app.openTabs[1] != "proj1" {
+		t.Errorf("tabs: got %v, want [proj2 proj1]", app.openTabs)
+	}
+}
+
+func TestNewApp_EmptyRestoreFallsBackToFirstProject(t *testing.T) {
+	cfg := configWithProjects()
+	state := &config.AppState{
+		OpenTabs: []string{}, // empty state
+	}
+	app := NewApp(cfg, "", state)
+
+	// Should fall back to opening the first project.
+	if len(app.openTabs) != 1 || app.openTabs[0] != "proj1" {
+		t.Errorf("expected fallback to [proj1], got %v", app.openTabs)
+	}
+}
+
+func TestNewApp_AllTabsDeletedFallsBackToFirstProject(t *testing.T) {
+	cfg := configWithProjects()
+	state := &config.AppState{
+		OpenTabs: []string{"gone1", "gone2"}, // all deleted
+	}
+	app := NewApp(cfg, "", state)
+
+	// All restored tabs were filtered out → falls back to first project.
+	if len(app.openTabs) != 1 || app.openTabs[0] != "proj1" {
+		t.Errorf("expected fallback to [proj1], got %v", app.openTabs)
+	}
+}
+
+func TestNewApp_PendingRestoreTabsSet(t *testing.T) {
+	cfg := configWith3Projects() // alpha, beta, gamma
+	state := &config.AppState{
+		OpenTabs: []string{"alpha", "gamma"},
+	}
+	app := NewApp(cfg, "", state)
+
+	// pendingRestoreTabs should be set so WindowSizeMsg starts all sessions.
+	if len(app.pendingRestoreTabs) != 2 {
+		t.Fatalf("expected 2 pending restore tabs, got %d", len(app.pendingRestoreTabs))
+	}
+}
+
 func TestAppProjectSwitchedReturnsStartCmd(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Initially only proj1 is open.
 	if len(app.openTabs) != 1 {
 		t.Fatalf("precondition: expected 1 tab, got %d", len(app.openTabs))
@@ -286,7 +368,7 @@ func TestAppProjectSwitchedReturnsStartCmd(t *testing.T) {
 }
 
 func TestSessionStartedAddsTab(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Inject a session and simulate sessionStartedMsg.
 	sess := &session.Session{
 		ID:       "proj2",
@@ -305,7 +387,7 @@ func TestSessionStartedAddsTab(t *testing.T) {
 }
 
 func TestAppProjectDeletedRemovesTab(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Inject sessions for both projects so the delete handler can find them.
 	sess1 := &session.Session{
 		ID: "proj1", Instance: 1,
@@ -335,7 +417,7 @@ func TestAppProjectDeletedRemovesTab(t *testing.T) {
 }
 
 func TestAppProjectAddedReturnsStartCmd(t *testing.T) {
-	app := NewApp(emptyConfig(), "")
+	app := NewApp(emptyConfig(), "", nil)
 
 	msg := ProjectAddedMsg{
 		Project: config.Project{Name: "new", Repo: "/tmp/new", Agent: config.AgentGemini},
@@ -385,7 +467,7 @@ func testTabWidth(sessionID string, state SessionState, isActive bool) int {
 }
 
 func TestTabHitTestSingleTab(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Only proj1 is in openTabs and it is active.
 
 	// X=0 should be inside the first (and only) tab.
@@ -403,7 +485,7 @@ func TestTabHitTestSingleTab(t *testing.T) {
 
 func TestTabHitTestMultipleTabs(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	// Inject sessions and open tabs.
 	for _, p := range cfg.Projects {
 		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
@@ -449,7 +531,7 @@ func TestTabHitTestMultipleTabs(t *testing.T) {
 }
 
 func TestTabHitTestNegativeX(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	if idx, _ := app.tabHitTest(-5); idx != -1 {
 		t.Fatalf("expected -1 for negative X, got %d", idx)
 	}
@@ -457,7 +539,7 @@ func TestTabHitTestNegativeX(t *testing.T) {
 
 func TestTabHitTestCloseRegion(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	// Inject sessions.
 	for _, p := range cfg.Projects[:2] {
 		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
@@ -506,7 +588,7 @@ func TestTabHitTestCloseRegion(t *testing.T) {
 }
 
 func TestProjectIndexByName(t *testing.T) {
-	app := NewApp(configWith3Projects(), "")
+	app := NewApp(configWith3Projects(), "", nil)
 
 	if idx := app.projectIndexByName("alpha"); idx != 0 {
 		t.Fatalf("expected 0 for 'alpha', got %d", idx)
@@ -521,7 +603,7 @@ func TestProjectIndexByName(t *testing.T) {
 
 func TestTabClickSwitchesSession(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 160
 	app.height = 40
 
@@ -565,7 +647,7 @@ func TestTabClickSwitchesSession(t *testing.T) {
 
 func TestTabCloseClick(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 160
 	app.height = 40
 
@@ -610,7 +692,7 @@ func TestTabCloseClick(t *testing.T) {
 
 func TestTabClosedMsgRemovesTab(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	// Inject sessions.
 	for _, p := range cfg.Projects {
 		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
@@ -638,7 +720,7 @@ func TestTabClosedMsgRemovesTab(t *testing.T) {
 
 func TestTabClosedMsgSwitchesIfActive(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	// Inject sessions.
 	for _, p := range cfg.Projects[:2] {
 		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
@@ -666,7 +748,7 @@ func TestTabClosedMsgSwitchesIfActive(t *testing.T) {
 }
 
 func TestTabClosedLastTabClearsTerminal(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Inject session.
 	sess := &session.Session{
 		ID: "proj1", Instance: 1,
@@ -697,7 +779,7 @@ func TestTabClosedLastTabClearsTerminal(t *testing.T) {
 }
 
 func TestTabClosedResetsStateToIdle(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Inject a session so closing it has something to clean up.
 	sess := &session.Session{
 		ID: "proj1", Instance: 1,
@@ -720,7 +802,7 @@ func TestTabClosedResetsStateToIdle(t *testing.T) {
 }
 
 func TestTabClickInGapNoSwitch(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 
@@ -745,7 +827,7 @@ func TestTabClickInGapNoSwitch(t *testing.T) {
 }
 
 func TestTabClickBelowTabBarNoSwitch(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 	app.addTab("proj2")
@@ -773,7 +855,7 @@ func TestTabClickBelowTabBarNoSwitch(t *testing.T) {
 // ── Scrollback tests ────────────────────────────────────────────
 
 func TestMouseWheelScrollsBackBuffer(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -814,7 +896,7 @@ func TestMouseWheelScrollsBackBuffer(t *testing.T) {
 }
 
 func TestKeyboardSnapsToLiveView(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -831,7 +913,7 @@ func TestKeyboardSnapsToLiveView(t *testing.T) {
 }
 
 func TestScrollOffsetWiredToStatusBar(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 	app.ready = true
@@ -860,7 +942,7 @@ func TestScrollbackE2EOpenCodeScenario(t *testing.T) {
 			{Name: "stocks", Repo: "/tmp/stocks", Agent: config.AgentOpenCode},
 		},
 	}
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 120
 	app.height = 30
 	app.ready = true
@@ -1015,7 +1097,7 @@ func TestScrollbackOffsetAdjustsOnNewData(t *testing.T) {
 			{Name: "p1", Repo: "/tmp/p1", Agent: config.AgentOpenCode},
 		},
 	}
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 120
 	app.height = 30
 	app.ready = true
@@ -1095,7 +1177,7 @@ func TestScrollbackOffsetAdjustsOnNewData(t *testing.T) {
 // ── Sticky state tests ──────────────────────────────────────────
 
 func TestStickyStatePreventsDowngrade(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 
 	// Simulate an attention state with a future sticky deadline.
 	app.sidebar.states["proj1"] = StateNeedsAttention
@@ -1126,7 +1208,7 @@ func TestProjectSwitchClearsStickyTimer(t *testing.T) {
 	// Sticky timers are now per-session ID, not project name.
 	// Verify that TabSwitchedMsg does not clear them (they expire on their own).
 	// This test now verifies the sticky timer mechanism still works.
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.stateStickUntil["proj1"] = time.Now().Add(10 * time.Second)
 
 	// Sticky timer should exist.
@@ -1153,7 +1235,7 @@ func TestProjectSwitchClearsStickyTimer(t *testing.T) {
 // ── Too-small terminal tests ────────────────────────────────────
 
 func TestTooSmallBothDimensions(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 40
 	app.height = 5
 	app.ready = true
@@ -1163,7 +1245,7 @@ func TestTooSmallBothDimensions(t *testing.T) {
 }
 
 func TestTooSmallWidthOnly(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = minAppWidth - 1
 	app.height = 40
 	app.ready = true
@@ -1173,7 +1255,7 @@ func TestTooSmallWidthOnly(t *testing.T) {
 }
 
 func TestTooSmallHeightOnly(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 120
 	app.height = minAppHeight - 1
 	app.ready = true
@@ -1183,7 +1265,7 @@ func TestTooSmallHeightOnly(t *testing.T) {
 }
 
 func TestNotTooSmallAtMinimum(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = minAppWidth
 	app.height = minAppHeight
 	app.ready = true
@@ -1193,7 +1275,7 @@ func TestNotTooSmallAtMinimum(t *testing.T) {
 }
 
 func TestTooSmallViewShowsMessage(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 40
 	app.height = 5
 	app.ready = true
@@ -1208,7 +1290,7 @@ func TestTooSmallViewShowsMessage(t *testing.T) {
 }
 
 func TestWindowSizeMsgSkipsLayoutWhenTooSmall(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Start with usable size.
 	msg := tea.WindowSizeMsg{Width: 120, Height: 40}
 	model, _ := app.Update(msg)
@@ -1234,7 +1316,7 @@ func TestWindowSizeMsgSkipsLayoutWhenTooSmall(t *testing.T) {
 // ── Dimension clamping tests ────────────────────────────────────
 
 func TestTermDimensionsClampsToOne(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Set absurdly small dimensions.
 	app.width = 10
 	app.height = 3
@@ -1249,7 +1331,7 @@ func TestTermDimensionsClampsToOne(t *testing.T) {
 }
 
 func TestTermDimensionsNormalSize(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 120
 	app.height = 40
 
@@ -1270,7 +1352,7 @@ func TestTermDimensionsNormalSize(t *testing.T) {
 }
 
 func TestLayoutUsesTermDimensions(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 120
 	app.height = 40
 	app.layout()
@@ -1372,7 +1454,7 @@ func TestStateToEventKind_AllMappings(t *testing.T) {
 }
 
 func TestSendTelegramEvent_NilChannel(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// telegramCh is nil by default — should not panic.
 	app.sendTelegramEvent("proj1", "proj1", StateNeedsPermission, "test", []string{"screen"})
 }
@@ -1389,7 +1471,7 @@ func TestSendTelegramEvent_SkipsWorking(t *testing.T) {
 // ── System tab tests ────────────────────────────────────────────
 
 func TestSystemTabRequestMsg_KeybindingT(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.focus = focusSidebar
 	app.sidebar.focused = true
 
@@ -1415,7 +1497,7 @@ func TestSystemTabRequestMsg_KeybindingT(t *testing.T) {
 // ── Outbound event wiring: verify all attention types send events ─
 
 func TestSendTelegramEvent_AllAttentionTypes(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	ch := make(chan telegram.Event, 16)
 	app.SetTelegramChannel(ch)
 
@@ -1471,7 +1553,7 @@ func TestSendTelegramEvent_AllAttentionTypes(t *testing.T) {
 }
 
 func TestSendTelegramEvent_ChannelFull_DoesNotBlock(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	ch := make(chan telegram.Event, 1)
 	app.SetTelegramChannel(ch)
 
@@ -1508,7 +1590,7 @@ func TestSendTelegramEvent_ChannelFull_DoesNotBlock(t *testing.T) {
 type unknownCSISequenceMsg []byte
 
 func TestKittyCtrlC_DoubleTapExits(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -1550,7 +1632,7 @@ func TestKittyCtrlC_DoubleTapExits(t *testing.T) {
 }
 
 func TestKittyCtrlS_TogglesFocus(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -1574,7 +1656,7 @@ func TestKittyCtrlS_TogglesFocus(t *testing.T) {
 
 func TestKittyCtrlJ_SwitchesTab(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -1607,7 +1689,7 @@ func TestKittyCtrlJ_SwitchesTab(t *testing.T) {
 }
 
 func TestKittyShiftEnter_ForwardedToPTY(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -1635,7 +1717,7 @@ func TestKittyShiftEnter_ForwardedToPTY(t *testing.T) {
 // key message triggers tab switching when multiple tabs are open.
 func TestLegacyCtrlJ_SwitchesTab(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -1668,7 +1750,7 @@ func TestLegacyCtrlJ_SwitchesTab(t *testing.T) {
 // TestLegacyCtrlK_SwitchesTabForward verifies Ctrl+K switches to next tab.
 func TestLegacyCtrlK_SwitchesTabForward(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusTerminal
@@ -1701,7 +1783,7 @@ func TestLegacyCtrlK_SwitchesTabForward(t *testing.T) {
 // TestCtrlJK_FromSidebar verifies Ctrl+J/K work even when sidebar is focused.
 func TestCtrlJK_FromSidebar(t *testing.T) {
 	cfg := configWith3Projects()
-	app := NewApp(cfg, "")
+	app := NewApp(cfg, "", nil)
 	app.width = 160
 	app.height = 40
 	app.focus = focusSidebar
@@ -1725,7 +1807,7 @@ func TestCtrlJK_FromSidebar(t *testing.T) {
 }
 
 func TestSystemTabExitedMsg_ReloadsConfig(t *testing.T) {
-	app := NewApp(configWithProjects(), "")
+	app := NewApp(configWithProjects(), "", nil)
 	// Initially telegram is disabled.
 	if app.cfg.Telegram.Enabled {
 		t.Fatal("precondition: expected Telegram disabled")

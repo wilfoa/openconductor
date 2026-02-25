@@ -125,22 +125,64 @@ type App struct {
 	// scrollDirty tracks which projects received new PTY output since
 	// the last scroll check. Only dirty projects are checked on tick.
 	scrollDirty map[string]bool
+
+	// pendingRestoreTabs holds project names that should be started on
+	// the first WindowSizeMsg (when terminal dimensions are known). Set
+	// by NewApp from restored state; cleared after sessions are started.
+	pendingRestoreTabs []string
+
+	// statePath is the path to the ephemeral state file that stores which
+	// tabs were open on exit. Set via SetStatePath before starting the
+	// program.
+	statePath string
 }
 
 // NewApp creates the application model from a loaded configuration.
-func NewApp(cfg *config.Config, configPath string) App {
+// If restoredState is non-nil, the app restores the previously open tabs
+// instead of defaulting to the first project.
+func NewApp(cfg *config.Config, configPath string, restoredState *config.AppState) App {
 	initialFocus := focusTerminal
 	if len(cfg.Projects) == 0 {
 		initialFocus = focusSidebar
 	}
 
-	// Pre-open a tab for the first project (it will be auto-started).
+	// Determine which tabs to open on startup.
 	var openTabs []string
-	if len(cfg.Projects) > 0 {
+	var activeProjectName string
+
+	if restoredState != nil && len(restoredState.OpenTabs) > 0 {
+		// Restore tabs from the previous session, filtering out any
+		// projects that were deleted from the config since last run.
+		openTabs = config.FilterValidProjects(restoredState.OpenTabs, cfg.Projects)
+		activeProjectName = restoredState.ActiveTab
+	}
+
+	// Fall back to the first project if no tabs were restored.
+	if len(openTabs) == 0 && len(cfg.Projects) > 0 {
 		openTabs = []string{cfg.Projects[0].Name}
 	}
 
+	// Resolve the active project index for sidebar selection.
+	activeIdx := 0
+	if activeProjectName != "" {
+		for i, p := range cfg.Projects {
+			if p.Name == activeProjectName {
+				activeIdx = i
+				break
+			}
+		}
+	} else if len(openTabs) > 0 {
+		// Default to the first open tab's project.
+		for i, p := range cfg.Projects {
+			if p.Name == openTabs[0] {
+				activeIdx = i
+				break
+			}
+		}
+	}
+
 	sidebar := newSidebarModel(cfg.Projects, defaultSidebarWidth)
+	sidebar.selected = activeIdx
 	// Sync sidebar's openTabs map with the initial open tabs.
 	for _, name := range openTabs {
 		sidebar.openTabs[name] = true
@@ -153,7 +195,7 @@ func NewApp(cfg *config.Config, configPath string) App {
 		terminal:             newTerminalModel(),
 		statusbar:            newStatusBarModel(cfg.Projects),
 		focus:                initialFocus,
-		active:               0,
+		active:               activeIdx,
 		mgr:                  session.NewManager(),
 		detector:             attention.NewDetector(),
 		sidebarWidth:         defaultSidebarWidth,
@@ -164,6 +206,7 @@ func NewApp(cfg *config.Config, configPath string) App {
 		scrollSnapshots:      make(map[string][]string),
 		scrollGlyphSnapshots: make(map[string][]scrollbackLine),
 		scrollDirty:          make(map[string]bool),
+		pendingRestoreTabs:   openTabs,
 	}
 }
 
@@ -183,6 +226,18 @@ func (a *App) SetAutoApprover(aa *attention.AutoApprover) {
 // SetNotifier configures desktop notifications for attention events.
 func (a *App) SetNotifier(n Notifier) {
 	a.notifier = n
+}
+
+// SetStatePath configures where the app saves ephemeral state (open tabs)
+// on exit. Call this before starting the program.
+func (a *App) SetStatePath(path string) {
+	a.statePath = path
+}
+
+// SaveStatePublic persists the current open tabs to disk. Called by main()
+// after the program exits to ensure state is saved even on signal-based exits.
+func (a App) SaveStatePublic() {
+	a.saveState()
 }
 
 // SetTelegramChannel configures the outbound channel for the Telegram bot
@@ -278,13 +333,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.Resize(termW, termH)
 		}
 
-		// Start the first project session if nothing is active yet.
+		// Start sessions for restored tabs (or the first project on fresh launch).
 		if len(a.cfg.Projects) == 0 {
 			// No projects — keep sidebar focused.
 			a.focus = focusSidebar
 			a.sidebar.focused = true
 			a.terminal.focused = false
+		} else if a.mgr.ActiveSession() == nil && len(a.pendingRestoreTabs) > 0 {
+			// Start a session for each restored tab.
+			for _, name := range a.pendingRestoreTabs {
+				if p, ok := a.projectByName(name); ok {
+					cmds = append(cmds, a.startSessionCmd(p))
+				}
+			}
+			a.pendingRestoreTabs = nil
 		} else if a.mgr.ActiveSession() == nil {
+			// No restored state — start the first project.
 			cmd := a.startSessionCmd(a.cfg.Projects[0])
 			cmds = append(cmds, cmd)
 		}
@@ -297,6 +361,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isKey(msg, keys.Quit) {
 			now := time.Now()
 			if !a.lastCtrlC.IsZero() && now.Sub(a.lastCtrlC) < ctrlCWindow {
+				a.saveState()
 				a.mgr.Close()
 				a.terminal.Close()
 				return a, tea.Quit
@@ -1320,6 +1385,54 @@ func (a App) switchTab(delta int) tea.Cmd {
 	return func() tea.Msg {
 		return TabSwitchedMsg{SessionID: targetID}
 	}
+}
+
+// saveState writes the current open tabs and active project to the state file
+// so they can be restored on the next launch.
+func (a *App) saveState() {
+	if a.statePath == "" {
+		return
+	}
+
+	// Collect project names from open tabs.
+	// openTabs stores session IDs, but the session ID for the first
+	// instance of a project is just the project name. For multi-instance
+	// tabs (e.g. "Proj (2)"), we still save them — they'll map back to
+	// the project name on restore.
+	var tabNames []string
+	for _, sessionID := range a.openTabs {
+		if s := a.mgr.GetSession(sessionID); s != nil {
+			tabNames = append(tabNames, s.Project.Name)
+		}
+	}
+
+	// Determine the active project name.
+	var activeProject string
+	if s := a.mgr.ActiveSession(); s != nil {
+		activeProject = s.Project.Name
+	}
+
+	state := config.AppState{
+		OpenTabs:  tabNames,
+		ActiveTab: activeProject,
+	}
+
+	if err := config.SaveState(a.statePath, state); err != nil {
+		logging.Error("failed to save state", "err", err)
+	} else {
+		logging.Debug("state saved", "tabs", len(tabNames), "active", activeProject)
+	}
+}
+
+// projectByName returns the project with the given name and true, or a zero
+// value and false if not found.
+func (a App) projectByName(name string) (config.Project, bool) {
+	for _, p := range a.cfg.Projects {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return config.Project{}, false
 }
 
 // projectIndexByName returns the index of the project with the given name, or -1.

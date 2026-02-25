@@ -119,3 +119,107 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// ── State persistence tests ─────────────────────────────────────
+
+func TestSaveAndLoadState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	original := AppState{
+		OpenTabs:  []string{"ProjectA", "ProjectB", "ProjectC"},
+		ActiveTab: "ProjectB",
+	}
+
+	if err := SaveState(path, original); err != nil {
+		t.Fatalf("SaveState failed: %v", err)
+	}
+
+	loaded := LoadState(path)
+	if len(loaded.OpenTabs) != 3 {
+		t.Fatalf("expected 3 tabs, got %d", len(loaded.OpenTabs))
+	}
+	for i, name := range original.OpenTabs {
+		if loaded.OpenTabs[i] != name {
+			t.Errorf("tab %d: got %q, want %q", i, loaded.OpenTabs[i], name)
+		}
+	}
+	if loaded.ActiveTab != "ProjectB" {
+		t.Errorf("active tab: got %q, want %q", loaded.ActiveTab, "ProjectB")
+	}
+}
+
+func TestLoadState_MissingFile(t *testing.T) {
+	state := LoadState("/nonexistent/path/state.json")
+	if len(state.OpenTabs) != 0 {
+		t.Fatalf("expected empty tabs for missing file, got %d", len(state.OpenTabs))
+	}
+	if state.ActiveTab != "" {
+		t.Fatalf("expected empty active tab, got %q", state.ActiveTab)
+	}
+}
+
+func TestLoadState_InvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	os.WriteFile(path, []byte("{invalid json"), 0o644)
+
+	state := LoadState(path)
+	if len(state.OpenTabs) != 0 {
+		t.Fatalf("expected empty tabs for invalid JSON, got %d", len(state.OpenTabs))
+	}
+}
+
+func TestFilterValidProjects(t *testing.T) {
+	projects := []Project{
+		{Name: "Alpha", Repo: "/a", Agent: AgentOpenCode},
+		{Name: "Beta", Repo: "/b", Agent: AgentOpenCode},
+		{Name: "Gamma", Repo: "/g", Agent: AgentClaudeCode},
+	}
+
+	// Tab list includes a deleted project "Deleted".
+	tabs := []string{"Beta", "Deleted", "Alpha"}
+	result := FilterValidProjects(tabs, projects)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 valid tabs, got %d: %v", len(result), result)
+	}
+	if result[0] != "Beta" || result[1] != "Alpha" {
+		t.Errorf("expected [Beta Alpha], got %v", result)
+	}
+}
+
+func TestFilterValidProjects_AllDeleted(t *testing.T) {
+	projects := []Project{
+		{Name: "Alpha", Repo: "/a", Agent: AgentOpenCode},
+	}
+	tabs := []string{"Gone1", "Gone2"}
+	result := FilterValidProjects(tabs, projects)
+
+	if len(result) != 0 {
+		t.Fatalf("expected 0 valid tabs, got %d", len(result))
+	}
+}
+
+func TestFilterValidProjects_EmptyTabs(t *testing.T) {
+	projects := []Project{{Name: "A", Repo: "/a", Agent: AgentOpenCode}}
+	result := FilterValidProjects(nil, projects)
+	if len(result) != 0 {
+		t.Fatalf("expected 0 tabs for nil input, got %d", len(result))
+	}
+}
+
+func TestSaveState_CreatesDirectories(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "deep", "state.json")
+
+	err := SaveState(path, AppState{OpenTabs: []string{"A"}})
+	if err != nil {
+		t.Fatalf("SaveState should create nested dirs: %v", err)
+	}
+
+	loaded := LoadState(path)
+	if len(loaded.OpenTabs) != 1 || loaded.OpenTabs[0] != "A" {
+		t.Fatalf("round-trip failed: %+v", loaded)
+	}
+}
