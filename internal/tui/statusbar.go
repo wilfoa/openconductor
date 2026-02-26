@@ -53,6 +53,7 @@ func (m statusBarModel) View() string {
 		hints = []struct{ key, label string }{
 			{"^S", "sidebar"},
 			{"^j/k", "tab"},
+			{"F2", "rename"},
 			{"Ctrl+C", "exit"},
 		}
 	}

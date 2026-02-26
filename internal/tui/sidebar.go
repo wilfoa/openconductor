@@ -27,7 +27,7 @@ const (
 const (
 	sidebarTopPad    = 1
 	sidebarTitleRows = 2 // title + margin
-	projectRows      = 2 // name line + agent line
+	projectRows      = 3 // name line + agent line + separator
 )
 
 type sidebarModel struct {
@@ -238,8 +238,10 @@ func (m sidebarModel) addButtonY() int {
 		// Empty state: title(2) + 2 hint lines + 1 blank
 		return sidebarTopPad + sidebarTitleRows + 3
 	}
-	// After projects + 1 blank line for spacing.
-	return sidebarTopPad + sidebarTitleRows + len(m.projects)*projectRows + 1
+	// Each project occupies projectRows (name + agent + separator), but the
+	// last project has no separator — the blank line before the button fills
+	// that slot.  So total = N * projectRows with no extra +1.
+	return sidebarTopPad + sidebarTitleRows + len(m.projects)*projectRows
 }
 
 func (m sidebarModel) View() string {
@@ -313,6 +315,10 @@ func (m sidebarModel) View() string {
 					b.WriteString(projectAgentStyle.Render(agentLine))
 				}
 				b.WriteString("\n")
+				if i < len(m.projects)-1 {
+					b.WriteString(projectSeparatorStyle.Render(strings.Repeat("─", innerWidth)))
+					b.WriteString("\n")
+				}
 			}
 		}
 

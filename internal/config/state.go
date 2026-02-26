@@ -9,12 +9,21 @@ import (
 	"path/filepath"
 )
 
+// TabState stores the persistent state of a single tab.
+type TabState struct {
+	// Project is the project name this tab is associated with.
+	Project string `json:"project"`
+	// Label is the user-assigned display name. Empty means use the
+	// default session ID (project name or "project (N)").
+	Label string `json:"label,omitempty"`
+}
+
 // AppState stores ephemeral runtime state that persists across restarts,
 // such as which tabs were open and which was active. This is intentionally
 // separate from the user-editable config.yaml.
 type AppState struct {
-	// OpenTabs is the list of project names that had open tabs, in order.
-	OpenTabs []string `json:"open_tabs"`
+	// OpenTabs is the list of tabs that were open, in order.
+	OpenTabs []TabState `json:"open_tabs"`
 	// ActiveTab is the project name of the tab that was focused when the
 	// user exited. Empty string means "use the first open tab".
 	ActiveTab string `json:"active_tab"`
@@ -52,19 +61,29 @@ func SaveState(path string, state AppState) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// FilterValidProjects returns only the project names from tabs that still
-// exist in the current config. Projects that were deleted since the last
-// session are silently removed.
-func FilterValidProjects(tabs []string, projects []Project) []string {
+// FilterValidTabs returns only the tabs whose project still exists in the
+// current config. Projects that were deleted since the last session are
+// silently removed.
+func FilterValidTabs(tabs []TabState, projects []Project) []TabState {
 	valid := make(map[string]bool, len(projects))
 	for _, p := range projects {
 		valid[p.Name] = true
 	}
-	var result []string
-	for _, name := range tabs {
-		if valid[name] {
-			result = append(result, name)
+	var result []TabState
+	for _, ts := range tabs {
+		if valid[ts.Project] {
+			result = append(result, ts)
 		}
 	}
 	return result
+}
+
+// TabProjectNames extracts just the project names from a slice of TabState,
+// preserving order.
+func TabProjectNames(tabs []TabState) []string {
+	names := make([]string, len(tabs))
+	for i, ts := range tabs {
+		names[i] = ts.Project
+	}
+	return names
 }

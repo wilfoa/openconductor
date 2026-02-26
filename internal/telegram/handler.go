@@ -198,12 +198,13 @@ func writeWithEnter(s *session.Session, text string) {
 }
 
 // PermissionKeyboard returns an inline keyboard for permission requests.
+// Emoji prefixes provide visual color cues since Telegram buttons are unstyled.
 func PermissionKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Allow Once", FormatCallbackData("perm", project, "allow")),
-			tgbotapi.NewInlineKeyboardButtonData("Allow Always", FormatCallbackData("perm", project, "allowall")),
-			tgbotapi.NewInlineKeyboardButtonData("Deny", FormatCallbackData("perm", project, "deny")),
+			tgbotapi.NewInlineKeyboardButtonData("🟢 Allow Once", FormatCallbackData("perm", project, "allow")),
+			tgbotapi.NewInlineKeyboardButtonData("🟡 Allow Always", FormatCallbackData("perm", project, "allowall")),
+			tgbotapi.NewInlineKeyboardButtonData("🔴 Deny", FormatCallbackData("perm", project, "deny")),
 		),
 	)
 }
@@ -213,10 +214,10 @@ func PermissionKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
 func AttentionKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("yes", FormatCallbackData("reply", project, "yes")),
-			tgbotapi.NewInlineKeyboardButtonData("no", FormatCallbackData("reply", project, "no")),
-			tgbotapi.NewInlineKeyboardButtonData("continue", FormatCallbackData("reply", project, "continue")),
-			tgbotapi.NewInlineKeyboardButtonData("skip", FormatCallbackData("reply", project, "skip")),
+			tgbotapi.NewInlineKeyboardButtonData("🟡 yes", FormatCallbackData("reply", project, "yes")),
+			tgbotapi.NewInlineKeyboardButtonData("🟡 no", FormatCallbackData("reply", project, "no")),
+			tgbotapi.NewInlineKeyboardButtonData("🟡 continue", FormatCallbackData("reply", project, "continue")),
+			tgbotapi.NewInlineKeyboardButtonData("⏭ skip", FormatCallbackData("reply", project, "skip")),
 		),
 	)
 }
@@ -225,21 +226,22 @@ func AttentionKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
 func ErrorKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("retry", FormatCallbackData("reply", project, "retry")),
-			tgbotapi.NewInlineKeyboardButtonData("skip", FormatCallbackData("reply", project, "skip")),
-			tgbotapi.NewInlineKeyboardButtonData("abort", FormatCallbackData("reply", project, "abort")),
+			tgbotapi.NewInlineKeyboardButtonData("🔄 retry", FormatCallbackData("reply", project, "retry")),
+			tgbotapi.NewInlineKeyboardButtonData("⏭ skip", FormatCallbackData("reply", project, "skip")),
+			tgbotapi.NewInlineKeyboardButtonData("🔴 abort", FormatCallbackData("reply", project, "abort")),
 		),
 	)
 }
 
 // QuestionKeyboard returns an inline keyboard for question options.
+// Each option gets a purple circle prefix for visual distinction.
 func QuestionKeyboard(project string, options []string) tgbotapi.InlineKeyboardMarkup {
 	var buttons []tgbotapi.InlineKeyboardButton
 	for _, opt := range options {
 		// Extract just the leading number (before "." or ")").
 		num := extractLeadingNumber(strings.TrimSpace(opt))
 		buttons = append(buttons,
-			tgbotapi.NewInlineKeyboardButtonData(opt, FormatCallbackData("opt", project, num)),
+			tgbotapi.NewInlineKeyboardButtonData("🟣 "+opt, FormatCallbackData("opt", project, num)),
 		)
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(buttons)

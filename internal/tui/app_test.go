@@ -274,7 +274,10 @@ func TestNewAppEmptyHasNoTabs(t *testing.T) {
 func TestNewApp_RestoresTabs(t *testing.T) {
 	cfg := configWith3Projects() // alpha, beta, gamma
 	state := &config.AppState{
-		OpenTabs:  []string{"beta", "gamma"},
+		OpenTabs: []config.TabState{
+			{Project: "beta"},
+			{Project: "gamma", Label: "custom gamma"},
+		},
 		ActiveTab: "gamma",
 	}
 	app := NewApp(cfg, "", state)
@@ -293,12 +296,23 @@ func TestNewApp_RestoresTabs(t *testing.T) {
 	if !app.sidebar.openTabs["beta"] || !app.sidebar.openTabs["gamma"] {
 		t.Errorf("sidebar openTabs not synced: %v", app.sidebar.openTabs)
 	}
+	// Custom label should be restored.
+	if app.tabLabels["gamma"] != "custom gamma" {
+		t.Errorf("expected label %q, got %q", "custom gamma", app.tabLabels["gamma"])
+	}
+	if app.tabLabels["beta"] != "" {
+		t.Errorf("expected empty label for beta, got %q", app.tabLabels["beta"])
+	}
 }
 
 func TestNewApp_RestoreFiltersDeletedProjects(t *testing.T) {
 	cfg := configWithProjects() // has proj1, proj2
 	state := &config.AppState{
-		OpenTabs:  []string{"proj2", "deleted_project", "proj1"},
+		OpenTabs: []config.TabState{
+			{Project: "proj2"},
+			{Project: "deleted_project"},
+			{Project: "proj1"},
+		},
 		ActiveTab: "proj2",
 	}
 	app := NewApp(cfg, "", state)
@@ -315,7 +329,7 @@ func TestNewApp_RestoreFiltersDeletedProjects(t *testing.T) {
 func TestNewApp_EmptyRestoreFallsBackToFirstProject(t *testing.T) {
 	cfg := configWithProjects()
 	state := &config.AppState{
-		OpenTabs: []string{}, // empty state
+		OpenTabs: []config.TabState{}, // empty state
 	}
 	app := NewApp(cfg, "", state)
 
@@ -328,7 +342,10 @@ func TestNewApp_EmptyRestoreFallsBackToFirstProject(t *testing.T) {
 func TestNewApp_AllTabsDeletedFallsBackToFirstProject(t *testing.T) {
 	cfg := configWithProjects()
 	state := &config.AppState{
-		OpenTabs: []string{"gone1", "gone2"}, // all deleted
+		OpenTabs: []config.TabState{
+			{Project: "gone1"},
+			{Project: "gone2"},
+		},
 	}
 	app := NewApp(cfg, "", state)
 
@@ -341,13 +358,111 @@ func TestNewApp_AllTabsDeletedFallsBackToFirstProject(t *testing.T) {
 func TestNewApp_PendingRestoreTabsSet(t *testing.T) {
 	cfg := configWith3Projects() // alpha, beta, gamma
 	state := &config.AppState{
-		OpenTabs: []string{"alpha", "gamma"},
+		OpenTabs: []config.TabState{
+			{Project: "alpha"},
+			{Project: "gamma"},
+		},
 	}
 	app := NewApp(cfg, "", state)
 
 	// pendingRestoreTabs should be set so WindowSizeMsg starts all sessions.
 	if len(app.pendingRestoreTabs) != 2 {
 		t.Fatalf("expected 2 pending restore tabs, got %d", len(app.pendingRestoreTabs))
+	}
+}
+
+func TestTabEdit_StartAndCommit(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+	if app.editingTab != -1 {
+		t.Fatal("expected editingTab=-1 initially")
+	}
+
+	// Start editing the first (and only) tab.
+	app.startTabEdit(0)
+	if app.editingTab != 0 {
+		t.Fatalf("expected editingTab=0, got %d", app.editingTab)
+	}
+	if app.tabEditBuf != app.openTabs[0] {
+		t.Fatalf("expected edit buf=%q, got %q", app.openTabs[0], app.tabEditBuf)
+	}
+
+	// Append text.
+	app.tabEditBuf += " - feature"
+	app.commitTabEdit()
+
+	sessionID := app.openTabs[0]
+	if app.tabLabels[sessionID] != "proj1 - feature" {
+		t.Errorf("expected label %q, got %q", "proj1 - feature", app.tabLabels[sessionID])
+	}
+	if app.editingTab != -1 {
+		t.Errorf("expected editingTab=-1 after commit, got %d", app.editingTab)
+	}
+}
+
+func TestTabEdit_Cancel(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+	app.startTabEdit(0)
+	app.tabEditBuf = "something else"
+	app.cancelTabEdit()
+
+	if app.editingTab != -1 {
+		t.Errorf("expected editingTab=-1 after cancel, got %d", app.editingTab)
+	}
+	// Label should NOT be set since we cancelled.
+	if _, ok := app.tabLabels[app.openTabs[0]]; ok {
+		t.Error("expected no custom label after cancel")
+	}
+}
+
+func TestTabEdit_CommitEmptyRevertsToDefault(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+	sessionID := app.openTabs[0]
+	app.tabLabels[sessionID] = "old custom"
+	app.startTabEdit(0)
+	app.tabEditBuf = "   " // whitespace only
+	app.commitTabEdit()
+
+	if _, ok := app.tabLabels[sessionID]; ok {
+		t.Error("expected label deleted for empty commit")
+	}
+}
+
+func TestTabEdit_F2EntersEditMode(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+	// We need an active session to test F2. Since we can't easily create one
+	// in unit tests (needs a real Manager), test the startTabEdit path directly.
+	// The F2 key handler in Update calls startTabEdit when mgr.ActiveName()
+	// returns a session ID — that's already tested via the startTabEdit tests.
+	app.startTabEdit(0)
+	if app.editingTab != 0 {
+		t.Fatalf("expected editingTab=0, got %d", app.editingTab)
+	}
+}
+
+func TestTabDisplayName_CustomLabel(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+	sessionID := app.openTabs[0]
+
+	// Default: returns session ID.
+	if got := app.tabDisplayName(sessionID); got != sessionID {
+		t.Errorf("expected %q, got %q", sessionID, got)
+	}
+
+	// Custom label.
+	app.tabLabels[sessionID] = "my custom tab"
+	if got := app.tabDisplayName(sessionID); got != "my custom tab" {
+		t.Errorf("expected %q, got %q", "my custom tab", got)
+	}
+}
+
+func TestTabEdit_RemoveTabCleansLabel(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+	sessionID := app.openTabs[0]
+	app.tabLabels[sessionID] = "custom"
+	app.removeTab(sessionID)
+
+	if _, ok := app.tabLabels[sessionID]; ok {
+		t.Error("expected label cleaned up after removeTab")
 	}
 }
 

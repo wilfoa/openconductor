@@ -286,6 +286,8 @@ func (m formModel) View() string {
 		b.WriteString(formInputStyle.Render(m.nameInput.View()))
 		b.WriteString("\n")
 		b.WriteString(formHintStyle.Render("  A unique project name"))
+		b.WriteString("\n")
+		b.WriteString(formHintStyle.Render("  Esc cancel"))
 
 	case stepRepo:
 		b.WriteString(formDoneStyle.Render("Name  " + m.nameInput.Value()))
@@ -306,6 +308,8 @@ func (m formModel) View() string {
 			}
 		}
 		b.WriteString(formHintStyle.Render("  Absolute path to repo"))
+		b.WriteString("\n")
+		b.WriteString(formHintStyle.Render("  Esc cancel"))
 
 	case stepAgent:
 		b.WriteString(formDoneStyle.Render("Name  " + m.nameInput.Value()))
@@ -323,6 +327,8 @@ func (m formModel) View() string {
 			b.WriteString("\n")
 		}
 		b.WriteString(formHintStyle.Render("  j/k to select, Enter to confirm"))
+		b.WriteString("\n")
+		b.WriteString(formHintStyle.Render("  Esc cancel"))
 
 	case stepAutoApprove:
 		b.WriteString(formDoneStyle.Render("Name   " + m.nameInput.Value()))
@@ -343,6 +349,8 @@ func (m formModel) View() string {
 			b.WriteString("\n")
 		}
 		b.WriteString(formHintStyle.Render("  j/k to select, Enter to confirm"))
+		b.WriteString("\n")
+		b.WriteString(formHintStyle.Render("  Esc cancel"))
 	}
 
 	if m.err != "" {

@@ -292,8 +292,10 @@ func (b *Bot) sendEvent(e Event) {
 		}
 	case EventAttention:
 		messages = FormatAttention(e.Project, e.Detail, e.Screen)
-		kb := AttentionKeyboard(e.Project)
-		keyboard = &kb
+		// No keyboard for generic attention events — the agent needs user
+		// input but there's no specific question. The "Reply in this thread"
+		// hint in the message body covers this. Specific events (Permission,
+		// Question, Error) have their own keyboards.
 	case EventError:
 		messages = FormatError(e.Project, e.Detail, e.Screen)
 		kb := ErrorKeyboard(e.Project)

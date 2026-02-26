@@ -70,8 +70,9 @@ var (
 
 	// ── Project Items ─────────────────────────────────────────────
 
-	projectItemStyle  = lipgloss.NewStyle().Foreground(colorDimFg)
-	projectAgentStyle = lipgloss.NewStyle().PaddingLeft(3).Foreground(colorMuted)
+	projectItemStyle      = lipgloss.NewStyle().Foreground(colorDimFg)
+	projectAgentStyle     = lipgloss.NewStyle().PaddingLeft(3).Foreground(colorMuted)
+	projectSeparatorStyle = lipgloss.NewStyle().Foreground(colorSubtle)
 
 	// Selected project: gold ▎ left accent bar with highlight background.
 	// Both name and agent lines render as a single block so the accent

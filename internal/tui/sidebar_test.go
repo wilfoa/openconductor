@@ -159,7 +159,7 @@ func TestSidebarMouseClickProject(t *testing.T) {
 	m := newSidebarModel(testProjects(), defaultSidebarWidth)
 	m.focused = true
 
-	// Project 1 starts at Y = sidebarTopPad + sidebarTitleRows + 1*projectRows = 1 + 2 + 2 = 5
+	// Project 1 starts at Y = sidebarTopPad + sidebarTitleRows + 1*projectRows = 1 + 2 + 3 = 6
 	clickY := sidebarTopPad + sidebarTitleRows + 1*projectRows
 	_, cmd := sidebarSendMouse(t, m, tea.MouseActionPress, tea.MouseButtonLeft, 5, clickY)
 	if cmd == nil {

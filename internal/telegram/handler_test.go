@@ -186,9 +186,9 @@ func TestPermissionKeyboard_HasThreeButtons(t *testing.T) {
 		t.Fatalf("expected 3 buttons, got %d", len(row))
 	}
 
-	// Verify button labels.
+	// Verify button labels (emoji-prefixed).
 	labels := []string{row[0].Text, row[1].Text, row[2].Text}
-	if labels[0] != "Allow Once" || labels[1] != "Allow Always" || labels[2] != "Deny" {
+	if labels[0] != "🟢 Allow Once" || labels[1] != "🟡 Allow Always" || labels[2] != "🔴 Deny" {
 		t.Fatalf("unexpected button labels: %v", labels)
 	}
 
@@ -231,10 +231,11 @@ func TestQuestionKeyboard_MatchesOptions(t *testing.T) {
 		t.Fatalf("expected 3 buttons, got %d", len(row))
 	}
 
-	// Button labels should be the full option text.
+	// Button labels should be the full option text with emoji prefix.
 	for i, btn := range row {
-		if btn.Text != options[i] {
-			t.Errorf("button %d: expected label %q, got %q", i, options[i], btn.Text)
+		want := "🟣 " + options[i]
+		if btn.Text != want {
+			t.Errorf("button %d: expected label %q, got %q", i, want, btn.Text)
 		}
 	}
 
@@ -274,8 +275,8 @@ func TestAttentionKeyboard_HasFourButtons(t *testing.T) {
 		t.Fatalf("expected 4 buttons, got %d", len(row))
 	}
 
-	// Verify button labels.
-	expected := []string{"yes", "no", "continue", "skip"}
+	// Verify button labels (emoji-prefixed).
+	expected := []string{"🟡 yes", "🟡 no", "🟡 continue", "⏭ skip"}
 	for i, btn := range row {
 		if btn.Text != expected[i] {
 			t.Errorf("button %d: expected label %q, got %q", i, expected[i], btn.Text)
@@ -309,8 +310,8 @@ func TestErrorKeyboard_HasThreeButtons(t *testing.T) {
 		t.Fatalf("expected 3 buttons, got %d", len(row))
 	}
 
-	// Verify button labels.
-	expected := []string{"retry", "skip", "abort"}
+	// Verify button labels (emoji-prefixed).
+	expected := []string{"🔄 retry", "⏭ skip", "🔴 abort"}
 	for i, btn := range row {
 		if btn.Text != expected[i] {
 			t.Errorf("button %d: expected label %q, got %q", i, expected[i], btn.Text)

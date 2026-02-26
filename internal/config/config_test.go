@@ -127,7 +127,11 @@ func TestSaveAndLoadState(t *testing.T) {
 	path := filepath.Join(dir, "state.json")
 
 	original := AppState{
-		OpenTabs:  []string{"ProjectA", "ProjectB", "ProjectC"},
+		OpenTabs: []TabState{
+			{Project: "ProjectA"},
+			{Project: "ProjectB", Label: "PB custom"},
+			{Project: "ProjectC"},
+		},
 		ActiveTab: "ProjectB",
 	}
 
@@ -139,9 +143,12 @@ func TestSaveAndLoadState(t *testing.T) {
 	if len(loaded.OpenTabs) != 3 {
 		t.Fatalf("expected 3 tabs, got %d", len(loaded.OpenTabs))
 	}
-	for i, name := range original.OpenTabs {
-		if loaded.OpenTabs[i] != name {
-			t.Errorf("tab %d: got %q, want %q", i, loaded.OpenTabs[i], name)
+	for i, ts := range original.OpenTabs {
+		if loaded.OpenTabs[i].Project != ts.Project {
+			t.Errorf("tab %d project: got %q, want %q", i, loaded.OpenTabs[i].Project, ts.Project)
+		}
+		if loaded.OpenTabs[i].Label != ts.Label {
+			t.Errorf("tab %d label: got %q, want %q", i, loaded.OpenTabs[i].Label, ts.Label)
 		}
 	}
 	if loaded.ActiveTab != "ProjectB" {
@@ -170,7 +177,7 @@ func TestLoadState_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestFilterValidProjects(t *testing.T) {
+func TestFilterValidTabs(t *testing.T) {
 	projects := []Project{
 		{Name: "Alpha", Repo: "/a", Agent: AgentOpenCode},
 		{Name: "Beta", Repo: "/b", Agent: AgentOpenCode},
@@ -178,34 +185,53 @@ func TestFilterValidProjects(t *testing.T) {
 	}
 
 	// Tab list includes a deleted project "Deleted".
-	tabs := []string{"Beta", "Deleted", "Alpha"}
-	result := FilterValidProjects(tabs, projects)
+	tabs := []TabState{
+		{Project: "Beta"},
+		{Project: "Deleted", Label: "old label"},
+		{Project: "Alpha", Label: "A custom"},
+	}
+	result := FilterValidTabs(tabs, projects)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 valid tabs, got %d: %v", len(result), result)
 	}
-	if result[0] != "Beta" || result[1] != "Alpha" {
+	if result[0].Project != "Beta" || result[1].Project != "Alpha" {
 		t.Errorf("expected [Beta Alpha], got %v", result)
+	}
+	// Verify labels are preserved.
+	if result[1].Label != "A custom" {
+		t.Errorf("expected label %q, got %q", "A custom", result[1].Label)
 	}
 }
 
-func TestFilterValidProjects_AllDeleted(t *testing.T) {
+func TestFilterValidTabs_AllDeleted(t *testing.T) {
 	projects := []Project{
 		{Name: "Alpha", Repo: "/a", Agent: AgentOpenCode},
 	}
-	tabs := []string{"Gone1", "Gone2"}
-	result := FilterValidProjects(tabs, projects)
+	tabs := []TabState{{Project: "Gone1"}, {Project: "Gone2"}}
+	result := FilterValidTabs(tabs, projects)
 
 	if len(result) != 0 {
 		t.Fatalf("expected 0 valid tabs, got %d", len(result))
 	}
 }
 
-func TestFilterValidProjects_EmptyTabs(t *testing.T) {
+func TestFilterValidTabs_EmptyTabs(t *testing.T) {
 	projects := []Project{{Name: "A", Repo: "/a", Agent: AgentOpenCode}}
-	result := FilterValidProjects(nil, projects)
+	result := FilterValidTabs(nil, projects)
 	if len(result) != 0 {
 		t.Fatalf("expected 0 tabs for nil input, got %d", len(result))
+	}
+}
+
+func TestTabProjectNames(t *testing.T) {
+	tabs := []TabState{
+		{Project: "A", Label: "custom"},
+		{Project: "B"},
+	}
+	names := TabProjectNames(tabs)
+	if len(names) != 2 || names[0] != "A" || names[1] != "B" {
+		t.Errorf("expected [A B], got %v", names)
 	}
 }
 
@@ -213,13 +239,13 @@ func TestSaveState_CreatesDirectories(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "deep", "state.json")
 
-	err := SaveState(path, AppState{OpenTabs: []string{"A"}})
+	err := SaveState(path, AppState{OpenTabs: []TabState{{Project: "A"}}})
 	if err != nil {
 		t.Fatalf("SaveState should create nested dirs: %v", err)
 	}
 
 	loaded := LoadState(path)
-	if len(loaded.OpenTabs) != 1 || loaded.OpenTabs[0] != "A" {
+	if len(loaded.OpenTabs) != 1 || loaded.OpenTabs[0].Project != "A" {
 		t.Fatalf("round-trip failed: %+v", loaded)
 	}
 }

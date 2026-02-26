@@ -86,7 +86,13 @@ type App struct {
 	sidebarWidth  int                     // content width of sidebar (excludes padding/border)
 	dragging      bool                    // true during separator drag
 	openTabs      []string                // session IDs of opened tabs, in visit order
+	tabLabels     map[string]string       // custom display labels per session ID (empty = use session ID)
 	sessionStates map[string]SessionState // per-session state, keyed by session ID
+
+	// Tab rename editing state.
+	editingTab  int    // index into openTabs of the tab being renamed, -1 = not editing
+	tabEditBuf  string // current text in the rename field
+	tabEditOrig string // original label before editing (for cancel/revert)
 
 	// telegramCh, when non-nil, receives events for the Telegram bridge.
 	// Set via SetTelegramChannel before starting the program.
@@ -149,11 +155,20 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 	// Determine which tabs to open on startup.
 	var openTabs []string
 	var activeProjectName string
+	tabLabels := make(map[string]string)
 
 	if restoredState != nil && len(restoredState.OpenTabs) > 0 {
 		// Restore tabs from the previous session, filtering out any
 		// projects that were deleted from the config since last run.
-		openTabs = config.FilterValidProjects(restoredState.OpenTabs, cfg.Projects)
+		validTabs := config.FilterValidTabs(restoredState.OpenTabs, cfg.Projects)
+		openTabs = config.TabProjectNames(validTabs)
+		// Restore custom labels. At restore time, each project becomes a
+		// new instance-1 session whose ID equals the project name.
+		for _, ts := range validTabs {
+			if ts.Label != "" {
+				tabLabels[ts.Project] = ts.Label
+			}
+		}
 		activeProjectName = restoredState.ActiveTab
 	}
 
@@ -200,6 +215,8 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		detector:             attention.NewDetector(),
 		sidebarWidth:         defaultSidebarWidth,
 		openTabs:             openTabs,
+		tabLabels:            tabLabels,
+		editingTab:           -1,
 		sessionStates:        make(map[string]SessionState),
 		stateStickUntil:      make(map[string]time.Time),
 		scrollbacks:          make(map[string]*scrollbackBuffer),
@@ -399,6 +416,36 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Tab rename edit mode: consume all keys while editing.
+		if a.editingTab >= 0 {
+			switch {
+			case isKey(msg, tea.KeyEnter):
+				a.commitTabEdit()
+			case isKey(msg, tea.KeyEscape):
+				a.cancelTabEdit()
+			case isKey(msg, tea.KeyBackspace):
+				if len(a.tabEditBuf) > 0 {
+					a.tabEditBuf = a.tabEditBuf[:len(a.tabEditBuf)-1]
+				}
+			case msg.Type == tea.KeyRunes:
+				a.tabEditBuf += string(msg.Runes)
+			}
+			return a, nil
+		}
+
+		// F2: rename active tab.
+		if isKey(msg, tea.KeyF2) {
+			if activeID := a.mgr.ActiveName(); activeID != "" {
+				for i, id := range a.openTabs {
+					if id == activeID {
+						a.startTabEdit(i)
+						break
+					}
+				}
+			}
+			return a, nil
+		}
+
 		// Ctrl+S: toggle focus only when sidebar is in normal mode.
 		// When the sidebar has a form or confirm dialog, ignore (user must
 		// Esc out of the form first).
@@ -482,17 +529,36 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			// Right panel: check if click is in the tab bar (first 3 rows).
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && msg.Y < 3 {
+				// Click outside a tab while editing → cancel edit.
 				localX := msg.X - screenPadding - sbWidth
 				if tabIdx, isClose := a.tabHitTest(localX); tabIdx >= 0 {
 					sessionID := a.openTabs[tabIdx]
+
+					// If editing and click is on a different tab, cancel edit first.
+					if a.editingTab >= 0 && tabIdx != a.editingTab {
+						a.cancelTabEdit()
+					}
+
 					if isClose {
-						// Close the tab.
+						if a.editingTab >= 0 {
+							a.cancelTabEdit()
+						}
 						return a, a.closeTabCmd(sessionID)
 					}
+
+					// Click on the already-active tab → enter edit mode.
+					if sessionID == a.mgr.ActiveName() && a.editingTab < 0 {
+						a.startTabEdit(tabIdx)
+						return a, nil
+					}
+
 					// Switch to the clicked session tab.
 					return a, func() tea.Msg {
 						return TabSwitchedMsg{SessionID: sessionID}
 					}
+				} else if a.editingTab >= 0 {
+					// Clicked outside any tab → cancel edit.
+					a.cancelTabEdit()
 				}
 			}
 
@@ -558,6 +624,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TabSwitchedMsg:
 		// Switch to an existing session (tab click or Ctrl+J/K).
+		if a.editingTab >= 0 {
+			a.cancelTabEdit()
+		}
 		s := a.mgr.GetSession(msg.SessionID)
 		if s == nil {
 			return a, nil
@@ -745,6 +814,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case TabClosedMsg:
+		if a.editingTab >= 0 {
+			a.cancelTabEdit()
+		}
 		sessionID := msg.Name
 		a.removeTab(sessionID)
 		delete(a.stateStickUntil, sessionID)
@@ -928,10 +1000,18 @@ func (a App) tabBarView() string {
 
 	// Render each tab as a bordered box. All tabs show a close button ✕.
 	var renderedTabs []string
-	for _, sessionID := range a.openTabs {
+	for i, sessionID := range a.openTabs {
 		state := a.sessionStates[sessionID]
 		char := badgeChar(state, a.animFrame)
-		label := char + " " + sessionID + " ✕"
+		displayName := a.tabDisplayName(sessionID)
+
+		var label string
+		if i == a.editingTab {
+			// Editing: show buffer with cursor.
+			label = char + " " + a.tabEditBuf + "▏ ✕"
+		} else {
+			label = char + " " + displayName + " ✕"
+		}
 
 		if sessionID == activeSessionID {
 			renderedTabs = append(renderedTabs, tabActiveStyle.Render(label))
@@ -1336,7 +1416,14 @@ func (a App) tabHitTest(localX int) (int, bool) {
 	for i, sessionID := range a.openTabs {
 		state := a.sessionStates[sessionID]
 		char := badgeChar(state, a.animFrame)
-		label := char + " " + sessionID + " ✕"
+		displayName := a.tabDisplayName(sessionID)
+
+		var label string
+		if i == a.editingTab {
+			label = char + " " + a.tabEditBuf + "▏ ✕"
+		} else {
+			label = char + " " + displayName + " ✕"
+		}
 
 		var w int
 		if sessionID == activeSessionID {
@@ -1394,15 +1481,14 @@ func (a *App) saveState() {
 		return
 	}
 
-	// Collect project names from open tabs.
-	// openTabs stores session IDs, but the session ID for the first
-	// instance of a project is just the project name. For multi-instance
-	// tabs (e.g. "Proj (2)"), we still save them — they'll map back to
-	// the project name on restore.
-	var tabNames []string
+	// Collect tab states from open tabs — project name + custom label.
+	var tabs []config.TabState
 	for _, sessionID := range a.openTabs {
 		if s := a.mgr.GetSession(sessionID); s != nil {
-			tabNames = append(tabNames, s.Project.Name)
+			tabs = append(tabs, config.TabState{
+				Project: s.Project.Name,
+				Label:   a.tabLabels[sessionID],
+			})
 		}
 	}
 
@@ -1413,14 +1499,14 @@ func (a *App) saveState() {
 	}
 
 	state := config.AppState{
-		OpenTabs:  tabNames,
+		OpenTabs:  tabs,
 		ActiveTab: activeProject,
 	}
 
 	if err := config.SaveState(a.statePath, state); err != nil {
 		logging.Error("failed to save state", "err", err)
 	} else {
-		logging.Debug("state saved", "tabs", len(tabNames), "active", activeProject)
+		logging.Debug("state saved", "tabs", len(tabs), "active", activeProject)
 	}
 }
 
@@ -1460,8 +1546,7 @@ func (a *App) addTab(sessionID string) {
 	}
 }
 
-// removeTab removes a session ID from the open tabs list.
-// If this was the last session for a project, clears the project's openTab flag.
+// removeTab removes a session ID from the open tabs list and its label.
 func (a *App) removeTab(sessionID string) {
 	for i, t := range a.openTabs {
 		if t == sessionID {
@@ -1469,6 +1554,52 @@ func (a *App) removeTab(sessionID string) {
 			break
 		}
 	}
+	delete(a.tabLabels, sessionID)
+}
+
+// tabDisplayName returns the display name for a tab. If the user has set a
+// custom label, that is returned; otherwise the session ID is used.
+func (a App) tabDisplayName(sessionID string) string {
+	if label, ok := a.tabLabels[sessionID]; ok && label != "" {
+		return label
+	}
+	return sessionID
+}
+
+// startTabEdit enters inline rename mode for the tab at the given index.
+func (a *App) startTabEdit(tabIdx int) {
+	if tabIdx < 0 || tabIdx >= len(a.openTabs) {
+		return
+	}
+	sessionID := a.openTabs[tabIdx]
+	a.editingTab = tabIdx
+	a.tabEditOrig = a.tabDisplayName(sessionID)
+	a.tabEditBuf = a.tabEditOrig
+}
+
+// commitTabEdit saves the edited label and exits edit mode.
+func (a *App) commitTabEdit() {
+	if a.editingTab < 0 || a.editingTab >= len(a.openTabs) {
+		a.editingTab = -1
+		return
+	}
+	sessionID := a.openTabs[a.editingTab]
+	name := strings.TrimSpace(a.tabEditBuf)
+	if name == "" {
+		// Empty → revert to default (session ID).
+		delete(a.tabLabels, sessionID)
+	} else if name == sessionID {
+		// Matches default — no need to store.
+		delete(a.tabLabels, sessionID)
+	} else {
+		a.tabLabels[sessionID] = name
+	}
+	a.editingTab = -1
+}
+
+// cancelTabEdit reverts the edit and exits edit mode.
+func (a *App) cancelTabEdit() {
+	a.editingTab = -1
 }
 
 // closeTabCmd returns a tea.Cmd that produces a TabClosedMsg. The actual tab
@@ -1635,9 +1766,14 @@ func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, d
 		return
 	}
 
-	// Filter screen lines through the agent adapter to remove sidebar noise.
+	// Filter screen lines through the agent adapter to remove sidebar noise,
+	// and strip fixed chrome rows (header/footer) that aren't conversation content.
 	if s := a.mgr.GetSession(sessionID); s != nil {
 		lines = agent.FilterScreen(s.Project.Agent, lines)
+		top, bottom := agent.ChromeSkipRows(s.Project.Agent)
+		if top+bottom > 0 && top+bottom < len(lines) {
+			lines = lines[top : len(lines)-bottom]
+		}
 	}
 
 	select {
