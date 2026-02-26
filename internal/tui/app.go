@@ -463,7 +463,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		if a.focus == focusSidebar {
+		// When the sidebar has an active form or confirm dialog, all keys
+		// go to the sidebar regardless of which panel is focused. This
+		// ensures Escape always reaches the form even if the user clicked
+		// in the terminal area.
+		if a.focus == focusSidebar || a.sidebar.mode != sidebarNormal {
 			var cmd tea.Cmd
 			a.sidebar, cmd = a.sidebar.Update(msg)
 			if cmd != nil {
@@ -598,8 +602,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Click in terminal area — focus terminal.
-			if a.focus != focusTerminal {
+			// Click in terminal area — focus terminal, unless the sidebar
+			// has an active form or confirm dialog (user must Esc first).
+			if a.focus != focusTerminal && a.sidebar.mode == sidebarNormal {
 				a.focus = focusTerminal
 				a.sidebar.focused = false
 				a.terminal.focused = true
@@ -1165,11 +1170,17 @@ func (a *App) syncTerminalFromSession() {
 
 	vt, w, h := s.GetVT()
 
+	// Check alt-screen mode while we have the VT reference.
+	s.Mu.RLock()
+	alt := s.VT != nil && s.VT.Mode()&vt10x.ModeAltScreen != 0
+	s.Mu.RUnlock()
+
 	a.terminal.mu.Lock()
 	a.terminal.vt = vt
 	a.terminal.width = w
 	a.terminal.height = h
 	a.terminal.active = true
+	a.terminal.altScreen = alt
 	a.terminal.mu.Unlock()
 
 	// Point the terminal at this session's scrollback buffer.

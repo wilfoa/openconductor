@@ -442,6 +442,103 @@ func TestViewScrollbackMixedContent(t *testing.T) {
 	}
 }
 
+func TestViewScrollbackOnly_AltScreen(t *testing.T) {
+	// Alt-screen sessions should show ONLY scrollback content, no live
+	// viewport mixing. This prevents duplicate content when scrollback
+	// captures content that's still visible on the TUI's current screen.
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(20, 4))
+	tm.vt = vt
+	tm.width = 20
+	tm.height = 4
+	tm.altScreen = true // key difference from TestViewScrollbackMixedContent
+
+	// Put content in the live viewport (simulating a TUI app).
+	tm.vt.Write([]byte("HEADER\r\ncontent A\r\ncontent B\r\nFOOTER"))
+
+	// Push scrollback lines — some overlap with viewport content.
+	tm.scrollback.Push(makeGlyphsWidth("old line 1", 20))
+	tm.scrollback.Push(makeGlyphsWidth("old line 2", 20))
+	tm.scrollback.Push(makeGlyphsWidth("content A", 20))
+	tm.scrollback.Push(makeGlyphsWidth("old line 3", 20))
+
+	// Scroll up by 1 — should show ONLY scrollback, no viewport rows.
+	tm.scrollOffset = 1
+	view := tm.viewScrollback()
+	lines := strings.Split(view, "\n")
+
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines, got %d", len(lines))
+	}
+
+	// All 4 lines should come from scrollback, no HEADER or FOOTER.
+	if strings.Contains(view, "HEADER") {
+		t.Error("alt-screen scrollback should not contain live viewport HEADER")
+	}
+	if strings.Contains(view, "FOOTER") {
+		t.Error("alt-screen scrollback should not contain live viewport FOOTER")
+	}
+
+	// The 4 scrollback lines should be visible (Len=4, height=4, offset=1).
+	if !strings.Contains(lines[0], "old line 1") {
+		t.Errorf("line 0 should be 'old line 1', got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "old line 2") {
+		t.Errorf("line 1 should be 'old line 2', got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "content A") {
+		t.Errorf("line 2 should be 'content A', got %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "old line 3") {
+		t.Errorf("line 3 should be 'old line 3', got %q", lines[3])
+	}
+}
+
+func TestViewScrollbackOnly_ScrollFurther(t *testing.T) {
+	// Verify that scrolling further into history works correctly.
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(20, 3))
+	tm.vt = vt
+	tm.width = 20
+	tm.height = 3
+	tm.altScreen = true
+
+	for i := 0; i < 10; i++ {
+		tm.scrollback.Push(makeGlyphsWidth(fmt.Sprintf("line %d", i), 20))
+	}
+
+	// Offset=1: newest page (lines 7, 8, 9).
+	tm.scrollOffset = 1
+	view := tm.viewScrollback()
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(lines[2], "line 9") {
+		t.Errorf("offset=1 bottom should be 'line 9', got %q", lines[2])
+	}
+
+	// Offset=3: shifted 2 lines back (lines 5, 6, 7).
+	tm.scrollOffset = 3
+	view = tm.viewScrollback()
+	lines = strings.Split(view, "\n")
+	if !strings.Contains(lines[0], "line 5") {
+		t.Errorf("offset=3 top should be 'line 5', got %q", lines[0])
+	}
+	if !strings.Contains(lines[2], "line 7") {
+		t.Errorf("offset=3 bottom should be 'line 7', got %q", lines[2])
+	}
+
+	// Offset=10: at the very beginning (only line 0 visible at bottom).
+	tm.scrollOffset = 10
+	view = tm.viewScrollback()
+	lines = strings.Split(view, "\n")
+	if !strings.Contains(lines[2], "line 0") {
+		t.Errorf("offset=10 bottom should be 'line 0', got %q", lines[2])
+	}
+	// Top two lines should be blank (no scrollback content).
+	if strings.TrimSpace(lines[0]) != "" {
+		t.Errorf("offset=10 top should be blank, got %q", lines[0])
+	}
+}
+
 // ── E2E: TUI-style full-screen rewrite via vt10x ────────────────
 
 func TestCaptureScrollbackTUIFullRedraw(t *testing.T) {

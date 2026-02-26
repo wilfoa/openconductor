@@ -55,6 +55,13 @@ type terminalModel struct {
 	// compensate. Set to false when the user scrolls down (toward live)
 	// so the offset can freely reach 0 without fighting auto-adjustment.
 	scrollPinned bool
+
+	// altScreen is true when the underlying session is running in
+	// alternate screen mode (TUI apps like OpenCode). In alt-screen mode,
+	// the viewport is a self-contained screen (header + content + footer),
+	// so scrollback rendering shows ONLY scrollback lines instead of
+	// mixing scrollback with live viewport rows.
+	altScreen bool
 }
 
 func newTerminalModel() terminalModel {
@@ -216,9 +223,65 @@ func (m terminalModel) viewLive() string {
 	return sb.String()
 }
 
-// viewScrollback renders a mix of scrollback buffer lines and live viewport
-// rows when the user has scrolled up (scrollOffset > 0).
+// viewScrollback renders scrollback content when the user has scrolled up
+// (scrollOffset > 0).
+//
+// For alt-screen sessions (TUI apps), the viewport is a self-contained
+// screen (header + content + footer), so we show ONLY scrollback lines.
+// Mixing scrollback with live viewport rows would duplicate content that
+// was captured into scrollback but is still visible on the current screen.
+//
+// For regular terminal sessions, scrollback and viewport are contiguous,
+// so we render a mix: scrollback lines at top, live viewport rows at bottom.
 func (m terminalModel) viewScrollback() string {
+	if m.altScreen {
+		return m.viewScrollbackOnly()
+	}
+	return m.viewScrollbackMixed()
+}
+
+// viewScrollbackOnly renders a window of scrollback-only content, used for
+// alt-screen TUI sessions. The entire viewport is filled from the scrollback
+// buffer; no live viewport rows are mixed in.
+//
+// scrollOffset=1 shows the most recent page of scrollback. Larger offsets
+// scroll further into history. Blank lines pad the top when the scrollback
+// has fewer lines than the viewport height.
+func (m terminalModel) viewScrollbackOnly() string {
+	sbLen := m.scrollback.Len()
+	offset := m.scrollOffset
+	if offset > sbLen {
+		offset = sbLen
+	}
+	if sbLen == 0 {
+		return ""
+	}
+
+	// The window covers [startIdx, startIdx+height). Older lines are at the
+	// top. startIdx can go negative when the user scrolls past the oldest
+	// content — those positions are rendered as blank lines.
+	startIdx := sbLen - m.height - offset + 1
+
+	var sb strings.Builder
+	for i := 0; i < m.height; i++ {
+		lineIdx := startIdx + i
+		if lineIdx >= 0 && lineIdx < sbLen {
+			glyphs := m.scrollback.Line(lineIdx)
+			if glyphs != nil {
+				m.renderGlyphRow(&sb, glyphs)
+			}
+		}
+		if i < m.height-1 {
+			sb.WriteRune('\n')
+		}
+	}
+	return sb.String()
+}
+
+// viewScrollbackMixed renders a mix of scrollback buffer lines and live
+// viewport rows. Used for regular (non-alt-screen) terminal sessions where
+// scrollback and viewport content are contiguous.
+func (m terminalModel) viewScrollbackMixed() string {
 	sbLen := m.scrollback.Len()
 	offset := m.scrollOffset
 	if offset > sbLen {
