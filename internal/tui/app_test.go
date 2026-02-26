@@ -482,6 +482,56 @@ func TestAppProjectSwitchedReturnsStartCmd(t *testing.T) {
 	}
 }
 
+func TestProjectSwitched_ExistingTabSwitchesInstead(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+
+	// Inject two sessions so we have tabs for both projects.
+	sess1 := &session.Session{
+		ID: "proj1", Instance: 1, Project: app.cfg.Projects[0],
+		State: session.StateRunning,
+	}
+	sess2 := &session.Session{
+		ID: "proj2", Instance: 1, Project: app.cfg.Projects[1],
+		State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess1)
+	app.mgr.InjectSession("proj2", sess2)
+	app.addTab("proj1")
+	app.addTab("proj2")
+	app.mgr.SetActive("proj2") // currently on proj2
+
+	// Click proj1 in sidebar — should switch to existing tab, NOT start new session.
+	msg := ProjectSwitchedMsg{Index: 0, Project: app.cfg.Projects[0]}
+	_, cmd := app.Update(msg)
+
+	if cmd != nil {
+		t.Fatal("expected no command (should switch, not create new session)")
+	}
+	if app.mgr.ActiveName() != "proj1" {
+		t.Fatalf("expected active session 'proj1', got %q", app.mgr.ActiveName())
+	}
+}
+
+func TestNewInstanceMsg_AlwaysCreatesSession(t *testing.T) {
+	app := NewApp(configWithProjects(), "", nil)
+
+	// Inject a session so proj1 already has a tab.
+	sess := &session.Session{
+		ID: "proj1", Instance: 1, Project: app.cfg.Projects[0],
+		State: session.StateRunning,
+	}
+	app.mgr.InjectSession("proj1", sess)
+	app.addTab("proj1")
+
+	// Press 'n' on proj1 — should always create a new session.
+	msg := NewInstanceMsg{Project: app.cfg.Projects[0]}
+	_, cmd := app.Update(msg)
+
+	if cmd == nil {
+		t.Fatal("expected a command from NewInstanceMsg (new session)")
+	}
+}
+
 func TestSessionStartedAddsTab(t *testing.T) {
 	app := NewApp(configWithProjects(), "", nil)
 	// Inject a session and simulate sessionStartedMsg.

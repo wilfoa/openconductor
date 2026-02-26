@@ -119,6 +119,17 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 				}
 			}
 
+		case isRuneKey(msg, 'n'):
+			// New instance: always create a new agent session, even if
+			// the project already has open tabs.
+			if len(m.projects) > 0 && m.selected < len(m.projects) {
+				p := m.projects[m.selected]
+				return m, func() tea.Msg {
+					return NewInstanceMsg{Project: p}
+				}
+			}
+			return m, nil
+
 		case isRuneKey(msg, 'd'), isRuneKey(msg, 'x'):
 			if len(m.projects) > 0 && m.selected < len(m.projects) {
 				m.mode = sidebarConfirmDelete

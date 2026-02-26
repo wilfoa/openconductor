@@ -616,14 +616,35 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.active = msg.Index
 		project := msg.Project
 
-		// Focus terminal when creating a new session.
+		// If the project already has an open tab, switch to it instead
+		// of spawning a new agent process.
+		for _, tabID := range a.openTabs {
+			s := a.mgr.GetSession(tabID)
+			if s != nil && s.Project.Name == project.Name {
+				a.mgr.SetActive(tabID)
+				a.syncTerminalFromSession()
+				a.focus = focusTerminal
+				a.sidebar.focused = false
+				a.terminal.focused = true
+				return a, nil
+			}
+		}
+
+		// No existing tab — create a new session.
 		a.focus = focusTerminal
 		a.sidebar.focused = false
 		a.terminal.focused = true
-
-		// Always create a new session — each Enter in sidebar is a new
-		// agent invocation (new opencode process).
 		cmd := a.startSessionCmd(project)
+		cmds = append(cmds, cmd)
+		return a, tea.Batch(cmds...)
+
+	case NewInstanceMsg:
+		// Always create a new session (new agent process), even if the
+		// project already has open tabs. Triggered by 'n' in sidebar.
+		a.focus = focusTerminal
+		a.sidebar.focused = false
+		a.terminal.focused = true
+		cmd := a.startSessionCmd(msg.Project)
 		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)
 

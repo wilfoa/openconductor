@@ -241,7 +241,9 @@ func (b *Bot) handleRawUpdate(raw rawUpdate, lib tgbotapi.Update) {
 			"thread_id", raw.Message.MessageThreadID,
 			"chat_id", raw.Message.Chat.ID,
 		)
-		b.hdlr.HandleInbound(raw.Message.Text, raw.Message.MessageThreadID)
+		if b.hdlr.HandleInbound(raw.Message.Text, raw.Message.MessageThreadID) {
+			b.reactToMessage(raw.Message.MessageID, "👀")
+		}
 	}
 }
 
@@ -394,6 +396,19 @@ func (b *Bot) createTopic(name string) (int, error) {
 	}
 
 	return result.Result.MessageThreadID, nil
+}
+
+// reactToMessage adds an emoji reaction to a message. This provides visual
+// feedback that the bot received and processed the user's message.
+func (b *Bot) reactToMessage(messageID int, emoji string) {
+	payload := map[string]interface{}{
+		"chat_id":    b.cfg.ChatID,
+		"message_id": messageID,
+		"reaction":   []map[string]string{{"type": "emoji", "emoji": emoji}},
+	}
+	if err := b.rawAPICall("setMessageReaction", payload); err != nil {
+		logging.Debug("telegram: failed to react to message", "message_id", messageID, "err", err)
+	}
 }
 
 // rawAPICall makes a raw POST request to the Telegram Bot API.

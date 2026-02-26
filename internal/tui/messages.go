@@ -66,10 +66,18 @@ func (s SessionState) Description() string {
 	}
 }
 
-// ProjectSwitchedMsg is sent when the user selects a project in the sidebar.
-// Always creates a new session (new agent invocation).
+// ProjectSwitchedMsg is sent when the user selects a project in the sidebar
+// (click or Enter). If the project already has an open tab, the app switches
+// to it. Otherwise a new session is created.
 type ProjectSwitchedMsg struct {
 	Index   int
+	Project config.Project
+}
+
+// NewInstanceMsg is sent when the user explicitly requests a new agent
+// instance for the selected project (n key in sidebar). Always creates a
+// new session, even if the project already has open tabs.
+type NewInstanceMsg struct {
 	Project config.Project
 }
 

@@ -34,27 +34,27 @@ func newHandler(mgr *session.Manager, state *topicState, projects []config.Proje
 
 // HandleInbound processes an inbound text message from a Telegram Forum Topic.
 // threadID is the message_thread_id extracted from raw JSON (the library does
-// not parse this field).
-func (h *handler) HandleInbound(text string, threadID int) {
+// not parse this field). Returns true if the message was forwarded to an agent.
+func (h *handler) HandleInbound(text string, threadID int) bool {
 	if text == "" {
-		return
+		return false
 	}
 
 	if threadID == 0 {
 		logging.Debug("telegram: inbound message has no thread ID (not a topic message)")
-		return
+		return false
 	}
 
 	project := h.projectByTopic(threadID)
 	if project == "" {
 		logging.Debug("telegram: message in unknown topic", "thread_id", threadID)
-		return
+		return false
 	}
 
 	sessions := h.mgr.GetSessionsByProject(project)
 	if len(sessions) == 0 {
 		logging.Debug("telegram: no active session for project", "project", project)
-		return
+		return false
 	}
 
 	// Route to the most recently created session for this project.
@@ -62,6 +62,7 @@ func (h *handler) HandleInbound(text string, threadID int) {
 
 	writeWithEnter(s, text)
 	logging.Info("telegram: forwarded message to agent", "project", project, "session", s.ID, "len", len(text))
+	return true
 }
 
 // HandleCallback processes an inline keyboard callback (permission or question).
