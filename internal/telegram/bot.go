@@ -26,6 +26,18 @@ import (
 	"github.com/openconductorhq/openconductor/internal/session"
 )
 
+// Resilience constants.
+const (
+	// backoffMin is the initial retry delay after an API error.
+	backoffMin = 2 * time.Second
+	// backoffMax caps the exponential backoff.
+	backoffMax = 60 * time.Second
+	// heartbeatInterval is how often we ping Telegram to verify the bot is alive.
+	heartbeatInterval = 5 * time.Minute
+	// healthWarnThreshold: log a warning after this many consecutive poll errors.
+	healthWarnThreshold = 5
+)
+
 // Bot is the Telegram bot that bridges agent sessions to Forum Topics.
 type Bot struct {
 	api   *tgbotapi.BotAPI
@@ -41,6 +53,13 @@ type Bot struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// Health tracking (protected by mu).
+	mu              sync.Mutex
+	startedAt       time.Time // when Start() was called
+	lastPollOK      time.Time // last successful getUpdates
+	lastSendOK      time.Time // last successful sendMessage
+	consecutiveErrs int       // consecutive poll failures
 }
 
 // NewBot creates a new Telegram bot. Call Start() to begin polling.
@@ -106,13 +125,21 @@ func (b *Bot) Start() error {
 		logging.Error("telegram: failed to save topic state", "err", err)
 	}
 
-	// Start polling for incoming messages.
-	b.wg.Add(1)
-	go b.pollLoop()
+	b.mu.Lock()
+	b.startedAt = time.Now()
+	b.mu.Unlock()
 
-	// Start bridge loop for outbound messages.
+	// Start polling for incoming messages (supervised with auto-restart).
 	b.wg.Add(1)
-	go b.bridgeLoop()
+	go b.supervise("pollLoop", b.pollLoop)
+
+	// Start bridge loop for outbound messages (supervised with auto-restart).
+	b.wg.Add(1)
+	go b.supervise("bridgeLoop", b.bridgeLoop)
+
+	// Start periodic heartbeat to detect dead bot tokens / API issues.
+	b.wg.Add(1)
+	go b.heartbeatLoop()
 
 	return nil
 }
@@ -122,6 +149,132 @@ func (b *Bot) Stop() {
 	b.cancel()
 	b.api.StopReceivingUpdates()
 	b.wg.Wait()
+}
+
+// IsHealthy reports whether the bot is operating normally. Returns false if
+// the poll loop hasn't succeeded recently or has accumulated many errors.
+func (b *Bot) IsHealthy() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.consecutiveErrs >= healthWarnThreshold {
+		return false
+	}
+	// If we've never polled successfully and the bot has been running for
+	// over a minute, something is wrong. Before Start() is called (or in
+	// the first minute), we give the benefit of the doubt.
+	if b.lastPollOK.IsZero() && !b.startedAt.IsZero() && time.Since(b.startedAt) > time.Minute {
+		return false
+	}
+	return true
+}
+
+// recordPollOK marks a successful poll, resetting the error counter.
+func (b *Bot) recordPollOK() {
+	b.mu.Lock()
+	b.lastPollOK = time.Now()
+	b.consecutiveErrs = 0
+	b.mu.Unlock()
+}
+
+// recordPollErr increments the consecutive error counter and logs warnings
+// at threshold boundaries.
+func (b *Bot) recordPollErr() {
+	b.mu.Lock()
+	b.consecutiveErrs++
+	n := b.consecutiveErrs
+	b.mu.Unlock()
+
+	if n == healthWarnThreshold {
+		logging.Error("telegram: poll loop unhealthy",
+			"consecutive_errors", n,
+			"threshold", healthWarnThreshold,
+		)
+	}
+}
+
+// recordSendOK marks a successful outbound message.
+func (b *Bot) recordSendOK() {
+	b.mu.Lock()
+	b.lastSendOK = time.Now()
+	b.mu.Unlock()
+}
+
+// supervise runs fn in a loop with panic recovery and exponential backoff
+// restart. If fn returns normally or panics, it is restarted after a delay
+// unless the context is cancelled. name is used for logging.
+func (b *Bot) supervise(name string, fn func()) {
+	defer b.wg.Done()
+
+	delay := backoffMin
+	for {
+		if b.ctx.Err() != nil {
+			return
+		}
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Error("telegram: panic in "+name, "recover", fmt.Sprintf("%v", r))
+				}
+			}()
+			fn()
+		}()
+
+		// fn returned (or panicked). If context is done, exit cleanly.
+		if b.ctx.Err() != nil {
+			return
+		}
+
+		// Unexpected exit — restart with backoff.
+		logging.Error("telegram: "+name+" exited unexpectedly, restarting", "delay", delay)
+		select {
+		case <-time.After(delay):
+		case <-b.ctx.Done():
+			return
+		}
+		delay *= 2
+		if delay > backoffMax {
+			delay = backoffMax
+		}
+	}
+}
+
+// heartbeatLoop periodically pings Telegram (getMe) to verify the bot token
+// is still valid. If the call fails repeatedly, it logs escalating warnings.
+func (b *Bot) heartbeatLoop() {
+	defer b.wg.Done()
+
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := b.rawAPICall("getMe", map[string]interface{}{}); err != nil {
+				logging.Error("telegram: heartbeat failed (getMe)", "err", err)
+				b.recordPollErr()
+			} else {
+				logging.Debug("telegram: heartbeat OK")
+			}
+		}
+	}
+}
+
+// backoff sleeps for a duration with exponential backoff, respecting context
+// cancellation. Returns the next backoff duration.
+func (b *Bot) backoff(current time.Duration) time.Duration {
+	select {
+	case <-time.After(current):
+	case <-b.ctx.Done():
+	}
+	next := current * 2
+	if next > backoffMax {
+		next = backoffMax
+	}
+	return next
 }
 
 // rawUpdate is a partial Telegram Update parsed from raw JSON so we can
@@ -148,9 +301,8 @@ type rawMessage struct {
 // GetUpdatesChan) so we can parse message_thread_id which the v5 library
 // does not support.
 func (b *Bot) pollLoop() {
-	defer b.wg.Done()
-
 	offset := 0
+	delay := backoffMin
 	client := &http.Client{Timeout: 40 * time.Second}
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", url.PathEscape(b.token))
 
@@ -173,7 +325,8 @@ func (b *Bot) pollLoop() {
 				return
 			}
 			logging.Error("telegram: poll request error", "err", err)
-			time.Sleep(2 * time.Second)
+			b.recordPollErr()
+			delay = b.backoff(delay)
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -184,7 +337,8 @@ func (b *Bot) pollLoop() {
 				return
 			}
 			logging.Error("telegram: poll error", "err", err)
-			time.Sleep(2 * time.Second)
+			b.recordPollErr()
+			delay = b.backoff(delay)
 			continue
 		}
 
@@ -192,6 +346,8 @@ func (b *Bot) pollLoop() {
 		resp.Body.Close()
 		if err != nil {
 			logging.Error("telegram: poll read error", "err", err)
+			b.recordPollErr()
+			delay = b.backoff(delay)
 			continue
 		}
 
@@ -201,9 +357,14 @@ func (b *Bot) pollLoop() {
 		}
 		if err := json.Unmarshal(respBody, &result); err != nil || !result.OK {
 			logging.Error("telegram: poll parse error", "err", err, "ok", result.OK)
-			time.Sleep(2 * time.Second)
+			b.recordPollErr()
+			delay = b.backoff(delay)
 			continue
 		}
+
+		// Successful poll — reset backoff and record health.
+		b.recordPollOK()
+		delay = backoffMin
 
 		// Parse updates from raw JSON.
 		var rawUpdates []rawUpdate
@@ -249,8 +410,6 @@ func (b *Bot) handleRawUpdate(raw rawUpdate, lib tgbotapi.Update) {
 
 // bridgeLoop reads events from the TUI and sends them to Telegram.
 func (b *Bot) bridgeLoop() {
-	defer b.wg.Done()
-
 	for {
 		select {
 		case <-b.ctx.Done():
@@ -321,6 +480,7 @@ func (b *Bot) sendEvent(e Event) {
 		}
 	}
 
+	b.recordSendOK()
 	logging.Debug("telegram: sent message", "project", e.Project, "kind", e.Kind, "parts", len(messages))
 }
 
