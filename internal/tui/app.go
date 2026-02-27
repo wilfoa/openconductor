@@ -135,6 +135,11 @@ type App struct {
 	// the last scroll check. Only dirty projects are checked on tick.
 	scrollDirty map[string]bool
 
+	// scrollOffsets and scrollPinned store per-session scroll state so that
+	// switching tabs preserves each tab's scroll position independently.
+	scrollOffsets map[string]int
+	scrollPinned  map[string]bool
+
 	// pendingRestoreTabs holds project names that should be started on
 	// the first WindowSizeMsg (when terminal dimensions are known). Set
 	// by NewApp from restored state; cleared after sessions are started.
@@ -227,6 +232,8 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		scrollSnapshots:      make(map[string][]string),
 		scrollGlyphSnapshots: make(map[string][]scrollbackLine),
 		scrollDirty:          make(map[string]bool),
+		scrollOffsets:        make(map[string]int),
+		scrollPinned:         make(map[string]bool),
 		pendingRestoreTabs:   openTabs,
 	}
 }
@@ -490,6 +497,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Any keyboard input snaps the terminal back to live view.
 		if a.terminal.InScrollMode() {
 			a.terminal.ScrollToBottom()
+			if sid := a.terminal.sessionID; sid != "" {
+				a.scrollOffsets[sid] = 0
+				a.scrollPinned[sid] = false
+			}
 		}
 
 		// Terminal focused — send keystrokes to the active session's PTY.
@@ -585,10 +596,28 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// causing content duplication.
 				a.syncTerminalFromSession()
 
+				// For alt-screen TUI apps (like OpenCode), a small scroll
+				// offset shows content nearly identical to the live screen
+				// because the scrollback buffer captures whole screen
+				// repaints. Use half-page jumps so the user sees
+				// meaningfully different content immediately.
+				delta := scrollLinesPerTick
+				if a.terminal.altScreen && a.terminal.height > 0 {
+					delta = a.terminal.height / 2
+					if delta < scrollLinesPerTick {
+						delta = scrollLinesPerTick
+					}
+				}
+
 				if msg.Button == tea.MouseButtonWheelUp {
-					a.terminal.ScrollBy(scrollLinesPerTick)
+					a.terminal.ScrollBy(delta)
 				} else {
-					a.terminal.ScrollBy(-scrollLinesPerTick)
+					a.terminal.ScrollBy(-delta)
+				}
+				// Persist scroll state to per-session maps.
+				if sid := a.terminal.sessionID; sid != "" {
+					a.scrollOffsets[sid] = a.terminal.scrollOffset
+					a.scrollPinned[sid] = a.terminal.scrollPinned
 				}
 				return a, nil
 			}
@@ -1223,11 +1252,24 @@ func (a *App) syncTerminalFromSession() {
 	s.Mu.RUnlock()
 
 	a.terminal.mu.Lock()
+
+	// Save the outgoing session's scroll state before overwriting.
+	if prev := a.terminal.sessionID; prev != "" && prev != s.ID {
+		a.scrollOffsets[prev] = a.terminal.scrollOffset
+		a.scrollPinned[prev] = a.terminal.scrollPinned
+	}
+
 	a.terminal.vt = vt
 	a.terminal.width = w
 	a.terminal.height = h
 	a.terminal.active = true
 	a.terminal.altScreen = alt
+	a.terminal.sessionID = s.ID
+
+	// Restore the incoming session's scroll state.
+	a.terminal.scrollOffset = a.scrollOffsets[s.ID]
+	a.terminal.scrollPinned = a.scrollPinned[s.ID]
+
 	a.terminal.mu.Unlock()
 
 	// Point the terminal at this session's scrollback buffer.
@@ -1262,8 +1304,14 @@ func (a *App) runScrollCheck() {
 		// not scrolling back down), bump the offset so the view stays on
 		// the same content. When not pinned (user is scrolling down toward
 		// live), skip adjustment so they can reach offset 0.
+		//
+		// For the active session, update both the terminal and the
+		// per-session map. For background sessions, update only the map.
 		if sessionID == a.mgr.ActiveName() && a.terminal.scrollOffset > 0 && pushed > 0 && a.terminal.scrollPinned {
 			a.terminal.scrollOffset += pushed
+			a.scrollOffsets[sessionID] = a.terminal.scrollOffset
+		} else if sessionID != a.mgr.ActiveName() && a.scrollOffsets[sessionID] > 0 && pushed > 0 && a.scrollPinned[sessionID] {
+			a.scrollOffsets[sessionID] += pushed
 		}
 	}
 }
@@ -1621,6 +1669,8 @@ func (a *App) removeTab(sessionID string) {
 	}
 	delete(a.tabLabels, sessionID)
 	delete(a.tabProjects, sessionID)
+	delete(a.scrollOffsets, sessionID)
+	delete(a.scrollPinned, sessionID)
 }
 
 // tabDisplayName returns the display name for a tab. If the user has set a

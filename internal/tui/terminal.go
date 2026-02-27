@@ -36,14 +36,15 @@ type ptyOutputMsg []byte
 type ptyExitedMsg struct{ err error }
 
 type terminalModel struct {
-	ptmx    *os.File
-	cmd     *exec.Cmd
-	vt      vt10x.Terminal
-	mu      *sync.RWMutex
-	width   int
-	height  int
-	focused bool
-	active  bool
+	ptmx      *os.File
+	cmd       *exec.Cmd
+	vt        vt10x.Terminal
+	mu        *sync.RWMutex
+	width     int
+	height    int
+	focused   bool
+	active    bool
+	sessionID string // currently displayed session (for scroll state save/restore)
 
 	// Scrollback state. The buffer captures glyph rows as they scroll off
 	// the top of the vt10x viewport. scrollOffset tracks how many lines
