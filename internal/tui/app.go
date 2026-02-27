@@ -56,8 +56,9 @@ type sessionExitedMsg struct {
 
 // stateStickDuration is the minimum time an attention state (NeedsAttention,
 // Error, Done) is held before it can be downgraded back to Working. This
-// prevents visual flicker when attention signals are transient.
-const stateStickDuration = 10 * time.Second
+// prevents visual flicker when attention signals are transient. Kept short
+// so the UI updates promptly after the user resolves an alert.
+const stateStickDuration = 3 * time.Second
 
 // ctrlCWindow is the maximum time between two Ctrl+C presses for them to
 // count as a double-tap exit sequence.
@@ -1783,14 +1784,11 @@ func (a *App) checkAttention() {
 			a.statusbar.states[sessionID] = state
 		} else if isWorking {
 			// Positive working signal (agent-specific: spinner, progress
-			// bar, etc). Only upgrade to Working; respect sticky attention
-			// states.
+			// bar, etc). The agent is clearly busy — clear any sticky
+			// attention state immediately. The previous sticky timer was
+			// designed for "no signal" ambiguity; a definitive working
+			// signal means the user already resolved the alert.
 			if s.State == session.StateRunning {
-				if isAttentionState(prevState) {
-					if deadline, ok := a.stateStickUntil[sessionID]; ok && now.Before(deadline) {
-						continue
-					}
-				}
 				a.sessionStates[sessionID] = StateWorking
 				a.statusbar.states[sessionID] = StateWorking
 				delete(a.stateStickUntil, sessionID)

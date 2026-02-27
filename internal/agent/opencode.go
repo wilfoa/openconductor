@@ -103,7 +103,9 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	hasIdleShortcuts := false
 	hasPermissionRequired := false
 	hasAllowOnce := false
+	hasReject := false
 	hasQuestionDialog := false
+	hasFullscreen := false // "ctrl+f fullscreen" appears in permission dialog footer
 
 	// Scan all visible lines (not just a few) because the permission
 	// and question dialogs span multiple rows and header text may appear
@@ -113,7 +115,11 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		if trimmed == "" {
 			continue
 		}
-		lower := strings.ToLower(trimmed)
+
+		// Collapse runs of whitespace to single spaces so VT grid padding
+		// between button labels doesn't break substring matching.
+		// e.g. "Allow once    Allow always    Reject" → "allow once allow always reject"
+		lower := strings.ToLower(collapseSpaces(trimmed))
 
 		if strings.Contains(lower, "esc interrupt") {
 			hasEscInterrupt = true
@@ -121,18 +127,30 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		if strings.Contains(lower, "ctrl+p commands") || strings.Contains(lower, "ctrl+t variants") {
 			hasIdleShortcuts = true
 		}
-		// Model selector footer visible when idle: "Build  Claude Opus 4.6 Anthropic · max".
-		// The middle-dot separator + provider name is unique to the model selector
-		// and does not appear during working state (which shows "esc interrupt").
-		if isModelSelectorLine(lower) {
+		// Model selector footer visible when idle: "Build · Claude Opus 4.6 Anthropic · max".
+		// Only match when the line does NOT contain "esc interrupt" — the model
+		// selector row is always visible but should only signal idle when the
+		// agent is not working.
+		if !strings.Contains(lower, "esc interrupt") && isModelSelectorLine(lower) {
 			hasIdleShortcuts = true
 		}
+		// "Permission required" header — may be prefixed with Unicode symbols
+		// (△ U+25B3, ⚠ U+26A0) that the VT reader splits into separate cells.
+		// Match the words regardless of prefix.
 		if strings.Contains(lower, "permission required") {
 			hasPermissionRequired = true
 		}
-		// "Allow once" appears in the button row of the permission dialog.
+		// "Allow once" / "Allow always" in the button row.
 		if strings.Contains(lower, "allow once") || strings.Contains(lower, "allow always") {
 			hasAllowOnce = true
+		}
+		// "Reject" button alongside Allow buttons.
+		if strings.Contains(lower, "reject") {
+			hasReject = true
+		}
+		// "ctrl+f fullscreen" appears only in the permission dialog footer.
+		if strings.Contains(lower, "ctrl+f fullscreen") {
+			hasFullscreen = true
 		}
 		// "enter submit  esc dismiss" or "enter confirm  esc dismiss" is
 		// the footer of OpenCode's question/selection dialog. Match either
@@ -147,6 +165,8 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		"idleShortcuts", hasIdleShortcuts,
 		"permissionRequired", hasPermissionRequired,
 		"allowOnce", hasAllowOnce,
+		"reject", hasReject,
+		"fullscreen", hasFullscreen,
 		"questionDialog", hasQuestionDialog,
 	)
 
@@ -155,7 +175,16 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	// dialog cells — the underlying "esc interrupt" progress text can
 	// remain in the vt10x buffer. The agent cannot continue until the
 	// user responds, so these must win.
-	if hasPermissionRequired || hasAllowOnce {
+	// Permission dialog detection — multiple redundant signals:
+	// 1. "Permission required" header text
+	// 2. "Allow once" / "Allow always" button text
+	// 3. "Reject" button alongside Allow buttons
+	// 4. "ctrl+f fullscreen" footer (permission-dialog only shortcut)
+	// Any combination of (header OR buttons OR fullscreen+reject) triggers.
+	isPermission := hasPermissionRequired ||
+		hasAllowOnce ||
+		(hasFullscreen && hasReject)
+	if isPermission {
 		// Permission dialog is visible.
 		return attention.Certain, &attention.AttentionEvent{
 			Type:   attention.NeedsPermission,
@@ -197,25 +226,62 @@ var knownProviders = []string{
 	"openrouter", "copilot", "local", "vertexai",
 }
 
+// knownModes are lowercase mode names that appear at the start of the
+// OpenCode model selector line. Matching mode + provider makes the
+// detection more robust than provider alone.
+var knownModes = []string{
+	"build", "plan", "code", "ask", "debug", "edit", "chat",
+}
+
 // isModelSelectorLine returns true if the line matches OpenCode's idle-state
 // model selector footer. The format is:
 //
-//	<mode>  <model_name> <provider> · <setting>
+//	<mode>  <model_name> <provider> [· <setting>]
 //
-// We match by looking for a known provider name followed by " · " on the
-// same line. This pattern does not appear during working state (which shows
-// "esc interrupt") or in modal dialogs.
+// We require a known mode name AND a known provider name on the same line.
+// The middle-dot separator " · " (U+00B7) may or may not be present
+// depending on the OpenCode version.
+//
+// IMPORTANT: The caller must exclude lines that contain "esc interrupt",
+// because the model selector row is always visible even during working state.
 func isModelSelectorLine(lower string) bool {
-	// The middle-dot separator " · " (U+00B7) is the key distinguisher.
-	if !strings.Contains(lower, " · ") {
-		return false
-	}
+	hasProvider := false
 	for _, p := range knownProviders {
 		if strings.Contains(lower, p) {
+			hasProvider = true
+			break
+		}
+	}
+	if !hasProvider {
+		return false
+	}
+	for _, m := range knownModes {
+		if strings.Contains(lower, m) {
 			return true
 		}
 	}
 	return false
+}
+
+// collapseSpaces replaces runs of consecutive spaces with a single space.
+// This normalises VT grid-padded text (e.g. button rows where labels are
+// separated by many spaces) so substring matching works reliably.
+func collapseSpaces(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prev := false
+	for _, r := range s {
+		if r == ' ' {
+			if !prev {
+				b.WriteRune(r)
+			}
+			prev = true
+		} else {
+			b.WriteRune(r)
+			prev = false
+		}
+	}
+	return b.String()
 }
 
 // FilterScreen extracts the conversation panel from the OpenCode TUI by
