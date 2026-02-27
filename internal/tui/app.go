@@ -86,6 +86,7 @@ type App struct {
 	sidebarWidth  int                     // content width of sidebar (excludes padding/border)
 	dragging      bool                    // true during separator drag
 	openTabs      []string                // session IDs of opened tabs, in visit order
+	tabProjects   map[string]string       // session ID → project name (survives mgr.Close)
 	tabLabels     map[string]string       // custom display labels per session ID (empty = use session ID)
 	sessionStates map[string]SessionState // per-session state, keyed by session ID
 
@@ -109,7 +110,8 @@ type App struct {
 
 	// lastCtrlC records when Ctrl+C was last pressed. A second press
 	// within ctrlCWindow exits OpenConductor; a single press forwards to PTY.
-	lastCtrlC time.Time
+	lastCtrlC  time.Time
+	stateSaved bool // true after saveState() succeeds; prevents main.go from overwriting
 	// ctrlCHint is true when the "press again to exit" hint should show
 	// in the status bar. Cleared on the next non-Ctrl+C key or after
 	// the window expires.
@@ -215,6 +217,7 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		detector:             attention.NewDetector(),
 		sidebarWidth:         defaultSidebarWidth,
 		openTabs:             openTabs,
+		tabProjects:          make(map[string]string),
 		tabLabels:            tabLabels,
 		editingTab:           -1,
 		sessionStates:        make(map[string]SessionState),
@@ -253,7 +256,12 @@ func (a *App) SetStatePath(path string) {
 
 // SaveStatePublic persists the current open tabs to disk. Called by main()
 // after the program exits to ensure state is saved even on signal-based exits.
+// Skips if the Ctrl+C handler already saved (which has more complete state
+// because it runs before mgr.Close).
 func (a App) SaveStatePublic() {
+	if a.stateSaved {
+		return
+	}
 	a.saveState()
 }
 
@@ -777,9 +785,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusbar.activeName = msg.SessionID
 		a.addTab(msg.SessionID)
 		a.syncTerminalFromSession()
-		// Update sidebar to show this project has an open tab.
+		// Update sidebar to show this project has an open tab and record
+		// the session→project mapping for state persistence (survives
+		// mgr.Close).
 		if s := a.mgr.GetSession(msg.SessionID); s != nil {
 			a.sidebar.openTabs[s.Project.Name] = true
+			a.tabProjects[msg.SessionID] = s.Project.Name
 			// Load conversation history in the background so the user can
 			// scroll up to see prior context immediately.
 			cmds = append(cmds, a.loadHistoryCmd(msg.SessionID, s.Project))
@@ -1521,27 +1532,33 @@ func (a App) switchTab(delta int) tea.Cmd {
 }
 
 // saveState writes the current open tabs and active project to the state file
-// so they can be restored on the next launch.
+// so they can be restored on the next launch. It uses the tabProjects map
+// (not the session manager) so it works even after mgr.Close().
 func (a *App) saveState() {
 	if a.statePath == "" {
 		return
 	}
 
 	// Collect tab states from open tabs — project name + custom label.
+	// Use tabProjects (populated when sessions start, survives mgr.Close)
+	// instead of querying the session manager.
 	var tabs []config.TabState
 	for _, sessionID := range a.openTabs {
-		if s := a.mgr.GetSession(sessionID); s != nil {
-			tabs = append(tabs, config.TabState{
-				Project: s.Project.Name,
-				Label:   a.tabLabels[sessionID],
-			})
+		projectName, ok := a.tabProjects[sessionID]
+		if !ok {
+			continue
 		}
+		tabs = append(tabs, config.TabState{
+			Project: projectName,
+			Label:   a.tabLabels[sessionID],
+		})
 	}
 
-	// Determine the active project name.
+	// Determine the active project name from tabProjects so this works
+	// even after mgr.Close().
 	var activeProject string
-	if s := a.mgr.ActiveSession(); s != nil {
-		activeProject = s.Project.Name
+	if activeName := a.mgr.ActiveName(); activeName != "" {
+		activeProject = a.tabProjects[activeName]
 	}
 
 	state := config.AppState{
@@ -1552,6 +1569,7 @@ func (a *App) saveState() {
 	if err := config.SaveState(a.statePath, state); err != nil {
 		logging.Error("failed to save state", "err", err)
 	} else {
+		a.stateSaved = true
 		logging.Debug("state saved", "tabs", len(tabs), "active", activeProject)
 	}
 }
@@ -1592,7 +1610,7 @@ func (a *App) addTab(sessionID string) {
 	}
 }
 
-// removeTab removes a session ID from the open tabs list and its label.
+// removeTab removes a session ID from the open tabs list and its metadata.
 func (a *App) removeTab(sessionID string) {
 	for i, t := range a.openTabs {
 		if t == sessionID {
@@ -1601,6 +1619,7 @@ func (a *App) removeTab(sessionID string) {
 		}
 	}
 	delete(a.tabLabels, sessionID)
+	delete(a.tabProjects, sessionID)
 }
 
 // tabDisplayName returns the display name for a tab. If the user has set a
