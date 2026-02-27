@@ -16,6 +16,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
+
+	"github.com/openconductorhq/openconductor/internal/logging"
 )
 
 // vt10x attribute flags — mirrored from unexported constants in vt10x/state.go.
@@ -235,8 +237,18 @@ func (m terminalModel) viewLive() string {
 // so we render a mix: scrollback lines at top, live viewport rows at bottom.
 func (m terminalModel) viewScrollback() string {
 	if m.altScreen {
+		logging.Debug("scrollback: rendering alt-screen only",
+			"offset", m.scrollOffset,
+			"sb_len", m.scrollback.Len(),
+			"height", m.height,
+		)
 		return m.viewScrollbackOnly()
 	}
+	logging.Debug("scrollback: rendering mixed (NOT alt-screen)",
+		"offset", m.scrollOffset,
+		"sb_len", m.scrollback.Len(),
+		"height", m.height,
+	)
 	return m.viewScrollbackMixed()
 }
 

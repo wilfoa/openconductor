@@ -77,7 +77,7 @@ func TestSaveCreatesDirectoryAndFile(t *testing.T) {
 	path := filepath.Join(dir, "sub", "deep", "config.yaml")
 
 	cfg := &Config{
-		Projects: []Project{{Name: "p1", Repo: "/tmp", Agent: AgentGemini}},
+		Projects: []Project{{Name: "p1", Repo: "/tmp", Agent: AgentOpenCode}},
 	}
 	if err := cfg.Save(path); err != nil {
 		t.Fatalf("Save failed: %v", err)
@@ -95,7 +95,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	original := &Config{
 		Projects: []Project{
 			{Name: "alpha", Repo: "/tmp/alpha", Agent: AgentClaudeCode},
-			{Name: "beta", Repo: "/tmp/beta", Agent: AgentCodex},
+			{Name: "beta", Repo: "/tmp/beta", Agent: AgentOpenCode},
 		},
 		Notifications: NotificationConfig{Enabled: true, Cooldown: 60},
 	}

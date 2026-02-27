@@ -29,8 +29,8 @@ func sidebarSendMouse(t *testing.T, m sidebarModel, action tea.MouseAction, butt
 func testProjects() []config.Project {
 	return []config.Project{
 		{Name: "alpha", Repo: "/tmp/alpha", Agent: config.AgentClaudeCode},
-		{Name: "beta", Repo: "/tmp/beta", Agent: config.AgentCodex},
-		{Name: "gamma", Repo: "/tmp/gamma", Agent: config.AgentGemini},
+		{Name: "beta", Repo: "/tmp/beta", Agent: config.AgentOpenCode},
+		{Name: "gamma", Repo: "/tmp/gamma", Agent: config.AgentOpenCode},
 	}
 }
 

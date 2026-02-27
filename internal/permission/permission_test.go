@@ -280,8 +280,6 @@ func TestDetectionModeFor_AllAgentsUseL1First(t *testing.T) {
 	agents := []config.AgentType{
 		config.AgentClaudeCode,
 		config.AgentOpenCode,
-		config.AgentCodex,
-		config.AgentGemini,
 	}
 	for _, at := range agents {
 		if DetectionModeFor(at) != ModeL1First {

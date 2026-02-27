@@ -357,16 +357,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.sidebar.focused = true
 			a.terminal.focused = false
 		} else if a.mgr.ActiveSession() == nil && len(a.pendingRestoreTabs) > 0 {
-			// Start a session for each restored tab.
+			// Start a session for each restored tab, resuming the previous
+			// conversation (--continue for OpenCode).
 			for _, name := range a.pendingRestoreTabs {
 				if p, ok := a.projectByName(name); ok {
-					cmds = append(cmds, a.startSessionCmd(p))
+					cmds = append(cmds, a.startSessionCmd(p, true))
 				}
 			}
 			a.pendingRestoreTabs = nil
 		} else if a.mgr.ActiveSession() == nil {
-			// No restored state — start the first project.
-			cmd := a.startSessionCmd(a.cfg.Projects[0])
+			// No restored state — start the first project with --continue
+			// so it picks up any prior conversation.
+			cmd := a.startSessionCmd(a.cfg.Projects[0], true)
 			cmds = append(cmds, cmd)
 		}
 
@@ -568,6 +570,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Mouse wheel in terminal area → navigate scrollback buffer.
 			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+				// Sync terminal state so altScreen is fresh — without this,
+				// viewScrollback may use the mixed renderer instead of the
+				// scrollback-only renderer for alt-screen TUI sessions,
+				// causing content duplication.
+				a.syncTerminalFromSession()
+
 				if msg.Button == tea.MouseButtonWheelUp {
 					a.terminal.ScrollBy(scrollLinesPerTick)
 				} else {
@@ -630,21 +638,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// No existing tab — create a new session.
+		// No existing tab — create a new session with --continue to
+		// resume the previous conversation for this project.
 		a.focus = focusTerminal
 		a.sidebar.focused = false
 		a.terminal.focused = true
-		cmd := a.startSessionCmd(project)
+		cmd := a.startSessionCmd(project, true)
 		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)
 
 	case NewInstanceMsg:
 		// Always create a new session (new agent process), even if the
 		// project already has open tabs. Triggered by 'n' in sidebar.
+		// No --continue: this is an explicit fresh start.
 		a.focus = focusTerminal
 		a.sidebar.focused = false
 		a.terminal.focused = true
-		cmd := a.startSessionCmd(msg.Project)
+		cmd := a.startSessionCmd(msg.Project, false)
 		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)
 
@@ -692,9 +702,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.focused = false
 		a.terminal.focused = true
 
-		// Save config and start session.
+		// Save config and start session with --continue to pick up any
+		// prior conversation.
 		cmds = append(cmds, a.saveConfigCmd())
-		cmds = append(cmds, a.startSessionCmd(project))
+		cmds = append(cmds, a.startSessionCmd(project, true))
 		return a, tea.Batch(cmds...)
 
 	case ProjectDeletedMsg:
@@ -743,7 +754,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// If the deleted project was the active one, switch.
 		if a.mgr.ActiveName() == "" && len(a.cfg.Projects) > 0 {
 			a.active = a.sidebar.selected
-			cmds = append(cmds, a.startSessionCmd(a.cfg.Projects[a.active]))
+			cmds = append(cmds, a.startSessionCmd(a.cfg.Projects[a.active], true))
 		} else if len(a.cfg.Projects) == 0 {
 			a.terminal.active = false
 			a.focus = focusSidebar
@@ -1098,13 +1109,16 @@ func (a *App) termDimensions() (int, int) {
 
 // startSessionCmd creates a tea.Cmd that starts a new session for the given
 // project in the background and emits a sessionStartedMsg on success.
-// Each call creates a fresh agent process.
-func (a *App) startSessionCmd(project config.Project) tea.Cmd {
+// When continueConv is true, the agent is told to resume the previous
+// conversation (e.g. opencode --continue). Use true for restored tabs and
+// the first tab for a project; use false for explicit "new instance" requests.
+func (a *App) startSessionCmd(project config.Project, continueConv bool) tea.Cmd {
 	mgr := a.mgr
 	termW, termH := a.termDimensions()
+	opts := agent.LaunchOptions{Continue: continueConv}
 
 	return func() tea.Msg {
-		s, err := mgr.StartSession(project, termW, termH)
+		s, err := mgr.StartSession(project, termW, termH, opts)
 		if err != nil {
 			return SessionStateChangedMsg{
 				SessionID: project.Name,

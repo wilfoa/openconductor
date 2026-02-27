@@ -70,7 +70,7 @@ func printUsage() {
 	fmt.Println("  openconductor bootstrap <repo-path> [--agent <type>]")
 	fmt.Println()
 	fmt.Println("Flags:")
-	fmt.Println("  --agent    Agent type: claude-code (default), codex, gemini")
+	fmt.Println("  --agent    Agent type: opencode (default), claude-code")
 }
 
 func runTelegram(args []string) {

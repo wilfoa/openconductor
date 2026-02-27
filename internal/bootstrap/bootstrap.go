@@ -52,27 +52,8 @@ func Bootstrap(repoPath string, agentType string) error {
 		if err := renderTemplate("templates/mcp_json.tmpl", filepath.Join(absPath, ".mcp.json"), data); err != nil {
 			return err
 		}
-	case "codex":
-		codexDir := filepath.Join(absPath, ".codex")
-		if err := os.MkdirAll(codexDir, 0o755); err != nil {
-			return fmt.Errorf("creating .codex directory: %w", err)
-		}
-		if err := renderTemplate("templates/codex_instructions.tmpl", filepath.Join(codexDir, "instructions.md"), data); err != nil {
-			return err
-		}
-	case "gemini":
-		geminiDir := filepath.Join(absPath, ".gemini")
-		if err := os.MkdirAll(geminiDir, 0o755); err != nil {
-			return fmt.Errorf("creating .gemini directory: %w", err)
-		}
-		if err := renderTemplate("templates/gemini_md.tmpl", filepath.Join(absPath, "GEMINI.md"), data); err != nil {
-			return err
-		}
-		if err := renderTemplate("templates/gemini_settings.tmpl", filepath.Join(geminiDir, "settings.json"), data); err != nil {
-			return err
-		}
 	default:
-		return fmt.Errorf("unknown agent type: %q (supported: claude-code, codex, gemini)", agentType)
+		return fmt.Errorf("unknown agent type: %q (supported: claude-code, opencode)", agentType)
 	}
 
 	return nil

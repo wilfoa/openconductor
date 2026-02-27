@@ -70,7 +70,8 @@ func NewSystemSession(name string) *Session {
 }
 
 // Start launches the agent process in a PTY with the given dimensions.
-func (s *Session) Start(width, height int) error {
+// opts is forwarded to the agent adapter's Command method.
+func (s *Session) Start(width, height int, opts agent.LaunchOptions) error {
 	if width < 1 {
 		width = 80
 	}
@@ -88,7 +89,7 @@ func (s *Session) Start(width, height int) error {
 	s.VT = vt10x.New(vt10x.WithSize(width, height))
 
 	// Build the command from the agent adapter.
-	cmd := s.Agent.Command(s.Project.Repo, agent.LaunchOptions{})
+	cmd := s.Agent.Command(s.Project.Repo, opts)
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",

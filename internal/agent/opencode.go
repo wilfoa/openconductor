@@ -30,9 +30,14 @@ func (a *opencodeAdapter) Type() config.AgentType {
 }
 
 // Command returns an *exec.Cmd that launches the "opencode" CLI in the given
-// repo directory. The --continue flag resumes the previous conversation.
+// repo directory. When opts.Continue is true, --continue is passed to resume
+// the previous conversation (used for restored tabs and first tab for a project).
 func (a *opencodeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
-	cmd := exec.Command("opencode", "--continue")
+	args := []string{}
+	if opts.Continue {
+		args = append(args, "--continue")
+	}
+	cmd := exec.Command("opencode", args...)
 	cmd.Dir = repoPath
 	return cmd
 }

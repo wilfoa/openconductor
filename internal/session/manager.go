@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sync"
 
+	"github.com/openconductorhq/openconductor/internal/agent"
 	"github.com/openconductorhq/openconductor/internal/config"
 )
 
@@ -42,8 +43,8 @@ func sessionID(projectName string, instance int) string {
 
 // StartSession creates and starts a new session for the given project.
 // Each call creates a fresh agent process — multiple sessions for the same
-// project run in parallel.
-func (m *Manager) StartSession(project config.Project, width, height int) (*Session, error) {
+// project run in parallel. opts is forwarded to the agent adapter.
+func (m *Manager) StartSession(project config.Project, width, height int, opts agent.LaunchOptions) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -59,7 +60,7 @@ func (m *Manager) StartSession(project config.Project, width, height int) (*Sess
 	s.ID = id
 	s.Instance = instance
 
-	if err := s.Start(width, height); err != nil {
+	if err := s.Start(width, height, opts); err != nil {
 		m.nextInstance[project.Name]--
 		return nil, fmt.Errorf("manager: %w", err)
 	}

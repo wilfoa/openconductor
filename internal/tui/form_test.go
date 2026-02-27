@@ -113,34 +113,18 @@ func TestFormAgentJKNavigation(t *testing.T) {
 	m.step = stepAgent
 	m.agentIndex = 0
 
-	// j moves down
+	// j moves down (2 agents: opencode=0, claude-code=1)
 	m, _ = sendRune(t, m, 'j')
 	if m.agentIndex != 1 {
 		t.Fatalf("expected agentIndex 1, got %d", m.agentIndex)
-	}
-	m, _ = sendRune(t, m, 'j')
-	if m.agentIndex != 2 {
-		t.Fatalf("expected agentIndex 2, got %d", m.agentIndex)
-	}
-	m, _ = sendRune(t, m, 'j')
-	if m.agentIndex != 3 {
-		t.Fatalf("expected agentIndex 3, got %d", m.agentIndex)
 	}
 	// j at bottom stays
 	m, _ = sendRune(t, m, 'j')
-	if m.agentIndex != 3 {
-		t.Fatalf("expected agentIndex 3 (clamped), got %d", m.agentIndex)
+	if m.agentIndex != 1 {
+		t.Fatalf("expected agentIndex 1 (clamped), got %d", m.agentIndex)
 	}
 
 	// k moves up
-	m, _ = sendRune(t, m, 'k')
-	if m.agentIndex != 2 {
-		t.Fatalf("expected agentIndex 2, got %d", m.agentIndex)
-	}
-	m, _ = sendRune(t, m, 'k')
-	if m.agentIndex != 1 {
-		t.Fatalf("expected agentIndex 1, got %d", m.agentIndex)
-	}
 	m, _ = sendRune(t, m, 'k')
 	if m.agentIndex != 0 {
 		t.Fatalf("expected agentIndex 0, got %d", m.agentIndex)
@@ -219,7 +203,7 @@ func TestFormSubmit(t *testing.T) {
 	m.step = stepAutoApprove
 	m.nameInput.SetValue("myproject")
 	m.repoInput.SetValue("/tmp")
-	m.agentIndex = 1    // codex
+	m.agentIndex = 1    // claude-code (index 1 in the reordered list)
 	m.approvalIndex = 1 // safe
 
 	_, cmd := sendKey(t, m, tea.KeyEnter)
@@ -234,8 +218,8 @@ func TestFormSubmit(t *testing.T) {
 	if added.Project.Name != "myproject" {
 		t.Fatalf("expected name 'myproject', got %q", added.Project.Name)
 	}
-	if added.Project.Agent != config.AgentCodex {
-		t.Fatalf("expected agent codex, got %q", added.Project.Agent)
+	if added.Project.Agent != config.AgentClaudeCode {
+		t.Fatalf("expected agent claude-code, got %q", added.Project.Agent)
 	}
 	if added.Project.AutoApprove != config.ApprovalSafe {
 		t.Fatalf("expected auto_approve 'safe', got %q", added.Project.AutoApprove)

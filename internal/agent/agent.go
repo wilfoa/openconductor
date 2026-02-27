@@ -16,6 +16,10 @@ import (
 // LaunchOptions holds parameters passed when launching an agent.
 type LaunchOptions struct {
 	Prompt string
+	// Continue tells the agent to resume the previous conversation instead
+	// of starting fresh. Used when restoring tabs from a previous session
+	// or opening the first tab for a project (which already has history).
+	Continue bool
 }
 
 // BootstrapFile represents a file that should be written into the repo before

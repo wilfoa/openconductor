@@ -15,8 +15,6 @@ type AgentType string
 
 const (
 	AgentClaudeCode AgentType = "claude-code"
-	AgentCodex      AgentType = "codex"
-	AgentGemini     AgentType = "gemini"
 	AgentOpenCode   AgentType = "opencode"
 )
 
@@ -107,7 +105,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("project %q: missing repo path", p.Name)
 		}
 		switch p.Agent {
-		case AgentClaudeCode, AgentCodex, AgentGemini, AgentOpenCode:
+		case AgentClaudeCode, AgentOpenCode:
 			// valid
 		default:
 			return fmt.Errorf("project %q: unknown agent type %q", p.Name, p.Agent)

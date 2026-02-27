@@ -25,7 +25,7 @@ func configWithProjects() *config.Config {
 	return &config.Config{
 		Projects: []config.Project{
 			{Name: "proj1", Repo: "/tmp/p1", Agent: config.AgentClaudeCode},
-			{Name: "proj2", Repo: "/tmp/p2", Agent: config.AgentCodex},
+			{Name: "proj2", Repo: "/tmp/p2", Agent: config.AgentOpenCode},
 		},
 	}
 }
@@ -93,7 +93,7 @@ func TestAppProjectAddedUpdatesConfig(t *testing.T) {
 	app := NewApp(emptyConfig(), "", nil)
 
 	msg := ProjectAddedMsg{
-		Project: config.Project{Name: "new", Repo: "/tmp/new", Agent: config.AgentGemini},
+		Project: config.Project{Name: "new", Repo: "/tmp/new", Agent: config.AgentOpenCode},
 	}
 	model, _ := app.Update(msg)
 	app = model.(App)
@@ -585,7 +585,7 @@ func TestAppProjectAddedReturnsStartCmd(t *testing.T) {
 	app := NewApp(emptyConfig(), "", nil)
 
 	msg := ProjectAddedMsg{
-		Project: config.Project{Name: "new", Repo: "/tmp/new", Agent: config.AgentGemini},
+		Project: config.Project{Name: "new", Repo: "/tmp/new", Agent: config.AgentOpenCode},
 	}
 	_, cmd := app.Update(msg)
 
@@ -614,8 +614,8 @@ func configWith3Projects() *config.Config {
 	return &config.Config{
 		Projects: []config.Project{
 			{Name: "alpha", Repo: "/tmp/a", Agent: config.AgentClaudeCode},
-			{Name: "beta", Repo: "/tmp/b", Agent: config.AgentCodex},
-			{Name: "gamma", Repo: "/tmp/c", Agent: config.AgentGemini},
+			{Name: "beta", Repo: "/tmp/b", Agent: config.AgentOpenCode},
+			{Name: "gamma", Repo: "/tmp/c", Agent: config.AgentOpenCode},
 		},
 	}
 }

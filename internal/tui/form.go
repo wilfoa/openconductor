@@ -49,10 +49,8 @@ const (
 )
 
 var agentTypes = []config.AgentType{
-	config.AgentClaudeCode,
-	config.AgentCodex,
-	config.AgentGemini,
 	config.AgentOpenCode,
+	config.AgentClaudeCode,
 }
 
 type formModel struct {

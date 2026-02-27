@@ -539,6 +539,66 @@ func TestViewScrollbackOnly_ScrollFurther(t *testing.T) {
 	}
 }
 
+// ── altScreen flag determines rendering path ────────────────────
+
+func TestViewScrollback_MixedCausesDuplication(t *testing.T) {
+	// Demonstrates that when altScreen is incorrectly false for a TUI session,
+	// viewScrollbackMixed produces duplication — the most recent scrollback
+	// rows at the top overlap with live viewport rows from the top. This is
+	// the bug seen with mouse scroll.
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(30, 5))
+	tm.vt = vt
+	tm.width = 30
+	tm.height = 5
+	tm.altScreen = false // BUG: should be true for TUI apps
+
+	// Live viewport shows TUI content.
+	tm.vt.Write([]byte("HEADER\r\nAlpha\r\nBravo\r\nCharlie\r\nFOOTER"))
+
+	// Scrollback has content that partially overlaps the viewport.
+	// The MOST RECENT scrollback lines (pushed last) will be shown at top
+	// by the mixed renderer when scrolled up. Make them overlap with
+	// viewport rows that will also be rendered from the live VT.
+	tm.scrollback.Push(makeGlyphsWidth("old stuff", 30))
+	tm.scrollback.Push(makeGlyphsWidth("HEADER", 30)) // matches viewport row 0
+	tm.scrollback.Push(makeGlyphsWidth("Alpha", 30))  // matches viewport row 1
+
+	// Scroll up by 2 with altScreen=false → mixed renderer.
+	// Mixed shows: 2 most recent scrollback lines + top 3 viewport rows.
+	// Scrollback: "HEADER", "Alpha" | Viewport: "HEADER", "Alpha", "Bravo"
+	tm.scrollOffset = 2
+	mixed := tm.viewScrollback()
+
+	// Count how many times "HEADER" and "Alpha" appear — mixed renderer
+	// will show each twice (once from scrollback, once from viewport).
+	headerCount := strings.Count(mixed, "HEADER")
+	alphaCount := strings.Count(mixed, "Alpha")
+	if headerCount < 2 || alphaCount < 2 {
+		t.Fatalf("expected mixed renderer to duplicate content: HEADER=%d Alpha=%d (want >=2 each)",
+			headerCount, alphaCount)
+	}
+
+	// Now set altScreen=true and verify the scrollback-only renderer avoids it.
+	tm.altScreen = true
+	only := tm.viewScrollback()
+
+	// The alt-screen view shows ONLY scrollback, no live viewport rows.
+	onlyHeader := strings.Count(only, "HEADER")
+	onlyAlpha := strings.Count(only, "Alpha")
+	if onlyHeader > 1 {
+		t.Errorf("alt-screen renderer should not duplicate 'HEADER', got %d", onlyHeader)
+	}
+	if onlyAlpha > 1 {
+		t.Errorf("alt-screen renderer should not duplicate 'Alpha', got %d", onlyAlpha)
+	}
+
+	// The alt-screen view should NOT contain FOOTER from the live viewport.
+	if strings.Contains(only, "FOOTER") {
+		t.Error("alt-screen scrollback should not show live FOOTER")
+	}
+}
+
 // ── E2E: TUI-style full-screen rewrite via vt10x ────────────────
 
 func TestCaptureScrollbackTUIFullRedraw(t *testing.T) {
