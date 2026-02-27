@@ -55,7 +55,7 @@ func TestCleanScreen_PreservesMiddleBlanks(t *testing.T) {
 func TestSplitMessage_ShortFitsInOne(t *testing.T) {
 	header := "<b>proj</b>\n\n"
 	body := "short body"
-	msgs := splitMessage(header, body)
+	msgs := splitMessage(header, body, true)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
@@ -63,7 +63,19 @@ func TestSplitMessage_ShortFitsInOne(t *testing.T) {
 		t.Fatal("expected header in message")
 	}
 	if !strings.Contains(msgs[0], "<pre>") {
-		t.Fatal("expected <pre> tag")
+		t.Fatal("expected <pre> tag in code block mode")
+	}
+
+	// Without code block mode, no <pre> tags.
+	plain := splitMessage(header, body, false)
+	if len(plain) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(plain))
+	}
+	if strings.Contains(plain[0], "<pre>") {
+		t.Fatal("plain mode should not contain <pre> tag")
+	}
+	if !strings.Contains(plain[0], "short body") {
+		t.Fatal("expected body in plain message")
 	}
 }
 
@@ -76,7 +88,7 @@ func TestSplitMessage_LongSplitsAcrossMessages(t *testing.T) {
 	}
 	body := sb.String()
 
-	msgs := splitMessage(header, body)
+	msgs := splitMessage(header, body, true)
 	if len(msgs) < 2 {
 		t.Fatalf("expected multiple messages, got %d", len(msgs))
 	}
@@ -100,7 +112,7 @@ func TestSplitMessage_LongSplitsAcrossMessages(t *testing.T) {
 		}
 	}
 
-	// Every message should have matching <pre>...</pre> tags.
+	// Every message should have matching <pre>...</pre> tags in code block mode.
 	for i, msg := range msgs {
 		if !strings.Contains(msg, "<pre>") || !strings.Contains(msg, "</pre>") {
 			t.Fatalf("message %d missing <pre> tags", i)
@@ -325,7 +337,6 @@ func TestFormatDisplay_Attention_Structure(t *testing.T) {
 		{"<b>frontend</b>", "bold project name"},
 		{"\xe2\x9a\xa0", "warning emoji"},
 		{"waiting for input", "detail text"},
-		{"<pre>", "pre block"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(msg, c.contains) {
@@ -374,7 +385,6 @@ func TestFormatDisplay_Done_Structure(t *testing.T) {
 	}{
 		{"<b>my-api</b>", "bold project name"},
 		{"\xe2\x9c\x85", "checkmark emoji"},
-		{"<pre>", "pre block"},
 		{"config.ts", "screen content"},
 	}
 	for _, c := range checks {
@@ -391,12 +401,15 @@ func TestFormatDisplay_Response_Structure(t *testing.T) {
 	}
 	msg := msgs[0]
 
-	// Response is the simplest: just project name + screen.
+	// Response uses plain text (no <pre>) for natural language readability.
 	if !strings.Contains(msg, "<b>my-api</b>") {
 		t.Error("response missing bold project name")
 	}
-	if !strings.Contains(msg, "<pre>") {
-		t.Error("response missing pre block")
+	if strings.Contains(msg, "<pre>") {
+		t.Error("response should not contain <pre> tag (plain text mode)")
+	}
+	if !strings.Contains(msg, "config.ts") {
+		t.Error("response missing screen content")
 	}
 }
 

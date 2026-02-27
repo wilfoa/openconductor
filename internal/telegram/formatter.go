@@ -24,7 +24,7 @@ func FormatResponse(project string, screen []string) []string {
 		return nil
 	}
 	header := fmt.Sprintf("<b>%s</b>\n\n", html.EscapeString(project))
-	msgs := splitMessage(header, body)
+	msgs := splitMessage(header, body, false)
 	if len(msgs) > 0 {
 		msgs[len(msgs)-1] += replyHint
 	}
@@ -41,7 +41,7 @@ func FormatPermission(project string, detail string, screen []string) []string {
 	if body == "" {
 		return []string{header}
 	}
-	return splitMessage(header, body)
+	return splitMessage(header, body, true)
 }
 
 // FormatQuestion formats a question from the agent.
@@ -51,7 +51,7 @@ func FormatQuestion(project string, screen []string) []string {
 		return nil
 	}
 	header := fmt.Sprintf("<b>%s</b>  \xe2\x9d\x93\n\n", html.EscapeString(project)) // question emoji
-	return splitMessage(header, body)
+	return splitMessage(header, body, true)
 }
 
 // FormatAttention formats a generic attention-needed message.
@@ -64,7 +64,7 @@ func FormatAttention(project string, detail string, screen []string) []string {
 	if body == "" {
 		return []string{header + replyHint}
 	}
-	msgs := splitMessage(header, body)
+	msgs := splitMessage(header, body, false)
 	if len(msgs) > 0 {
 		msgs[len(msgs)-1] += replyHint
 	}
@@ -81,7 +81,7 @@ func FormatError(project string, detail string, screen []string) []string {
 	if body == "" {
 		return []string{header + replyHint}
 	}
-	msgs := splitMessage(header, body)
+	msgs := splitMessage(header, body, true)
 	if len(msgs) > 0 {
 		msgs[len(msgs)-1] += replyHint
 	}
@@ -96,7 +96,7 @@ func FormatDone(project string, screen []string) []string {
 	if body == "" {
 		return []string{header + footer}
 	}
-	msgs := splitMessage(header, body)
+	msgs := splitMessage(header, body, false)
 	if len(msgs) > 0 {
 		msgs[len(msgs)-1] += footer
 	}
@@ -180,11 +180,17 @@ func isBoxDrawing(r rune) bool {
 }
 
 // splitMessage splits a long message into Telegram-safe chunks. The header
-// is included only in the first chunk. Each chunk is wrapped in <pre> tags
-// (except the header portion).
-func splitMessage(header string, body string) []string {
+// is included only in the first chunk. When codeBlock is true, each chunk's
+// body is wrapped in <pre> tags (monospace); otherwise the body is sent as
+// plain HTML text (normal proportional font).
+func splitMessage(header string, body string, codeBlock bool) []string {
+	open, close_ := "", ""
+	if codeBlock {
+		open, close_ = "<pre>", "</pre>"
+	}
+
 	// If it fits in one message, send as-is.
-	full := header + "<pre>" + body + "</pre>"
+	full := header + open + body + close_
 	if len(full) <= maxMessageLen {
 		return []string{full}
 	}
@@ -198,19 +204,19 @@ func splitMessage(header string, body string) []string {
 	// chunkPrefix returns the correct prefix for the current chunk.
 	chunkPrefix := func() string {
 		if isFirst {
-			return header + "<pre>"
+			return header + open
 		}
-		return "<pre>"
+		return open
 	}
 
 	for _, line := range bodyLines {
 		prefix := chunkPrefix()
 
 		// Check if adding this line would exceed the limit.
-		addition := len(prefix) + chunk.Len() + len(line) + len("</pre>") + 1
+		addition := len(prefix) + chunk.Len() + len(line) + len(close_) + 1
 		if chunk.Len() > 0 && addition > maxMessageLen {
 			// Flush current chunk with its prefix.
-			messages = append(messages, prefix+chunk.String()+"</pre>")
+			messages = append(messages, prefix+chunk.String()+close_)
 			chunk.Reset()
 			isFirst = false
 			// Start a new chunk with this line.
@@ -225,7 +231,7 @@ func splitMessage(header string, body string) []string {
 
 	// Flush remaining.
 	if chunk.Len() > 0 {
-		messages = append(messages, chunkPrefix()+chunk.String()+"</pre>")
+		messages = append(messages, chunkPrefix()+chunk.String()+close_)
 	}
 
 	return messages
