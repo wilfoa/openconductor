@@ -63,6 +63,54 @@ func (a *opencodeAdapter) ChromeSkipRows() (top int, bottom int) {
 	return 1, 2
 }
 
+// IsChromeLine returns true if the line is OpenCode TUI chrome that should
+// be stripped from Telegram messages. This catches chrome that isn't covered
+// by the fixed ChromeSkipRows values — specifically the status bar and model
+// selector lines whose position shifts depending on the agent's state.
+//
+// Status bar format:   ▣  Build · claude-opus-4-6 · 22.6s
+// Model selector:      Build  Claude Opus 4.6 Anthropic · max
+// Shortcut hints:      ctrl+t variants  tab agents  ctrl+p commands
+func (a *opencodeAdapter) IsChromeLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(collapseSpaces(trimmed))
+
+	// Status bar: starts with ▣ (U+25A3) followed by mode · model · time.
+	if strings.HasPrefix(trimmed, "▣") {
+		return true
+	}
+	// Status bar can also start with ▢ (U+25A2) or ■ (U+25A0) depending
+	// on OpenCode version/theme.
+	if strings.HasPrefix(trimmed, "▢") || strings.HasPrefix(trimmed, "■") {
+		return true
+	}
+
+	// Model selector line: <mode> <model_name> <provider> [· <setting>]
+	// Only when not part of a dialog (no "esc interrupt", "esc dismiss").
+	if !strings.Contains(lower, "esc interrupt") &&
+		!strings.Contains(lower, "esc dismiss") &&
+		isModelSelectorLine(lower) {
+		return true
+	}
+
+	// Idle shortcut hints: "ctrl+p commands", "ctrl+t variants", "tab agents".
+	if strings.Contains(lower, "ctrl+p commands") ||
+		strings.Contains(lower, "ctrl+t variants") ||
+		strings.Contains(lower, "tab agents") {
+		return true
+	}
+
+	// Working state footer: "esc interrupt" progress line.
+	if strings.Contains(lower, "esc interrupt") {
+		return true
+	}
+
+	return false
+}
+
 // SubmitDelay returns the pause between writing text and Enter for OpenCode.
 // OpenCode's Bubble Tea event loop needs ~50ms to process the input text
 // before receiving the submit key.

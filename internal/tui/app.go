@@ -1881,13 +1881,16 @@ func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, d
 	}
 
 	// Filter screen lines through the agent adapter to remove sidebar noise,
-	// and strip fixed chrome rows (header/footer) that aren't conversation content.
+	// strip fixed chrome rows (header/footer), and remove content-aware
+	// chrome lines (status bar, model selector, shortcut hints) that aren't
+	// conversation content.
 	if s := a.mgr.GetSession(sessionID); s != nil {
 		lines = agent.FilterScreen(s.Project.Agent, lines)
 		top, bottom := agent.ChromeSkipRows(s.Project.Agent)
 		if top+bottom > 0 && top+bottom < len(lines) {
 			lines = lines[top : len(lines)-bottom]
 		}
+		lines = agent.FilterChromeLines(s.Project.Agent, lines)
 	}
 
 	select {

@@ -12,18 +12,26 @@ import (
 
 // ── ParseQuestionOptions ────────────────────────────────────────
 
+// Helper to build a realistic OpenCode question dialog screen.
+// The dialog has options above a footer line containing "enter submit  esc dismiss".
+func questionDialog(conversation []string, options []string) []string {
+	var lines []string
+	lines = append(lines, conversation...)
+	lines = append(lines, "") // gap before dialog
+	lines = append(lines, "Which option would you like?")
+	lines = append(lines, options...)
+	lines = append(lines, "↕ select  enter submit  esc dismiss")
+	return lines
+}
+
 func TestParseQuestionOptions_DotFormat(t *testing.T) {
-	lines := []string{
-		"Which option would you like?",
-		"1. Create a new file",
-		"2. Edit existing file",
-		"3. Delete file",
-		"",
-		"Enter your choice:",
-	}
+	lines := questionDialog(
+		[]string{"Some conversation above"},
+		[]string{"1. Create a new file", "2. Edit existing file", "3. Delete file"},
+	)
 	opts := ParseQuestionOptions(lines)
 	if len(opts) != 3 {
-		t.Fatalf("expected 3 options, got %d", len(opts))
+		t.Fatalf("expected 3 options, got %d: %v", len(opts), opts)
 	}
 	if opts[0] != "1. Create a new file" {
 		t.Fatalf("expected first option '1. Create a new file', got %q", opts[0])
@@ -31,12 +39,10 @@ func TestParseQuestionOptions_DotFormat(t *testing.T) {
 }
 
 func TestParseQuestionOptions_ParenFormat(t *testing.T) {
-	lines := []string{
-		"Select an action:",
-		"1) Continue",
-		"2) Abort",
-		"3) Retry",
-	}
+	lines := questionDialog(
+		[]string{"Select an action:"},
+		[]string{"1) Continue", "2) Abort", "3) Retry"},
+	)
 	opts := ParseQuestionOptions(lines)
 	if len(opts) != 3 {
 		t.Fatalf("expected 3 options with ')' format, got %d", len(opts))
@@ -47,23 +53,24 @@ func TestParseQuestionOptions_ParenFormat(t *testing.T) {
 }
 
 func TestParseQuestionOptions_MixedFormats(t *testing.T) {
-	lines := []string{"1. Dot format", "2) Paren format", "3. Another dot"}
+	lines := questionDialog(nil, []string{"1. Dot format", "2) Paren format", "3. Another dot"})
 	opts := ParseQuestionOptions(lines)
 	if len(opts) != 3 {
 		t.Fatalf("expected 3 options (mixed), got %d", len(opts))
 	}
 }
 
-func TestParseQuestionOptions_NoNumbers(t *testing.T) {
+func TestParseQuestionOptions_NoDialogFooter(t *testing.T) {
+	// Without a dialog footer, ParseQuestionOptions should return nil.
 	lines := []string{"Just a regular question", "with no numbered options"}
 	opts := ParseQuestionOptions(lines)
 	if len(opts) != 0 {
-		t.Fatalf("expected 0 options, got %d", len(opts))
+		t.Fatalf("expected 0 options (no footer), got %d", len(opts))
 	}
 }
 
 func TestParseQuestionOptions_IndentedNumbers(t *testing.T) {
-	lines := []string{"  1. Indented option", "  2. Another one"}
+	lines := questionDialog(nil, []string{"  1. Indented option", "  2. Another one"})
 	opts := ParseQuestionOptions(lines)
 	if len(opts) != 2 {
 		t.Fatalf("expected 2 options (trimmed), got %d", len(opts))
@@ -71,7 +78,7 @@ func TestParseQuestionOptions_IndentedNumbers(t *testing.T) {
 }
 
 func TestParseQuestionOptions_ZeroNotMatched(t *testing.T) {
-	lines := []string{"0. This should not match", "1. This should match"}
+	lines := questionDialog(nil, []string{"0. This should not match", "1. This should match"})
 	opts := ParseQuestionOptions(lines)
 	if len(opts) != 1 {
 		t.Fatalf("expected 1 option (0 excluded), got %d", len(opts))
@@ -79,10 +86,80 @@ func TestParseQuestionOptions_ZeroNotMatched(t *testing.T) {
 }
 
 func TestParseQuestionOptions_BlankLines(t *testing.T) {
-	lines := []string{"", "  ", "1. Only option", ""}
+	lines := questionDialog(nil, []string{"", "  ", "1. Only option", ""})
 	opts := ParseQuestionOptions(lines)
 	if len(opts) != 1 {
 		t.Fatalf("expected 1 option, got %d", len(opts))
+	}
+}
+
+func TestParseQuestionOptions_ConfirmVariant(t *testing.T) {
+	// Some dialogs use "enter confirm" instead of "enter submit".
+	lines := []string{
+		"Are you sure?",
+		"1. Yes, proceed",
+		"2. No, cancel",
+		"↕ select  enter confirm  esc dismiss",
+	}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 2 {
+		t.Fatalf("expected 2 options with 'confirm' footer, got %d", len(opts))
+	}
+}
+
+func TestParseQuestionOptions_BoxDrawingBorders(t *testing.T) {
+	// OpenCode wraps dialog options in box-drawing borders (│).
+	lines := []string{
+		"Some conversation content",
+		"│ Which framework?",
+		"│ 1. Jest",
+		"│ 2. Vitest",
+		"│ 3. Mocha",
+		"↕ select  enter submit  esc dismiss",
+	}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 3 {
+		t.Fatalf("expected 3 options with box borders, got %d: %v", len(opts), opts)
+	}
+	// Borders should be stripped from the option text.
+	if opts[0] != "1. Jest" {
+		t.Errorf("expected '1. Jest' (border stripped), got %q", opts[0])
+	}
+}
+
+func TestParseQuestionOptions_IgnoresConversationNumbers(t *testing.T) {
+	// Numbered items in conversation above the dialog should NOT be picked up.
+	lines := []string{
+		"Here are the steps:",
+		"1. The scrollback is capturing OpenCode chrome",
+		"2. We need to fix the sidebar filtering",
+		"3. Add proper tests",
+		"",
+		"Which approach would you like?",
+		"│ 1. Yes, add them",
+		"│ 2. No, skip for now",
+		"↕ select  enter submit  esc dismiss",
+	}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 2 {
+		t.Fatalf("expected 2 options (not conversation numbers), got %d: %v", len(opts), opts)
+	}
+	if opts[0] != "1. Yes, add them" {
+		t.Errorf("expected '1. Yes, add them', got %q", opts[0])
+	}
+}
+
+func TestParseQuestionOptions_SelectDismissFooter(t *testing.T) {
+	// Broader dialog footer: just "select" + "dismiss".
+	lines := []string{
+		"Choose a file:",
+		"1. main.go",
+		"2. handler.go",
+		"⌘ select  esc dismiss",
+	}
+	opts := ParseQuestionOptions(lines)
+	if len(opts) != 2 {
+		t.Fatalf("expected 2 options with select/dismiss footer, got %d", len(opts))
 	}
 }
 

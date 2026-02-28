@@ -99,6 +99,40 @@ func ChromeSkipRows(agentType config.AgentType) (top int, bottom int) {
 	return 0, 0
 }
 
+// ChromeLineFilter is an optional interface that agents can implement to
+// identify individual lines that are TUI chrome (status bar, model selector,
+// shortcut hints) which should be stripped from Telegram messages. Unlike
+// ChromeSkipRows (which strips a fixed number of rows), this filter is
+// content-aware and handles chrome that shifts position depending on agent
+// state (idle, working, dialog overlay).
+type ChromeLineFilter interface {
+	// IsChromeLine returns true if the line is TUI chrome and should be
+	// excluded from Telegram messages. The line is the raw screen text
+	// with leading/trailing whitespace preserved.
+	IsChromeLine(line string) bool
+}
+
+// FilterChromeLines removes lines identified as TUI chrome by the agent's
+// ChromeLineFilter (if implemented). Returns lines unchanged if the adapter
+// does not implement the interface.
+func FilterChromeLines(agentType config.AgentType, lines []string) []string {
+	a, err := Get(agentType)
+	if err != nil {
+		return lines
+	}
+	f, ok := a.(ChromeLineFilter)
+	if !ok {
+		return lines
+	}
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !f.IsChromeLine(line) {
+			filtered = append(filtered, line)
+		}
+	}
+	return filtered
+}
+
 // SubmitDelay is an optional interface that agents can implement to specify
 // the pause between writing text and sending Enter to the PTY. TUI apps
 // with event-loop-based stdin processing (e.g. Bubble Tea) may need a delay

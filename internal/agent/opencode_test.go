@@ -855,6 +855,151 @@ func TestOpenCode_ChromeSkipRows(t *testing.T) {
 	}
 }
 
+// ── IsChromeLine ────────────────────────────────────────────────
+
+func TestOpenCode_IsChromeLine_StatusBar(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"▣  Build · claude-opus-4-6 · 22.6s", true},
+		{"▣  Build · claude-opus-4-6 · 1m32s", true},
+		{"▢  Plan · gpt-4o · 5.0s", true},
+		{"■  Code · gemini-2.5 · 10s", true},
+		{"  ▣  Build · claude-opus-4-6 · 22.6s  ", true}, // with whitespace
+	}
+	for _, tt := range tests {
+		got := adapter.IsChromeLine(tt.line)
+		if got != tt.want {
+			t.Errorf("IsChromeLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestOpenCode_IsChromeLine_ModelSelector(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"Build  Claude Opus 4.6 Anthropic · max", true},
+		{"  Build  Claude Opus 4.6 Anthropic · max  ", true},
+		{"Chat  GPT-4o OpenAI · high", true},
+		{"Code  Gemini 2.5 Google · medium", true},
+		{"Plan  Llama 4 Groq · max", true},
+	}
+	for _, tt := range tests {
+		got := adapter.IsChromeLine(tt.line)
+		if got != tt.want {
+			t.Errorf("IsChromeLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestOpenCode_IsChromeLine_ShortcutHints(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"ctrl+t variants  tab agents  ctrl+p commands", true},
+		{"  ctrl+p commands  ", true},
+		{"  tab agents  ctrl+t variants  ", true},
+	}
+	for _, tt := range tests {
+		got := adapter.IsChromeLine(tt.line)
+		if got != tt.want {
+			t.Errorf("IsChromeLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestOpenCode_IsChromeLine_WorkingFooter(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"· · · · ■ ■  esc interrupt", true},
+		{"  ■ ■ ■  esc interrupt  ", true},
+	}
+	for _, tt := range tests {
+		got := adapter.IsChromeLine(tt.line)
+		if got != tt.want {
+			t.Errorf("IsChromeLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestOpenCode_IsChromeLine_ConversationContent(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"I'll help you fix the bug.", false},
+		{"  src/main.go", false},
+		{"  + func main() {", false},
+		{"  Build clean and all tests pass.", false},
+		{"", false}, // blank line
+		{"  Here's the Anthropic API key you need.", false}, // contains provider but no mode
+	}
+	for _, tt := range tests {
+		got := adapter.IsChromeLine(tt.line)
+		if got != tt.want {
+			t.Errorf("IsChromeLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestOpenCode_IsChromeLine_DialogFooterNotFiltered(t *testing.T) {
+	// Dialog footers with "esc dismiss" should NOT be filtered — they are
+	// part of the question/permission dialog content, not idle chrome.
+	adapter := &opencodeAdapter{}
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"↕ select  enter submit  esc dismiss", false},
+		{"Allow once  Allow always  Reject  ctrl+f fullscreen  enter confirm", false},
+	}
+	for _, tt := range tests {
+		got := adapter.IsChromeLine(tt.line)
+		if got != tt.want {
+			t.Errorf("IsChromeLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestFilterChromeLines_TopLevel_OpenCode(t *testing.T) {
+	lines := []string{
+		"▣  Build · claude-opus-4-6 · 22.6s",
+		"I'll help you fix the bug.",
+		"  src/main.go",
+		"Build  Claude Opus 4.6 Anthropic · max",
+		"ctrl+t variants  tab agents  ctrl+p commands",
+	}
+	filtered := FilterChromeLines("opencode", lines)
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 non-chrome lines, got %d: %v", len(filtered), filtered)
+	}
+	if filtered[0] != "I'll help you fix the bug." {
+		t.Errorf("expected conversation content, got %q", filtered[0])
+	}
+	if filtered[1] != "  src/main.go" {
+		t.Errorf("expected file path, got %q", filtered[1])
+	}
+}
+
+func TestFilterChromeLines_TopLevel_UnknownAgent(t *testing.T) {
+	lines := []string{"line 1", "line 2"}
+	filtered := FilterChromeLines("unknown-agent", lines)
+	if len(filtered) != 2 {
+		t.Fatalf("expected unchanged for unknown agent, got %d", len(filtered))
+	}
+}
+
 // ── SubmitDelay ─────────────────────────────────────────────────
 
 func TestOpenCode_SubmitDelay(t *testing.T) {
