@@ -588,33 +588,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Mouse wheel in terminal area → navigate scrollback buffer.
+			// Mouse wheel in terminal area → scroll navigation.
 			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-				// Sync terminal state so altScreen is fresh — without this,
-				// viewScrollback may use the mixed renderer instead of the
-				// scrollback-only renderer for alt-screen TUI sessions,
-				// causing content duplication.
 				a.syncTerminalFromSession()
 
-				// For alt-screen TUI apps (like OpenCode), a small scroll
-				// offset shows content nearly identical to the live screen
-				// because the scrollback buffer captures whole screen
-				// repaints. Use half-page jumps so the user sees
-				// meaningfully different content immediately.
-				delta := scrollLinesPerTick
-				if a.terminal.altScreen && a.terminal.height > 0 {
-					delta = a.terminal.height / 2
-					if delta < scrollLinesPerTick {
-						delta = scrollLinesPerTick
+				// For alt-screen TUI apps (like OpenCode), forward the
+				// scroll as PageUp/PageDown keypresses to the child PTY.
+				// The TUI app handles scrolling natively — its own
+				// scrollback is correct, sidebar stays intact, and there
+				// is no duplication. Our custom scrollback buffer is only
+				// used for non-alt-screen terminal sessions.
+				if a.terminal.altScreen {
+					if s := a.mgr.ActiveSession(); s != nil {
+						if msg.Button == tea.MouseButtonWheelUp {
+							s.Write([]byte("\x1b[5~")) // PageUp
+						} else {
+							s.Write([]byte("\x1b[6~")) // PageDown
+						}
 					}
+					return a, nil
 				}
 
+				// Non-alt-screen: use our scrollback buffer.
+				delta := scrollLinesPerTick
 				if msg.Button == tea.MouseButtonWheelUp {
 					a.terminal.ScrollBy(delta)
 				} else {
 					a.terminal.ScrollBy(-delta)
 				}
-				// Persist scroll state to per-session maps.
 				if sid := a.terminal.sessionID; sid != "" {
 					a.scrollOffsets[sid] = a.terminal.scrollOffset
 					a.scrollPinned[sid] = a.terminal.scrollPinned

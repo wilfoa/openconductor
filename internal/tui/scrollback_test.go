@@ -1147,3 +1147,546 @@ func TestTextToGlyphs_PushedToScrollback(t *testing.T) {
 		t.Errorf("second line: expected %q, got %q", "Fix the login bug", got)
 	}
 }
+
+// ── E2E: alt-screen scroll-up duplication test ──────────────────
+
+// TestAltScreenScrollNoDuplication is the key test for the scroll duplication
+// bug. It simulates the full app-level flow:
+//
+//  1. A TUI app (OpenCode) renders multiple frames via cursor-home + full rewrite
+//  2. pushAltScreenDiff captures disappeared rows into scrollback (like runScrollCheck)
+//  3. User scrolls up → viewScrollbackOnly renders from scrollback
+//  4. Check that NO line in the scrollback view appears on the live viewport
+//
+// This exercises the exact code path the user triggers: alt-screen TUI session,
+// scrollback captured via snapshot diffs, rendering via viewScrollbackOnly.
+func TestAltScreenScrollNoDuplication(t *testing.T) {
+	const width = 60
+	const height = 14
+	const chromeTop = 1
+	const chromeBottom = 2
+
+	// Set up terminal model with vt10x and scrollback.
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(width, height))
+	tm.vt = vt
+	tm.width = width
+	tm.height = height
+	tm.altScreen = true
+	tm.scrollback = newScrollbackBuffer(1000)
+
+	header := "  opencode v1.0"
+	statusBar := "  Build · claude-opus-4-6 · 5m 21s"
+	footer := "  > _                                       esc exit"
+
+	// --- Phase 1: Simulate TUI app rendering frames that scroll by 5 lines ---
+	// Each frame has: header (row 0), content rows (1-11), status bar (12), footer (13).
+	// In the real app, 100ms of output scrolls content by several lines at once.
+	contentRows := height - chromeTop - chromeBottom // 11 content rows
+
+	// Track snapshots for pushAltScreenDiff (simulates checkScrollback).
+	var prevTexts []string
+	var prevGlyphs []scrollbackLine
+
+	scrollPerFrame := 5
+	for frame := 0; frame < 50; frame++ {
+		frameStart := 1 + frame*scrollPerFrame
+		// Build and render the frame.
+		frameData := buildTUIFrameWithChrome(width, header, statusBar, footer, frameStart, frameStart+contentRows-1)
+		vt.Write([]byte(frameData))
+
+		// Snapshot current screen.
+		curTexts := make([]string, height)
+		curGlyphs := make([]scrollbackLine, height)
+		for row := 0; row < height; row++ {
+			glyphs := make(scrollbackLine, width)
+			for col := 0; col < width; col++ {
+				glyphs[col] = vt.Cell(col, row)
+			}
+			curGlyphs[row] = glyphs
+			curTexts[row] = glyphsToText(glyphs)
+		}
+
+		// Run the same diff logic as checkScrollback for alt-screen.
+		if prevTexts != nil {
+			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+		}
+
+		prevTexts = curTexts
+		prevGlyphs = curGlyphs
+	}
+
+	t.Logf("scrollback has %d lines after 50 frames", tm.scrollback.Len())
+
+	if tm.scrollback.Len() == 0 {
+		t.Fatal("expected scrollback to have captured lines from TUI redraws")
+	}
+
+	// --- Phase 2: Get the live viewport text ---
+	liveLines := make(map[string]bool)
+	for row := 0; row < height; row++ {
+		text := tm.viewportRowText(row)
+		if text != "" {
+			liveLines[text] = true
+		}
+	}
+
+	t.Logf("live viewport has %d non-empty unique lines", len(liveLines))
+
+	// --- Phase 3: Scroll up by various amounts and check for duplication ---
+	for _, scrollDelta := range []int{1, 3, height / 2, height, tm.scrollback.Len()} {
+		tm.scrollOffset = scrollDelta
+		if tm.scrollOffset > tm.scrollback.Len() {
+			tm.scrollOffset = tm.scrollback.Len()
+		}
+
+		scrollView := tm.viewScrollbackOnly()
+		scrollLines := strings.Split(scrollView, "\n")
+
+		for i, line := range scrollLines {
+			trimmed := strings.TrimRight(line, " ")
+			if trimmed == "" {
+				continue
+			}
+			if liveLines[trimmed] {
+				t.Errorf("DUPLICATION at scrollOffset=%d row %d: %q appears in both scrollback view and live viewport",
+					scrollDelta, i, trimmed)
+			}
+		}
+	}
+
+	// --- Phase 4: Verify scrollback content is ordered (oldest first) ---
+	// Lines should be roughly Line 1, Line 2, ... (with possible gaps from
+	// the minAltDiffRows threshold skipping small diffs).
+	sbTexts := make([]string, tm.scrollback.Len())
+	for i := 0; i < tm.scrollback.Len(); i++ {
+		sbTexts[i] = glyphsToText(tm.scrollback.Line(i))
+	}
+	t.Logf("scrollback content (first 10): %v", sbTexts[:min(10, len(sbTexts))])
+	t.Logf("scrollback content (last 10): %v", sbTexts[max(0, len(sbTexts)-10):])
+
+	// --- Phase 5: Verify no internal duplicates in the scrollback view ---
+	for _, scrollDelta := range []int{height / 2, height} {
+		tm.scrollOffset = scrollDelta
+		if tm.scrollOffset > tm.scrollback.Len() {
+			tm.scrollOffset = tm.scrollback.Len()
+		}
+
+		scrollView := tm.viewScrollbackOnly()
+		scrollLines := strings.Split(scrollView, "\n")
+
+		seen := make(map[string]int)
+		for i, line := range scrollLines {
+			trimmed := strings.TrimRight(line, " ")
+			if trimmed == "" {
+				continue
+			}
+			if prevIdx, exists := seen[trimmed]; exists {
+				t.Errorf("INTERNAL DUPLICATION at scrollOffset=%d: %q appears at rows %d and %d",
+					scrollDelta, trimmed, prevIdx, i)
+			}
+			seen[trimmed] = i
+		}
+	}
+}
+
+// TestAltScreenScrollSmallBuffer tests scroll behavior when the scrollback
+// buffer has fewer lines than the viewport height — the user should see
+// partial content, not garbage or duplication.
+func TestAltScreenScrollSmallBuffer(t *testing.T) {
+	const width = 40
+	const height = 10
+
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(width, height))
+	tm.vt = vt
+	tm.width = width
+	tm.height = height
+	tm.altScreen = true
+	tm.scrollback = newScrollbackBuffer(100)
+
+	// Only push 3 lines to scrollback (less than height).
+	tm.scrollback.Push(makeGlyphsWidth("Line A", width))
+	tm.scrollback.Push(makeGlyphsWidth("Line B", width))
+	tm.scrollback.Push(makeGlyphsWidth("Line C", width))
+
+	// Scroll up by 1.
+	tm.scrollOffset = 1
+	view := tm.viewScrollbackOnly()
+	lines := strings.Split(view, "\n")
+
+	nonBlank := 0
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			nonBlank++
+		}
+	}
+	t.Logf("small buffer scroll: %d non-blank lines out of %d total", nonBlank, len(lines))
+
+	// Should not panic and should have at most 3 non-blank lines.
+	if nonBlank > 3 {
+		t.Errorf("expected at most 3 non-blank lines, got %d", nonBlank)
+	}
+}
+
+// TestAltScreenScrollHalfPageNoDuplication tests the half-page jump logic
+// specifically — this is what the mouse handler uses for alt-screen sessions.
+func TestAltScreenScrollHalfPageNoDuplication(t *testing.T) {
+	const width = 60
+	const height = 20
+	const chromeTop = 1
+	const chromeBottom = 2
+
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(width, height))
+	tm.vt = vt
+	tm.width = width
+	tm.height = height
+	tm.altScreen = true
+	tm.scrollback = newScrollbackBuffer(1000)
+
+	header := "  opencode v1.0"
+	statusBar := "  Build · claude-opus-4-6 · 5m 21s"
+	footer := "  > _                                       esc exit"
+
+	// Simulate 100 frames of TUI output, scrolling 5 lines per frame.
+	var prevTexts []string
+	var prevGlyphs []scrollbackLine
+	contentRows := height - chromeTop - chromeBottom // 17 content rows
+	scrollPerFrame := 5
+
+	for frame := 0; frame < 100; frame++ {
+		frameStart := 1 + frame*scrollPerFrame
+		frameData := buildTUIFrameWithChrome(width, header, statusBar, footer, frameStart, frameStart+contentRows-1)
+		vt.Write([]byte(frameData))
+
+		curTexts := make([]string, height)
+		curGlyphs := make([]scrollbackLine, height)
+		for row := 0; row < height; row++ {
+			glyphs := make(scrollbackLine, width)
+			for col := 0; col < width; col++ {
+				glyphs[col] = vt.Cell(col, row)
+			}
+			curGlyphs[row] = glyphs
+			curTexts[row] = glyphsToText(glyphs)
+		}
+
+		if prevTexts != nil {
+			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+		}
+		prevTexts = curTexts
+		prevGlyphs = curGlyphs
+	}
+
+	t.Logf("scrollback has %d lines after 100 frames", tm.scrollback.Len())
+
+	// Get live viewport.
+	liveLines := make(map[string]bool)
+	for row := 0; row < height; row++ {
+		text := tm.viewportRowText(row)
+		if text != "" {
+			liveLines[text] = true
+		}
+	}
+
+	// Simulate exact mouse handler behavior: half-page jump.
+	halfPage := height / 2
+
+	// Scroll up multiple ticks and check each.
+	tm.scrollOffset = 0
+	for tick := 1; tick <= 5; tick++ {
+		tm.ScrollBy(halfPage)
+		scrollView := tm.viewScrollbackOnly()
+		scrollLines := strings.Split(scrollView, "\n")
+
+		for i, line := range scrollLines {
+			trimmed := strings.TrimRight(line, " ")
+			if trimmed == "" {
+				continue
+			}
+			if liveLines[trimmed] {
+				t.Errorf("tick %d (offset=%d) row %d: %q duplicates live viewport",
+					tick, tm.scrollOffset, i, trimmed)
+			}
+		}
+	}
+}
+
+// buildTUIFrameWithChrome builds a cursor-home + full-screen rewrite frame
+// with header (row 0), content rows, status bar (row height-2), footer (row height-1).
+func buildTUIFrameWithChrome(width int, header, statusBar, footer string, startLine, endLine int) string {
+	// Calculate total rows: header + content + status + footer.
+	// Content rows fill the middle.
+	var sb strings.Builder
+	sb.WriteString("\x1b[H") // cursor home
+
+	// Row 0: header
+	sb.WriteString(padRight(header, width))
+	sb.WriteString("\r\n")
+
+	// Content rows (between header and status bar).
+	for line := startLine; line <= endLine; line++ {
+		content := "  Line " + itoa(line) + " of response"
+		sb.WriteString(padRight(content, width))
+		sb.WriteString("\r\n")
+	}
+
+	// Status bar (second to last row).
+	sb.WriteString(padRight(statusBar, width))
+	sb.WriteString("\r\n")
+
+	// Footer (last row, no trailing newline).
+	sb.WriteString(padRight(footer, width))
+
+	return sb.String()
+}
+
+// TestAltScreenTraditionalScrollPathNoDuplication tests the scenario where
+// detectScrollShift succeeds for an alt-screen TUI app (content area scrolls
+// while header/footer stay fixed). This exercises the shift > 0 branch in
+// checkScrollback, NOT the pushAltScreenDiff branch.
+func TestAltScreenTraditionalScrollPathNoDuplication(t *testing.T) {
+	const width = 60
+	const height = 14
+	const chromeTop = 1
+	const chromeBottom = 2
+
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(width, height))
+	tm.vt = vt
+	tm.width = width
+	tm.height = height
+	tm.altScreen = true
+	tm.scrollback = newScrollbackBuffer(1000)
+
+	header := "  opencode v1.0"
+	statusBar := "  Build · claude-opus-4-6 · 5m 21s"
+	footer := "  > _                                       esc exit"
+	contentRows := height - chromeTop - chromeBottom // 11
+
+	// Track snapshots like checkScrollback does.
+	var prevTexts []string
+	var prevGlyphs []scrollbackLine
+
+	scrollPerFrame := 3 // enough for shift detection but less than content rows
+
+	for frame := 0; frame < 60; frame++ {
+		frameStart := 1 + frame*scrollPerFrame
+		frameData := buildTUIFrameWithChrome(width, header, statusBar, footer, frameStart, frameStart+contentRows-1)
+		vt.Write([]byte(frameData))
+
+		curTexts := make([]string, height)
+		curGlyphs := make([]scrollbackLine, height)
+		for row := 0; row < height; row++ {
+			glyphs := make(scrollbackLine, width)
+			for col := 0; col < width; col++ {
+				glyphs[col] = vt.Cell(col, row)
+			}
+			curGlyphs[row] = glyphs
+			curTexts[row] = glyphsToText(glyphs)
+		}
+
+		if prevTexts != nil {
+			// Use the EXACT same logic as checkScrollback.
+			shift := detectScrollShift(prevTexts, curTexts)
+			if shift > 0 {
+				firstDiff := 0
+				for firstDiff < len(prevTexts) && firstDiff < len(curTexts) && prevTexts[firstDiff] == curTexts[firstDiff] {
+					firstDiff++
+				}
+				end := firstDiff + shift
+				if end > len(prevGlyphs) {
+					end = len(prevGlyphs)
+				}
+				for i := firstDiff; i < end; i++ {
+					tm.scrollback.Push(prevGlyphs[i])
+				}
+				t.Logf("frame %d: shift=%d, pushed rows %d-%d", frame, shift, firstDiff, end-1)
+			} else {
+				// Alt-screen diff fallback.
+				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+				if pushed > 0 {
+					t.Logf("frame %d: pushAltScreenDiff pushed %d", frame, pushed)
+				}
+			}
+		}
+
+		prevTexts = curTexts
+		prevGlyphs = curGlyphs
+	}
+
+	t.Logf("scrollback has %d lines after 60 frames", tm.scrollback.Len())
+
+	// Get live viewport text.
+	liveLines := make(map[string]bool)
+	for row := 0; row < height; row++ {
+		text := tm.viewportRowText(row)
+		if text != "" {
+			liveLines[text] = true
+		}
+	}
+
+	// Scroll up and check for duplication.
+	for _, offset := range []int{1, 3, height / 2, height} {
+		tm.scrollOffset = offset
+		if tm.scrollOffset > tm.scrollback.Len() {
+			tm.scrollOffset = tm.scrollback.Len()
+		}
+
+		scrollView := tm.viewScrollbackOnly()
+		scrollLines := strings.Split(scrollView, "\n")
+
+		for i, line := range scrollLines {
+			trimmed := strings.TrimRight(line, " ")
+			if trimmed == "" {
+				continue
+			}
+			if liveLines[trimmed] {
+				t.Errorf("offset=%d row %d: %q duplicates live viewport", offset, i, trimmed)
+			}
+		}
+
+		// Check internal duplicates too.
+		seen := make(map[string]int)
+		for i, line := range scrollLines {
+			trimmed := strings.TrimRight(line, " ")
+			if trimmed == "" {
+				continue
+			}
+			if prevIdx, exists := seen[trimmed]; exists {
+				t.Errorf("offset=%d: %q appears at rows %d and %d", offset, trimmed, prevIdx, i)
+			}
+			seen[trimmed] = i
+		}
+	}
+}
+
+// TestAltScreenScrollMixedCapturePaths tests the scenario where the shift
+// detection alternates between finding shifts and not (due to varying output
+// rates). This creates a mix of traditional scroll captures and alt-screen
+// diff captures, which is the most realistic scenario.
+func TestAltScreenScrollMixedCapturePaths(t *testing.T) {
+	const width = 60
+	const height = 14
+	const chromeTop = 1
+	const chromeBottom = 2
+
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(width, height))
+	tm.vt = vt
+	tm.width = width
+	tm.height = height
+	tm.altScreen = true
+	tm.scrollback = newScrollbackBuffer(1000)
+
+	header := "  opencode v1.0"
+	statusBar := "  Build · claude-opus-4-6 · 5m 21s"
+	footer := "  > _                                       esc exit"
+	contentRows := height - chromeTop - chromeBottom // 11
+
+	var prevTexts []string
+	var prevGlyphs []scrollbackLine
+
+	shiftCaptures := 0
+	diffCaptures := 0
+	currentLine := 1
+
+	for frame := 0; frame < 80; frame++ {
+		// Alternate between small shifts (1-2 lines, too few for alt diff)
+		// and larger shifts (5+ lines, detectable by shift detection).
+		var scrollAmount int
+		if frame%3 == 0 {
+			scrollAmount = 5 // large scroll — shift detection path
+		} else {
+			scrollAmount = 1 // small scroll — may fail shift detection, try alt diff
+		}
+		currentLine += scrollAmount
+
+		frameData := buildTUIFrameWithChrome(width, header, statusBar, footer, currentLine, currentLine+contentRows-1)
+		vt.Write([]byte(frameData))
+
+		curTexts := make([]string, height)
+		curGlyphs := make([]scrollbackLine, height)
+		for row := 0; row < height; row++ {
+			glyphs := make(scrollbackLine, width)
+			for col := 0; col < width; col++ {
+				glyphs[col] = vt.Cell(col, row)
+			}
+			curGlyphs[row] = glyphs
+			curTexts[row] = glyphsToText(glyphs)
+		}
+
+		if prevTexts != nil {
+			shift := detectScrollShift(prevTexts, curTexts)
+			if shift > 0 {
+				firstDiff := 0
+				for firstDiff < len(prevTexts) && firstDiff < len(curTexts) && prevTexts[firstDiff] == curTexts[firstDiff] {
+					firstDiff++
+				}
+				end := firstDiff + shift
+				if end > len(prevGlyphs) {
+					end = len(prevGlyphs)
+				}
+				for i := firstDiff; i < end; i++ {
+					tm.scrollback.Push(prevGlyphs[i])
+				}
+				shiftCaptures++
+			} else {
+				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+				if pushed > 0 {
+					diffCaptures++
+				}
+			}
+		}
+
+		prevTexts = curTexts
+		prevGlyphs = curGlyphs
+	}
+
+	t.Logf("scrollback: %d lines, shift captures: %d, diff captures: %d",
+		tm.scrollback.Len(), shiftCaptures, diffCaptures)
+
+	// Get live viewport.
+	liveLines := make(map[string]bool)
+	for row := 0; row < height; row++ {
+		text := tm.viewportRowText(row)
+		if text != "" {
+			liveLines[text] = true
+		}
+	}
+
+	// Scroll up and check.
+	for _, offset := range []int{1, 3, height / 2, height, height * 2} {
+		tm.scrollOffset = offset
+		if tm.scrollOffset > tm.scrollback.Len() {
+			tm.scrollOffset = tm.scrollback.Len()
+		}
+
+		scrollView := tm.viewScrollbackOnly()
+		scrollLines := strings.Split(scrollView, "\n")
+
+		for i, line := range scrollLines {
+			trimmed := strings.TrimRight(line, " ")
+			if trimmed == "" {
+				continue
+			}
+			if liveLines[trimmed] {
+				t.Errorf("offset=%d row %d: %q duplicates live viewport", offset, i, trimmed)
+			}
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
