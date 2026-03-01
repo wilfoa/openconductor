@@ -165,9 +165,19 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	hasQuestionDialog := false
 	hasFullscreen := false // "ctrl+f fullscreen" appears in permission dialog footer
 
-	// Scan all visible lines (not just a few) because the permission
-	// and question dialogs span multiple rows and header text may appear
-	// higher up the screen while the button row is at the bottom.
+	// TUI chrome signals (dialog buttons, status bar, keyboard shortcuts)
+	// always appear in the bottom portion of the screen. We restrict most
+	// signal detection to the bottom zone to prevent false positives when
+	// conversation content discusses these keywords — e.g. an AI agent
+	// explaining OpenCode's UI will mention "esc interrupt", "Allow once",
+	// "enter submit  esc dismiss" etc. in flowing text.
+	//
+	// The only exception is "Permission required" which is a dialog header
+	// that may appear higher up. It requires co-occurrence with button
+	// signals from the bottom zone to trigger a detection.
+	const maxChromeScanRows = 12
+	bottomBound := len(lastLines) - maxChromeScanRows
+
 	for i := len(lastLines) - 1; i >= 0; i-- {
 		trimmed := strings.TrimSpace(lastLines[i])
 		if trimmed == "" {
@@ -178,6 +188,22 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		// between button labels doesn't break substring matching.
 		// e.g. "Allow once    Allow always    Reject" → "allow once allow always reject"
 		lower := strings.ToLower(collapseSpaces(trimmed))
+
+		// "Permission required" header — may be prefixed with Unicode symbols
+		// (△ U+25B3, ⚠ U+26A0) that the VT reader splits into separate cells.
+		// Scanned across all rows because the header can appear in the
+		// middle of the dialog overlay. Alone it is not sufficient — it
+		// must co-occur with button signals from the bottom zone.
+		if strings.Contains(lower, "permission required") {
+			hasPermissionRequired = true
+		}
+
+		// All remaining signals are TUI chrome or dialog footer elements
+		// that live in the bottom portion of the screen. Skip lines above
+		// the bottom zone to avoid false matches on conversation content.
+		if i < bottomBound {
+			continue
+		}
 
 		if strings.Contains(lower, "esc interrupt") {
 			hasEscInterrupt = true
@@ -192,12 +218,6 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		if !strings.Contains(lower, "esc interrupt") && isModelSelectorLine(lower) {
 			hasIdleShortcuts = true
 		}
-		// "Permission required" header — may be prefixed with Unicode symbols
-		// (△ U+25B3, ⚠ U+26A0) that the VT reader splits into separate cells.
-		// Match the words regardless of prefix.
-		if strings.Contains(lower, "permission required") {
-			hasPermissionRequired = true
-		}
 		// "Allow once" / "Allow always" in the button row.
 		if strings.Contains(lower, "allow once") || strings.Contains(lower, "allow always") {
 			hasAllowOnce = true
@@ -210,10 +230,14 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		if strings.Contains(lower, "ctrl+f fullscreen") {
 			hasFullscreen = true
 		}
-		// "enter submit  esc dismiss" or "enter confirm  esc dismiss" is
-		// the footer of OpenCode's question/selection dialog. Match either
-		// variant paired with "esc dismiss".
-		if (strings.Contains(lower, "enter submit") || strings.Contains(lower, "enter confirm")) && strings.Contains(lower, "esc dismiss") {
+		// Question dialog footer: "↕ select  enter submit  esc dismiss".
+		// Require "select" alongside ("enter submit"|"enter confirm") and
+		// "esc dismiss" all on the same line — this three-keyword match
+		// avoids false positives from conversation text that might mention
+		// a subset of these keywords.
+		if strings.Contains(lower, "select") &&
+			(strings.Contains(lower, "enter submit") || strings.Contains(lower, "enter confirm")) &&
+			strings.Contains(lower, "esc dismiss") {
 			hasQuestionDialog = true
 		}
 	}
@@ -233,15 +257,15 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	// dialog cells — the underlying "esc interrupt" progress text can
 	// remain in the vt10x buffer. The agent cannot continue until the
 	// user responds, so these must win.
-	// Permission dialog detection — multiple redundant signals:
-	// 1. "Permission required" header text
-	// 2. "Allow once" / "Allow always" button text
-	// 3. "Reject" button alongside Allow buttons
-	// 4. "ctrl+f fullscreen" footer (permission-dialog only shortcut)
-	// Any combination of (header OR buttons OR fullscreen+reject) triggers.
-	isPermission := hasPermissionRequired ||
-		hasAllowOnce ||
-		(hasFullscreen && hasReject)
+	//
+	// Permission dialog detection — require at least TWO signals to avoid
+	// false positives when conversation content mentions individual keywords
+	// (e.g. discussing "Allow once" or "Permission required" in text):
+	//   - header + any button signal
+	//   - two different button signals
+	isPermission := hasPermissionRequired && (hasAllowOnce || hasReject || hasFullscreen) ||
+		hasAllowOnce && hasReject ||
+		hasFullscreen && hasReject
 	if isPermission {
 		// Permission dialog is visible.
 		return attention.Certain, &attention.AttentionEvent{
@@ -266,6 +290,19 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	}
 
 	if hasIdleShortcuts {
+		// Agent is idle. Check if the conversation contains free-text
+		// questions that the agent is waiting for the user to answer.
+		// This is a "soft" question — the agent printed questions in its
+		// response text (not a dialog overlay) and is now idle at the
+		// prompt. Examples: "Questions for You", numbered items ending
+		// with "?", etc.
+		if hasSoftQuestions(lastLines, bottomBound) {
+			return attention.Certain, &attention.AttentionEvent{
+				Type:   attention.NeedsAnswer,
+				Detail: "agent is asking questions (free text)",
+				Source: "heuristic",
+			}
+		}
 		// Agent is idle, waiting for user input.
 		return attention.Certain, &attention.AttentionEvent{
 			Type:   attention.NeedsInput,
@@ -340,6 +377,62 @@ func collapseSpaces(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// softQuestionHeadings are patterns that agents use when asking the user
+// questions in conversation text (not via a dialog overlay). These are
+// "soft" questions — the agent printed them in its response and is now idle,
+// waiting for a free-text reply.
+var softQuestionHeadings = []string{
+	"questions for you",
+	"i have a few questions",
+	"i have some questions",
+	"before i begin, a few questions",
+	"before i proceed, a few questions",
+	"before i start, a few questions",
+	"a few questions",
+	"some questions",
+}
+
+// hasSoftQuestions scans the conversation area (above the chrome zone) for
+// question patterns. Returns true if the agent appears to be asking the user
+// free-text questions. Two detection strategies:
+//
+//  1. Heading match: a known question heading (e.g. "Questions for You")
+//     appears in the conversation area.
+//  2. Question density: 3+ lines ending with "?" in the conversation area
+//     (heuristic for numbered questions without a known heading).
+func hasSoftQuestions(lines []string, bottomBound int) bool {
+	// Only scan the conversation area — lines above the bottom chrome zone.
+	limit := len(lines)
+	if bottomBound > 0 && bottomBound < limit {
+		limit = bottomBound
+	}
+
+	questionLineCount := 0
+
+	for i := 0; i < limit; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+
+		// Strategy 1: known question heading.
+		for _, heading := range softQuestionHeadings {
+			if strings.Contains(lower, heading) {
+				return true
+			}
+		}
+
+		// Strategy 2: count lines ending with "?".
+		if strings.HasSuffix(trimmed, "?") || strings.HasSuffix(trimmed, "?)") {
+			questionLineCount++
+		}
+	}
+
+	// 3+ question-ending lines is a strong signal.
+	return questionLineCount >= 3
 }
 
 // FilterScreen extracts the conversation panel from the OpenCode TUI by

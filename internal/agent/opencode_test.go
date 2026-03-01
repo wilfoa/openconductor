@@ -842,6 +842,353 @@ func TestOpenCode_CtrlPCommandsAlone(t *testing.T) {
 	}
 }
 
+// ── False positive prevention ───────────────────────────────────
+// When conversation content discusses OpenCode's UI (e.g., an AI agent
+// explaining dialog keywords), the heuristic must not false-positive.
+// This requires a full-height screen so the discussion text is above
+// the bottom zone where TUI chrome actually lives.
+
+func TestOpenCode_ConversationMentioningQuestionKeywords_NoFalsePositive(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 24)
+	// Conversation about dialogs in the upper part of screen.
+	lines[2] = `The dialog footer says "enter submit  esc dismiss"`
+	lines[3] = `It checks for "enter confirm" and "esc dismiss" patterns`
+	// Bottom: idle model selector.
+	lines[22] = "  Build  Claude Opus 4.6 Anthropic · max"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain (idle), got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput, got %v", event)
+	}
+}
+
+func TestOpenCode_ConversationMentioningPermissionKeywords_NoFalsePositive(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 24)
+	// Conversation discusses permission UI in the upper screen.
+	lines[2] = `The permission dialog shows "Allow once" and "Reject"`
+	lines[3] = `With "ctrl+f fullscreen" and "Permission required" header`
+	lines[4] = `The hasAllowOnce flag is set when "Allow once" is found`
+	// Bottom: idle model selector.
+	lines[22] = "  Build  Claude Opus 4.6 Anthropic · max"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain (idle), got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput, got %v", event)
+	}
+}
+
+func TestOpenCode_ConversationMentioningEscInterrupt_NoFalsePositive(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 24)
+	// Conversation mentions "esc interrupt" in upper screen area.
+	lines[2] = `The "esc interrupt" pattern signals working state`
+	lines[3] = `It appears in the bottom progress bar`
+	// Bottom: idle shortcut hints (no actual "esc interrupt" chrome).
+	lines[23] = "  ctrl+t variants  tab agents  ctrl+p commands"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain (idle), got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput, got %v", event)
+	}
+}
+
+func TestOpenCode_RealQuestionDialog_StillDetected(t *testing.T) {
+	// Verify that actual question dialogs at the bottom are still detected
+	// on a full-height terminal.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 24)
+	lines[0] = "  Some conversation"
+	lines[18] = "Which framework would you like?"
+	lines[19] = "1. Jest"
+	lines[20] = "2. Vitest"
+	lines[21] = "3. Playwright"
+	lines[22] = ""
+	lines[23] = "↕ select  enter submit  esc dismiss"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Errorf("expected NeedsAnswer, got %v", event)
+	}
+}
+
+func TestOpenCode_RealPermissionDialog_StillDetected(t *testing.T) {
+	// Verify that actual permission dialogs are still detected
+	// on a full-height terminal.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 24)
+	lines[0] = "  Some conversation"
+	lines[10] = "⚠ Permission required"
+	lines[11] = "← Write to src/main.go"
+	lines[20] = "Allow once   Allow always   Reject       ctrl+f fullscreen"
+	lines[23] = ""
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event)
+	}
+}
+
+func TestOpenCode_PermissionRequiredAlone_NotSufficient(t *testing.T) {
+	// "Permission required" alone (without button signals) should not
+	// trigger permission detection — it could be conversation text.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 24)
+	lines[2] = `The "Permission required" header appears at the top`
+	// Bottom: idle model selector.
+	lines[22] = "  Build  Claude Opus 4.6 Anthropic · max"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain (idle), got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput (not NeedsPermission), got %v", event)
+	}
+}
+
+// ── Soft question detection (free-text questions in conversation) ─
+
+// buildSoftQuestionScreen constructs a realistic 30-row OpenCode screen
+// with conversation content containing questions in the upper area and
+// idle chrome at the bottom. This mirrors the layout shown in the
+// screenshot: the agent finished a plan and listed "Questions for You"
+// with numbered items, then became idle.
+func buildSoftQuestionScreen(heading string, questions []string) []string {
+	lines := make([]string, 30)
+	lines[0] = "  opencode v1.0" // header chrome
+	lines[2] = "  Key Design Decisions"
+	lines[3] = "  1. Use existing E2E billing API..."
+	lines[4] = "  2. Hard assertions via API calls..."
+	lines[6] = "" // blank separator
+	// Question heading + items start around the middle.
+	row := 8
+	if heading != "" {
+		lines[row] = "  " + heading
+		row++
+	}
+	for i, q := range questions {
+		lines[row] = fmt.Sprintf("  %d. %s", i+1, q)
+		row++
+	}
+	// Idle chrome at the bottom.
+	lines[27] = "  ▣  Plan · claude-opus-4-5 · 2m 59s"
+	lines[28] = "  Plan  Claude Opus 4.5 Anthropic · max"
+	lines[29] = "  ctrl+t variants  tab agents  ctrl+p commands"
+	return lines
+}
+
+func TestOpenCode_SoftQuestion_QuestionsForYouHeading(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	lines := buildSoftQuestionScreen("Questions for You", []string{
+		"Scope: Should this cover daycare/summer camp payments too?",
+		"Refund testing: Do you want me to verify refund actually hits CreditGuard UAT?",
+		"Failed changes dashboard: Is there a dedicated admin page for managing failed charges?",
+		"Priority: Given time constraints, would you prefer Option A or Option B?",
+	})
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil {
+		t.Fatal("expected event for soft question, got nil")
+	}
+	if event.Type != attention.NeedsAnswer {
+		t.Errorf("expected NeedsAnswer for soft questions, got %v", event.Type)
+	}
+	if !strings.Contains(event.Detail, "free text") && !strings.Contains(event.Detail, "question") {
+		t.Errorf("expected detail mentioning questions, got %q", event.Detail)
+	}
+}
+
+func TestOpenCode_SoftQuestion_QuestionsForYou_LowerCase(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	lines := buildSoftQuestionScreen("Questions for you", []string{
+		"Should we use the new API?",
+		"Which database do you prefer?",
+	})
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Errorf("expected NeedsAnswer, got %v", event)
+	}
+}
+
+func TestOpenCode_SoftQuestion_MultipleQuestionMarks(t *testing.T) {
+	// No "Questions for You" heading, but 3+ lines ending with "?"
+	// should still trigger soft question detection.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 30)
+	lines[2] = "  Before I proceed, I need some clarification:"
+	lines[3] = "  1. Should the tests cover edge cases?"
+	lines[4] = "  2. Do you want integration tests?"
+	lines[5] = "  3. Should I mock the external API?"
+	// Idle chrome at bottom.
+	lines[28] = "  Plan  Claude Opus 4.5 Anthropic · max"
+	lines[29] = "  ctrl+t variants  tab agents  ctrl+p commands"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Errorf("expected NeedsAnswer for multiple questions, got %v", event)
+	}
+}
+
+func TestOpenCode_SoftQuestion_TwoQuestionMarks_NotEnough(t *testing.T) {
+	// Only 2 lines with "?" — not enough to trigger soft question.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 30)
+	lines[2] = "  I fixed the bug. Does it look correct?"
+	lines[3] = "  Should I also fix the other file?"
+	// Idle chrome at bottom.
+	lines[28] = "  Plan  Claude Opus 4.5 Anthropic · max"
+	lines[29] = "  ctrl+t variants  tab agents  ctrl+p commands"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	// Should be NeedsInput (plain idle), NOT NeedsAnswer.
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput (too few questions), got %v", event)
+	}
+}
+
+func TestOpenCode_SoftQuestion_AgentWorking_NoDetection(t *testing.T) {
+	// Agent is working (esc interrupt visible) — even if conversation has
+	// questions, working state must take priority.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 30)
+	lines[2] = "  Questions for You"
+	lines[3] = "  1. Should I use React or Vue?"
+	lines[4] = "  2. Do you prefer TypeScript?"
+	lines[5] = "  3. What about testing framework?"
+	// Working chrome at bottom (no idle shortcuts).
+	lines[29] = "  · · · · ■ ■  esc interrupt"
+
+	result, _ := adapter.CheckAttention(lines)
+	if result != attention.Working {
+		t.Errorf("expected Working (agent busy), got %v", result)
+	}
+}
+
+func TestOpenCode_SoftQuestion_NoQuestionsInContent_JustIdle(t *testing.T) {
+	// Agent is idle with normal conversation content (no questions).
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 30)
+	lines[2] = "  I've fixed the bug in main.go."
+	lines[3] = "  All tests pass."
+	lines[4] = "  Build clean."
+	// Idle chrome.
+	lines[28] = "  Plan  Claude Opus 4.5 Anthropic · max"
+	lines[29] = "  ctrl+t variants  tab agents  ctrl+p commands"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput (no questions), got %v", event)
+	}
+}
+
+func TestOpenCode_SoftQuestion_HardDialogStillWins(t *testing.T) {
+	// When a real question dialog overlay is active (with footer), that
+	// should still win over soft question detection.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 30)
+	lines[2] = "  Questions for You"
+	lines[3] = "  1. Should I use React?"
+	// Dialog overlay at the bottom.
+	lines[24] = "Which framework?"
+	lines[25] = "1. Jest"
+	lines[26] = "2. Vitest"
+	lines[27] = "3. Playwright"
+	lines[29] = "↕ select  enter submit  esc dismiss"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Errorf("expected NeedsAnswer, got %v", event)
+	}
+	// The detail should indicate it's a dialog (hard) question, not soft.
+	if strings.Contains(event.Detail, "free text") {
+		t.Errorf("dialog question should not say 'free text', got %q", event.Detail)
+	}
+}
+
+func TestOpenCode_SoftQuestion_PermissionStillWins(t *testing.T) {
+	// Permission dialog must still take priority over soft questions.
+	adapter := &opencodeAdapter{}
+	lines := make([]string, 30)
+	lines[2] = "  Questions for You"
+	lines[3] = "  1. Should I proceed?"
+	lines[10] = "⚠ Permission required"
+	lines[11] = "← Write to src/main.go"
+	lines[25] = "Allow once   Allow always   Reject       ctrl+f fullscreen"
+
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event)
+	}
+}
+
+func TestOpenCode_SoftQuestion_QuestionHeadingVariants(t *testing.T) {
+	// Various headings that agents use when asking questions.
+	adapter := &opencodeAdapter{}
+	headings := []string{
+		"Questions for You",
+		"Questions for you",
+		"Questions for you:",
+		"I have a few questions:",
+		"I have some questions before proceeding:",
+		"Before I begin, a few questions:",
+		"A few questions:",
+		"Some questions:",
+	}
+	for _, heading := range headings {
+		lines := buildSoftQuestionScreen(heading, []string{
+			"Should I include tests?",
+			"Do you want TypeScript?",
+			"What about documentation?",
+		})
+		result, event := adapter.CheckAttention(lines)
+		if result != attention.Certain {
+			t.Errorf("heading %q: expected Certain, got %v", heading, result)
+		}
+		if event == nil || event.Type != attention.NeedsAnswer {
+			t.Errorf("heading %q: expected NeedsAnswer, got %v", heading, event)
+		}
+	}
+}
+
 // ── ChromeSkipRows ──────────────────────────────────────────────
 
 func TestOpenCode_ChromeSkipRows(t *testing.T) {
