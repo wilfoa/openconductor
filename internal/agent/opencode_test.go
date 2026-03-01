@@ -1000,6 +1000,55 @@ func TestFilterChromeLines_TopLevel_UnknownAgent(t *testing.T) {
 	}
 }
 
+// ── FormatImageInput ────────────────────────────────────────────
+
+func TestOpenCode_FormatImageInput_WithCaption(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	got := adapter.FormatImageInput(".openconductor/images/photo.jpg", "Fix this bug")
+	if !strings.Contains(got, "Fix this bug") {
+		t.Errorf("expected caption in output, got %q", got)
+	}
+	if !strings.Contains(got, ".openconductor/images/photo.jpg") {
+		t.Errorf("expected path in output, got %q", got)
+	}
+}
+
+func TestOpenCode_FormatImageInput_NoCaption(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	got := adapter.FormatImageInput(".openconductor/images/photo.jpg", "")
+	if !strings.Contains(got, ".openconductor/images/photo.jpg") {
+		t.Errorf("expected path in output, got %q", got)
+	}
+}
+
+func TestFormatImageInput_TopLevel_OpenCode(t *testing.T) {
+	got := FormatImageInput("opencode", "img.png", "caption text")
+	if !strings.Contains(got, "caption text") {
+		t.Errorf("expected caption, got %q", got)
+	}
+	if !strings.Contains(got, "img.png") {
+		t.Errorf("expected path, got %q", got)
+	}
+}
+
+func TestFormatImageInput_TopLevel_UnknownAgent(t *testing.T) {
+	// Unknown agent falls back to default format.
+	got := FormatImageInput("unknown-agent", "img.png", "hello")
+	if !strings.Contains(got, "hello") || !strings.Contains(got, "img.png") {
+		t.Errorf("expected default format, got %q", got)
+	}
+}
+
+func TestFormatImageInput_TopLevel_NoCaption(t *testing.T) {
+	got := FormatImageInput("unknown-agent", "img.png", "")
+	if !strings.Contains(got, "img.png") {
+		t.Errorf("expected path in default format, got %q", got)
+	}
+	if strings.Contains(got, "null") || strings.Contains(got, "nil") {
+		t.Errorf("unexpected null/nil in output: %q", got)
+	}
+}
+
 // ── SubmitDelay ─────────────────────────────────────────────────
 
 func TestOpenCode_SubmitDelay(t *testing.T) {

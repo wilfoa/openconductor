@@ -4,10 +4,12 @@
 package telegram
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/session"
 )
 
 // ── ParseQuestionOptions ────────────────────────────────────────
@@ -449,5 +451,64 @@ func TestHandler_ProjectByTopic(t *testing.T) {
 	}
 	if got := h.projectByTopic(999); got != "" {
 		t.Errorf("expected empty for unknown topic, got %q", got)
+	}
+}
+
+// ── HandleInboundMedia ──────────────────────────────────────────
+
+func TestHandleInboundMedia_NoThread(t *testing.T) {
+	h := &handler{state: newTopicState()}
+	ok := h.HandleInboundMedia(nil, nil, "", 0, nil)
+	if ok {
+		t.Fatal("expected false for threadID=0")
+	}
+}
+
+func TestHandleInboundMedia_UnknownTopic(t *testing.T) {
+	h := &handler{state: newTopicState()}
+	ok := h.HandleInboundMedia([]rawPhotoSize{{FileID: "x"}}, nil, "", 999, nil)
+	if ok {
+		t.Fatal("expected false for unknown topic")
+	}
+}
+
+func TestHandleInboundMedia_NoFileID(t *testing.T) {
+	state := newTopicState()
+	state.Set("proj", 100)
+	mgr := session.NewManager()
+	h := &handler{mgr: mgr, state: state, projects: []config.Project{{Name: "proj", Repo: "/tmp/test"}}}
+	// No active sessions → returns false before checking file_id.
+	ok := h.HandleInboundMedia(nil, nil, "caption", 100, nil)
+	if ok {
+		t.Fatal("expected false when no sessions")
+	}
+}
+
+// ── ensureGitignore ─────────────────────────────────────────────
+
+func TestEnsureGitignore_CreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	ensureGitignore(dir)
+
+	gi := dir + "/.gitignore"
+	data, err := os.ReadFile(gi)
+	if err != nil {
+		t.Fatalf("expected .gitignore to exist: %v", err)
+	}
+	if !strings.Contains(string(data), "*") {
+		t.Errorf("expected '*' in .gitignore, got %q", string(data))
+	}
+}
+
+func TestEnsureGitignore_DoesNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	gi := dir + "/.gitignore"
+	os.WriteFile(gi, []byte("custom\n"), 0o644)
+
+	ensureGitignore(dir)
+
+	data, _ := os.ReadFile(gi)
+	if string(data) != "custom\n" {
+		t.Errorf("expected existing .gitignore preserved, got %q", string(data))
 	}
 }

@@ -111,6 +111,16 @@ func (a *opencodeAdapter) IsChromeLine(line string) bool {
 	return false
 }
 
+// FormatImageInput returns a prompt message for an image sent via Telegram.
+// OpenCode passes the prompt text directly to the LLM which can reference the
+// file path for context.
+func (a *opencodeAdapter) FormatImageInput(imagePath string, caption string) string {
+	if caption != "" {
+		return caption + "\n\n[Image attached: " + imagePath + "]"
+	}
+	return "Look at the image at " + imagePath
+}
+
 // SubmitDelay returns the pause between writing text and Enter for OpenCode.
 // OpenCode's Bubble Tea event loop needs ~50ms to process the input text
 // before receiving the submit key.

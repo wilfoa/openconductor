@@ -60,6 +60,14 @@ type sessionExitedMsg struct {
 // so the UI updates promptly after the user resolves an alert.
 const stateStickDuration = 3 * time.Second
 
+// autoApproveMaxRuns is the number of consecutive auto-approve ticks for the
+// same session before the auto-approve is bypassed. At 2s tick interval this
+// means ~6s of repeated approval attempts. If the permission dialog is still
+// showing after this many approvals, the keystroke isn't working (or
+// permissions are queuing faster than we can dismiss them) and the user needs
+// a Telegram notification.
+const autoApproveMaxRuns = 3
+
 // ctrlCWindow is the maximum time between two Ctrl+C presses for them to
 // count as a double-tap exit sequence.
 const ctrlCWindow = 1 * time.Second
@@ -104,6 +112,13 @@ type App struct {
 	// state can be downgraded to Working. Prevents flip-flop when
 	// transient signals scroll off screen between ticks.
 	stateStickUntil map[string]time.Time
+
+	// autoApproveRuns tracks consecutive auto-approve ticks per session.
+	// If a permission is auto-approved but the dialog reappears on the
+	// next tick (queued permissions or keystroke not accepted), this counter
+	// increments. After autoApproveMaxRuns consecutive approvals the
+	// auto-approve is bypassed so the normal Telegram notification fires.
+	autoApproveRuns map[string]int
 
 	// animFrame cycles 0..animFrameCount-1 every AnimTickMsg (~600ms) to
 	// drive the working badge breathing animation.
@@ -228,6 +243,7 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		editingTab:           -1,
 		sessionStates:        make(map[string]SessionState),
 		stateStickUntil:      make(map[string]time.Time),
+		autoApproveRuns:      make(map[string]int),
 		scrollbacks:          make(map[string]*scrollbackBuffer),
 		scrollSnapshots:      make(map[string][]string),
 		scrollGlyphSnapshots: make(map[string][]scrollbackLine),
@@ -757,6 +773,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(sessionChannels, s.ID)
 			delete(a.sessionStates, s.ID)
 			delete(a.stateStickUntil, s.ID)
+			delete(a.autoApproveRuns, s.ID)
 			delete(a.statusbar.states, s.ID)
 		}
 
@@ -900,6 +917,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.removeTab(sessionID)
 		delete(a.stateStickUntil, sessionID)
 		delete(a.sessionStates, sessionID)
+		delete(a.autoApproveRuns, sessionID)
 		delete(a.statusbar.states, sessionID)
 
 		// Get project name before stopping the session.
@@ -1791,14 +1809,28 @@ func (a *App) checkAttention() {
 					}
 					result := a.autoApprover.CheckAndApprove(ctx, s.Project, lines, keystrokes)
 					if result.ShouldApprove {
-						// Send the approval keystroke to the PTY and treat
-						// the session as Working — no notification needed.
-						s.Write(result.Keystroke)
-						a.sessionStates[sessionID] = StateWorking
-						a.statusbar.states[sessionID] = StateWorking
-						a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
-						delete(a.stateStickUntil, sessionID)
-						continue
+						a.autoApproveRuns[sessionID]++
+						if a.autoApproveRuns[sessionID] > autoApproveMaxRuns {
+							// Auto-approve has fired too many consecutive times.
+							// The dialog is stuck or permissions are queuing
+							// faster than we can dismiss. Fall through to the
+							// normal notification path so the user gets a
+							// Telegram/desktop alert.
+							logging.Info("auto-approve: stuck, falling through to notification",
+								"project", projectName,
+								"session", sessionID,
+								"runs", a.autoApproveRuns[sessionID],
+							)
+						} else {
+							// Send the approval keystroke to the PTY and treat
+							// the session as Working — no notification needed.
+							s.Write(result.Keystroke)
+							a.sessionStates[sessionID] = StateWorking
+							a.statusbar.states[sessionID] = StateWorking
+							a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+							delete(a.stateStickUntil, sessionID)
+							continue
+						}
 					}
 				}
 			}
@@ -1843,6 +1875,7 @@ func (a *App) checkAttention() {
 				a.sessionStates[sessionID] = StateWorking
 				a.statusbar.states[sessionID] = StateWorking
 				delete(a.stateStickUntil, sessionID)
+				delete(a.autoApproveRuns, sessionID)
 			}
 		} else {
 			// No signal — keep current state. Only expire sticky attention
@@ -1855,6 +1888,7 @@ func (a *App) checkAttention() {
 				a.sessionStates[sessionID] = StateIdle
 				a.statusbar.states[sessionID] = StateIdle
 				delete(a.stateStickUntil, sessionID)
+				delete(a.autoApproveRuns, sessionID)
 			} else if s.State == session.StateRunning && prevState == StateWorking {
 				// Working → Idle (agent finished responding).
 				a.sendTelegramEvent(projectName, sessionID, StateIdle, "", lines)

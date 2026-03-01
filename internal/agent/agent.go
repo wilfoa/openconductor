@@ -156,6 +156,34 @@ func GetSubmitDelay(agentType config.AgentType) time.Duration {
 	return 0
 }
 
+// ImageInputFormatter is an optional interface that agents can implement to
+// customise how image file paths are presented to the agent's PTY input.
+// The default format is a generic prompt string that most LLM-based agents
+// can parse.
+type ImageInputFormatter interface {
+	// FormatImageInput returns the text to send to the agent's PTY when the
+	// user sends an image via Telegram. imagePath is a repo-relative path
+	// (e.g. ".openconductor/images/20260228_photo.jpg").
+	FormatImageInput(imagePath string, caption string) string
+}
+
+// FormatImageInput returns the prompt text for an image. If the agent
+// implements ImageInputFormatter, its custom format is used; otherwise a
+// generic default is returned.
+func FormatImageInput(agentType config.AgentType, imagePath string, caption string) string {
+	a, err := Get(agentType)
+	if err == nil {
+		if f, ok := a.(ImageInputFormatter); ok {
+			return f.FormatImageInput(imagePath, caption)
+		}
+	}
+	// Default: generic format that most agents can interpret.
+	if caption != "" {
+		return caption + "\n\n[Image saved to " + imagePath + "]"
+	}
+	return "[Image saved to " + imagePath + "]"
+}
+
 // HistoryProvider is an optional interface that agents can implement to supply
 // previous conversation history for scrollback pre-population. When a session
 // tab opens, the app calls LoadHistory to get text lines that are pushed into

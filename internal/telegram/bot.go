@@ -295,6 +295,29 @@ type rawMessage struct {
 	Chat            struct {
 		ID int64 `json:"id"`
 	} `json:"chat"`
+
+	// Media fields for image/document forwarding to agents.
+	Photo    []rawPhotoSize `json:"photo,omitempty"`
+	Document *rawDocument   `json:"document,omitempty"`
+	Caption  string         `json:"caption,omitempty"`
+}
+
+// rawPhotoSize is a subset of Telegram's PhotoSize. When a user sends a
+// photo, Telegram provides multiple resolutions. The last element is the
+// largest (highest resolution).
+type rawPhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int    `json:"file_size,omitempty"`
+}
+
+// rawDocument is a subset of Telegram's Document for file messages.
+type rawDocument struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int    `json:"file_size,omitempty"`
 }
 
 // pollLoop receives Telegram updates via raw HTTP calls (not the library's
@@ -395,13 +418,31 @@ func (b *Bot) handleRawUpdate(raw rawUpdate, lib tgbotapi.Update) {
 		return
 	}
 
-	// Text messages: use raw parsing to get message_thread_id.
+	// Messages: use raw parsing to get message_thread_id (library v5 omits it).
 	if raw.Message != nil && raw.Message.Chat.ID == b.cfg.ChatID {
 		logging.Debug("telegram: inbound message",
 			"text_len", len(raw.Message.Text),
+			"has_photo", len(raw.Message.Photo) > 0,
+			"has_document", raw.Message.Document != nil,
 			"thread_id", raw.Message.MessageThreadID,
 			"chat_id", raw.Message.Chat.ID,
 		)
+
+		// Photo or document messages: download and forward to agent.
+		if len(raw.Message.Photo) > 0 || raw.Message.Document != nil {
+			if b.hdlr.HandleInboundMedia(
+				raw.Message.Photo,
+				raw.Message.Document,
+				raw.Message.Caption,
+				raw.Message.MessageThreadID,
+				b.downloadFile,
+			) {
+				b.reactToMessage(raw.Message.MessageID, "📸")
+			}
+			return
+		}
+
+		// Text messages.
 		if b.hdlr.HandleInbound(raw.Message.Text, raw.Message.MessageThreadID) {
 			b.reactToMessage(raw.Message.MessageID, "👀")
 		}
@@ -569,6 +610,41 @@ func (b *Bot) reactToMessage(messageID int, emoji string) {
 	if err := b.rawAPICall("setMessageReaction", payload); err != nil {
 		logging.Debug("telegram: failed to react to message", "message_id", messageID, "err", err)
 	}
+}
+
+// downloadFile retrieves a file from Telegram's servers by its file_id.
+// Returns the file bytes and the original file path (which contains the
+// extension, e.g. "photos/file_42.jpg"). The caller is responsible for
+// saving the bytes to disk.
+func (b *Bot) downloadFile(fileID string) ([]byte, string, error) {
+	dlURL, err := b.api.GetFileDirectURL(fileID)
+	if err != nil {
+		return nil, "", fmt.Errorf("getFileDirectURL: %w", err)
+	}
+
+	resp, err := http.Get(dlURL) //nolint:gosec // URL is from Telegram's API
+	if err != nil {
+		return nil, "", fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("download file: HTTP %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("read file body: %w", err)
+	}
+
+	// Extract the file path from the download URL for extension detection.
+	// URL format: https://api.telegram.org/file/bot<token>/<file_path>
+	filePath := ""
+	if u, err := url.Parse(dlURL); err == nil {
+		filePath = u.Path
+	}
+
+	return data, filePath, nil
 }
 
 // rawAPICall makes a raw POST request to the Telegram Bot API.
