@@ -5,6 +5,7 @@ package telegram
 
 import (
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,22 +73,26 @@ func (h *handler) HandleInbound(text string, threadID int) bool {
 }
 
 // HandleCallback processes an inline keyboard callback (permission or question).
-func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) {
+// It uses the Bot's raw API methods for answering and editing, which reliably
+// handle Forum Topic messages (the library's Send/Request methods don't
+// include message_thread_id).
+func (h *handler) HandleCallback(b *Bot, query *tgbotapi.CallbackQuery) {
 	data := query.Data
 	parts := strings.SplitN(data, ":", 3)
 	if len(parts) < 3 {
 		logging.Debug("telegram: malformed callback data", "data", data)
-		h.answerCallback(bot, query.ID, "Invalid action")
+		b.answerCallbackRaw(query.ID, "Invalid action")
 		return
 	}
 
-	kind := parts[0] // "perm" or "opt"
+	kind := parts[0] // "perm", "opt", or "reply"
 	project := parts[1]
 	action := parts[2]
 
 	sessions := h.mgr.GetSessionsByProject(project)
 	if len(sessions) == 0 {
-		h.answerCallback(bot, query.ID, "No active session")
+		logging.Debug("telegram: callback for project with no session", "project", project, "kind", kind)
+		b.answerCallbackRaw(query.ID, "No active session")
 		return
 	}
 	// Route to the most recently created session for this project.
@@ -99,7 +104,7 @@ func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQ
 	case "perm":
 		adapter := h.getAdapter(project)
 		if adapter == nil {
-			h.answerCallback(bot, query.ID, "Unknown agent")
+			b.answerCallbackRaw(query.ID, "Unknown agent")
 			return
 		}
 		switch action {
@@ -117,7 +122,7 @@ func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQ
 			s.Write(adapter.DenyKeystroke())
 			actionLabel = "Denied"
 		default:
-			h.answerCallback(bot, query.ID, "Unknown action")
+			b.answerCallbackRaw(query.ID, "Unknown action")
 			return
 		}
 
@@ -132,14 +137,14 @@ func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQ
 		actionLabel = fmt.Sprintf("Replied: %s", action)
 
 	default:
-		h.answerCallback(bot, query.ID, "Unknown callback type")
+		b.answerCallbackRaw(query.ID, "Unknown callback type")
 		return
 	}
 
 	logging.Info("telegram: callback handled", "project", project, "kind", kind, "action", action)
 
 	// Answer the callback to dismiss the loading indicator.
-	h.answerCallback(bot, query.ID, actionLabel)
+	b.answerCallbackRaw(query.ID, actionLabel)
 
 	// Edit the original message to show the action taken.
 	if query.Message != nil {
@@ -147,14 +152,11 @@ func (h *handler) HandleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQ
 		if query.From != nil {
 			userName = query.From.FirstName
 		}
-		newText := FormatActionTaken(query.Message.Text, actionLabel, userName)
-		edit := tgbotapi.NewEditMessageText(
-			query.Message.Chat.ID,
-			query.Message.MessageID,
-			newText,
-		)
-		edit.ParseMode = "HTML"
-		if _, err := bot.Send(edit); err != nil {
+		// query.Message.Text is plain text (HTML tags stripped by Telegram).
+		// Escape it before combining with new HTML to avoid parse errors
+		// from literal < > & characters in the original content.
+		newText := FormatActionTaken(html.EscapeString(query.Message.Text), actionLabel, userName)
+		if err := b.editTopicMessage(query.Message.MessageID, newText, nil); err != nil {
 			logging.Debug("telegram: failed to edit message after callback", "err", err)
 		}
 	}
@@ -184,12 +186,9 @@ func (h *handler) getAdapter(project string) agent.AgentAdapter {
 	return nil
 }
 
-func (h *handler) answerCallback(bot *tgbotapi.BotAPI, callbackID string, text string) {
-	cb := tgbotapi.NewCallback(callbackID, text)
-	if _, err := bot.Request(cb); err != nil {
-		logging.Debug("telegram: failed to answer callback", "err", err)
-	}
-}
+// answerCallback is unused — kept as a comment for reference.
+// Callback answering is now done via Bot.answerCallbackRaw() which uses
+// raw API calls instead of the library's Request method.
 
 // writeWithEnter writes text to the session's PTY, pauses for the agent's
 // configured submit delay, then sends Enter (\r). The delay ensures the TUI's

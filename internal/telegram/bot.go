@@ -286,6 +286,25 @@ type rawUpdate struct {
 	CallbackQuery json.RawMessage `json:"callback_query"`
 }
 
+// rawCallbackQuery is a minimal callback query parsed from raw JSON.
+// Used as a fallback when the go-telegram-bot-api v5 library cannot parse
+// newer Telegram Bot API callback query formats (e.g., MaybeInaccessibleMessage
+// in the message field, introduced in Bot API 7.0 after the library's release).
+type rawCallbackQuery struct {
+	ID   string `json:"id"`
+	Data string `json:"data"`
+	From *struct {
+		FirstName string `json:"first_name"`
+	} `json:"from"`
+	Message *struct {
+		MessageID int `json:"message_id"`
+		Chat      struct {
+			ID int64 `json:"id"`
+		} `json:"chat"`
+		Text string `json:"text"`
+	} `json:"message"`
+}
+
 // rawMessage captures the fields we need from an incoming message,
 // including message_thread_id which the library's Message struct lacks.
 type rawMessage struct {
@@ -412,10 +431,38 @@ func (b *Bot) pollLoop() {
 
 // handleRawUpdate dispatches a single update using both raw and library-parsed data.
 func (b *Bot) handleRawUpdate(raw rawUpdate, lib tgbotapi.Update) {
-	// Callback queries: use the library's parsed type (it handles these correctly).
+	// Callback queries: try the library's parsed type first, then fall back
+	// to raw JSON parsing. The go-telegram-bot-api v5.5.1 predates Bot API
+	// 7.0 which changed callback_query.message to MaybeInaccessibleMessage.
+	// The library may leave CallbackQuery nil for newer update formats.
 	if lib.CallbackQuery != nil {
-		b.hdlr.HandleCallback(b.api, lib.CallbackQuery)
+		logging.Debug("telegram: callback received (library)", "data", lib.CallbackQuery.Data)
+		b.handleCallback(lib.CallbackQuery)
 		return
+	}
+	if len(raw.CallbackQuery) > 2 { // >2 excludes "" and "null"
+		var rcq rawCallbackQuery
+		if err := json.Unmarshal(raw.CallbackQuery, &rcq); err == nil && rcq.ID != "" {
+			logging.Debug("telegram: callback received (raw fallback)", "data", rcq.Data)
+			// Build a library CallbackQuery from the raw fields so we can
+			// reuse the same handler for both paths.
+			libCQ := &tgbotapi.CallbackQuery{
+				ID:   rcq.ID,
+				Data: rcq.Data,
+			}
+			if rcq.From != nil {
+				libCQ.From = &tgbotapi.User{FirstName: rcq.From.FirstName}
+			}
+			if rcq.Message != nil {
+				libCQ.Message = &tgbotapi.Message{
+					MessageID: rcq.Message.MessageID,
+					Chat:      &tgbotapi.Chat{ID: rcq.Message.Chat.ID},
+					Text:      rcq.Message.Text,
+				}
+			}
+			b.handleCallback(libCQ)
+			return
+		}
 	}
 
 	// Messages: use raw parsing to get message_thread_id (library v5 omits it).
@@ -667,6 +714,25 @@ func (b *Bot) rawAPICall(method string, payload map[string]interface{}) error {
 	}
 
 	return nil
+}
+
+// handleCallback processes a callback query using the handler for routing
+// and raw API calls for answering and editing. This avoids relying on the
+// go-telegram-bot-api library's Request/Send methods which may not handle
+// Forum Topic messages correctly.
+func (b *Bot) handleCallback(query *tgbotapi.CallbackQuery) {
+	b.hdlr.HandleCallback(b, query)
+}
+
+// answerCallbackRaw answers a callback query using a raw API call.
+func (b *Bot) answerCallbackRaw(callbackID, text string) {
+	payload := map[string]interface{}{
+		"callback_query_id": callbackID,
+		"text":              text,
+	}
+	if err := b.rawAPICall("answerCallbackQuery", payload); err != nil {
+		logging.Debug("telegram: failed to answer callback", "callback_id", callbackID, "err", err)
+	}
 }
 
 // FormatCallbackData creates callback data strings with size safety.
