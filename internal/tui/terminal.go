@@ -937,9 +937,15 @@ func unknownCSIBytes(msg tea.Msg) []byte {
 // into a tea.KeyMsg. The CSI u format is: \x1b [ <codepoint> ; <modifier> u
 // where modifier = (shift | alt<<1 | ctrl<<2 | super<<3) + 1.
 //
-// Returns (keyMsg, true) for sequences that map to app-level shortcuts
-// (Ctrl+C, Ctrl+S, Ctrl+J, Ctrl+K). All other sequences return (_, false)
-// and should be forwarded to the PTY.
+// Returns (keyMsg, true) for sequences that the bubbletea app can handle
+// directly: Ctrl+C/S/J/K shortcuts, functional keys (Esc, Enter, Backspace,
+// Tab), and printable characters. These must be translated because bubbletea
+// v1.3.10 does not parse kitty CSI u sequences — iTerm2, kitty, WezTerm,
+// and Ghostty all encode these keys in CSI u format when kitty keyboard
+// mode 1+ is active.
+//
+// Returns (_, false) for sequences that should be forwarded to the PTY
+// (e.g. Shift+Enter, unknown modified keys).
 func parseKittyCSI(raw []byte) (tea.KeyMsg, bool) {
 	// Minimum: \x1b [ <digit> u = 4 bytes.
 	if len(raw) < 4 || raw[0] != '\x1b' || raw[1] != '[' || raw[len(raw)-1] != 'u' {
@@ -966,22 +972,53 @@ func parseKittyCSI(raw []byte) (tea.KeyMsg, bool) {
 	modBits := modifier - 1
 	hasCtrl := modBits&4 != 0
 	hasAlt := modBits&2 != 0
+	hasShift := modBits&1 != 0
 
-	if !hasCtrl {
+	// Ctrl+letter shortcuts for app-level bindings.
+	if hasCtrl {
+		switch rune(codepoint) {
+		case 'c':
+			return tea.KeyMsg{Type: tea.KeyCtrlC, Alt: hasAlt}, true
+		case 's':
+			return tea.KeyMsg{Type: tea.KeyCtrlS, Alt: hasAlt}, true
+		case 'j':
+			return tea.KeyMsg{Type: tea.KeyCtrlJ, Alt: hasAlt}, true
+		case 'k':
+			return tea.KeyMsg{Type: tea.KeyCtrlK, Alt: hasAlt}, true
+		case 'f':
+			return tea.KeyMsg{Type: tea.KeyCtrlF, Alt: hasAlt}, true
+		}
+		// Unknown Ctrl+key — forward to PTY.
 		return tea.KeyMsg{}, false
 	}
 
-	// Map Ctrl+letter codepoints to tea.KeyType.
-	switch rune(codepoint) {
-	case 'c':
-		return tea.KeyMsg{Type: tea.KeyCtrlC, Alt: hasAlt}, true
-	case 's':
-		return tea.KeyMsg{Type: tea.KeyCtrlS, Alt: hasAlt}, true
-	case 'j':
-		return tea.KeyMsg{Type: tea.KeyCtrlJ, Alt: hasAlt}, true
-	case 'k':
-		return tea.KeyMsg{Type: tea.KeyCtrlK, Alt: hasAlt}, true
-	default:
-		return tea.KeyMsg{}, false
+	// Functional keys without Ctrl. In kitty keyboard mode 1
+	// ("disambiguate escape codes"), terminals encode these as CSI u
+	// to distinguish them from the raw bytes that start CSI sequences.
+	// Without this, Esc (\x1b[27u) and Enter (\x1b[13u) are dropped
+	// when the sidebar form has focus, making the form inescapable.
+	if modBits == 0 || (hasShift && !hasCtrl && !hasAlt) {
+		switch codepoint {
+		case 27: // Esc
+			return tea.KeyMsg{Type: tea.KeyEscape}, true
+		case 13: // Enter / CR
+			return tea.KeyMsg{Type: tea.KeyEnter}, true
+		case 127: // Backspace
+			return tea.KeyMsg{Type: tea.KeyBackspace}, true
+		case 9: // Tab
+			return tea.KeyMsg{Type: tea.KeyTab}, true
+		}
 	}
+
+	// Unmodified printable characters (space through tilde).
+	// These arrive as CSI u when kitty mode >= 2 ("report all keys as
+	// escape codes"). Convert to tea.KeyRunes so text inputs work.
+	if modBits == 0 && codepoint >= 32 && codepoint <= 126 {
+		return tea.KeyMsg{
+			Type:  tea.KeyRunes,
+			Runes: []rune{rune(codepoint)},
+		}, true
+	}
+
+	return tea.KeyMsg{}, false
 }

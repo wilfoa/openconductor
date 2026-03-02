@@ -342,13 +342,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle kitty keyboard protocol CSI u sequences. bubbletea v1.3.10 does
 	// not parse these and emits them as unknownCSISequenceMsg. We intercept
-	// sequences that map to app shortcuts (Ctrl+C/S/J/K) and convert them to
-	// tea.KeyMsg so the normal key handling below processes them. Everything
-	// else (e.g. Shift+Enter) is forwarded to the active PTY.
+	// sequences that map to app shortcuts (Ctrl+C/S/J/K), functional keys
+	// (Esc, Enter, Backspace, Tab), and printable characters, converting them
+	// to tea.KeyMsg so the normal key handling below processes them.
+	// Unrecognised sequences are forwarded to the active PTY.
 	if raw := unknownCSIBytes(msg); len(raw) > 0 {
 		if keyMsg, ok := parseKittyCSI(raw); ok {
-			// Recognised app shortcut — replace msg and fall through
-			// to the switch below so key handlers see it.
+			// Recognised key — replace msg and fall through to the
+			// switch below so key handlers see it.
 			msg = keyMsg
 		} else if a.focus == focusTerminal {
 			if s := a.mgr.ActiveSession(); s != nil {
