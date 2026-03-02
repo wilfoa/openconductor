@@ -358,6 +358,10 @@ func (b *Bot) pollLoop() {
 		payload := map[string]interface{}{
 			"offset":  offset,
 			"timeout": 30,
+			// Explicitly request all update types we handle. Without this,
+			// Telegram uses the last-set allowed_updates — which the setup
+			// flow sets to ["message","my_chat_member"], excluding callback_query.
+			"allowed_updates": []string{"message", "callback_query", "my_chat_member"},
 		}
 		body, _ := json.Marshal(payload)
 

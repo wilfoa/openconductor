@@ -177,9 +177,11 @@ func discoverChatID(token string) (int64, string, error) {
 		}
 	}
 
-	// Also request my_chat_member updates (bot added/removed from groups)
-	// so we can detect the group even from the "bot was added" event.
-	allowedUpdates := `["message","my_chat_member"]`
+	// Request all update types the bot handles: messages, callback queries
+	// (inline keyboard button presses), and my_chat_member (bot added/removed).
+	// This persists server-side — pollLoop must also set allowed_updates to
+	// avoid inheriting a stale filter that excludes callback_query.
+	allowedUpdates := `["message","callback_query","my_chat_member"]`
 
 	deadline := time.Now().Add(2 * time.Minute)
 	offset := 0
