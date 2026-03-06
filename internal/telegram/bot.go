@@ -488,7 +488,7 @@ func (b *Bot) handleRawUpdate(raw rawUpdate, lib tgbotapi.Update) {
 				raw.Message.MessageThreadID,
 				b.downloadFile,
 			) {
-				b.reactToMessage(raw.Message.MessageID, "📸")
+				b.reactToMessage(raw.Message.MessageID, "👀")
 			}
 			return
 		}
@@ -712,9 +712,22 @@ func (b *Bot) rawAPICall(method string, payload map[string]interface{}) error {
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("API %s: read body: %w", method, err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API %s returned %d: %s", method, resp.StatusCode, string(respBody))
+	}
+
+	// Telegram can return HTTP 200 with {"ok": false} for some errors.
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(respBody, &result); err == nil && !result.OK {
+		return fmt.Errorf("API %s: %s", method, result.Description)
 	}
 
 	return nil
