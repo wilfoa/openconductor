@@ -1717,6 +1717,46 @@ func TestSendTelegramEvent_AllAttentionTypes(t *testing.T) {
 	}
 }
 
+func TestSendTelegramEvent_DialogFooterPreserved(t *testing.T) {
+	// Regression test: sendTelegramEvent must not strip dialog footers.
+	// Previously ChromeSkipRows(1, 2) removed the bottom 2 rows, stripping
+	// "enter submit  esc dismiss" — which ParseQuestionOptions needs to find
+	// inline keyboard buttons.
+	//
+	// Without an active session in the manager, no filtering is applied
+	// (lines pass through unchanged). This test verifies the Screen field
+	// contains the full input including the dialog footer.
+	app := NewApp(configWithProjects(), "", nil)
+	ch := make(chan telegram.Event, 4)
+	app.SetTelegramChannel(ch)
+
+	screen := []string{
+		"Header row",
+		"Conversation content",
+		"Which option?",
+		"1. Alpha",
+		"2. Beta",
+		"↕ select  enter submit  esc dismiss",
+	}
+	app.sendTelegramEvent("proj1", "proj1", StateAsking, "question", screen)
+
+	e := <-ch
+	if e.Kind != telegram.EventQuestion {
+		t.Fatalf("expected EventQuestion, got %d", e.Kind)
+	}
+	// The screen must contain the dialog footer for ParseQuestionOptions.
+	found := false
+	for _, line := range e.Screen {
+		if strings.Contains(line, "enter submit") && strings.Contains(line, "esc dismiss") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("dialog footer stripped from Screen — ParseQuestionOptions will fail to find buttons.\nScreen: %v", e.Screen)
+	}
+}
+
 func TestSendTelegramEvent_ChannelFull_DoesNotBlock(t *testing.T) {
 	app := NewApp(configWithProjects(), "", nil)
 	ch := make(chan telegram.Event, 1)

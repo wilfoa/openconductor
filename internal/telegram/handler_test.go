@@ -484,6 +484,55 @@ func TestHandleInboundMedia_NoFileID(t *testing.T) {
 	}
 }
 
+// ── ParseQuestionOptions with realistic filtered screen ─────────
+
+func TestParseQuestionOptions_FullScreenWithChromeFiltered(t *testing.T) {
+	// Simulate a realistic 30-row OpenCode screen with a question dialog.
+	// The agent adapter's FilterChromeLines removes status bar and shortcut
+	// hints, but the bottom skip from ChromeSkipRows must NOT strip the
+	// dialog footer — otherwise ParseQuestionOptions can't find it and
+	// returns nil (no inline keyboard buttons).
+	//
+	// This is a regression test: ChromeSkipRows(1, 2) previously stripped
+	// the bottom 2 rows in sendTelegramEvent, removing dialog footers.
+	screen := make([]string, 30)
+	screen[0] = "  Some conversation content"
+	screen[1] = "  More conversation..."
+	// ...blank lines in the middle...
+	screen[24] = "Which framework would you like to use?"
+	screen[25] = "1. Jest"
+	screen[26] = "2. Vitest"
+	screen[27] = "3. Playwright"
+	screen[28] = ""
+	screen[29] = "↕ select  enter submit  esc dismiss"
+
+	// After filtering (header row stripped, chrome lines filtered), the
+	// dialog footer must still be present for ParseQuestionOptions to work.
+	opts := ParseQuestionOptions(screen)
+	if len(opts) != 3 {
+		t.Fatalf("expected 3 options from full screen, got %d: %v", len(opts), opts)
+	}
+	if opts[0] != "1. Jest" || opts[1] != "2. Vitest" || opts[2] != "3. Playwright" {
+		t.Errorf("unexpected options: %v", opts)
+	}
+}
+
+func TestParseQuestionOptions_FooterInSecondToLastRow(t *testing.T) {
+	// Dialog footer not in the very last row — there may be an empty line
+	// after it. ParseQuestionOptions should still find it.
+	screen := make([]string, 30)
+	screen[25] = "1. Option A"
+	screen[26] = "2. Option B"
+	screen[27] = "↕ select  enter submit  esc dismiss"
+	screen[28] = ""
+	screen[29] = ""
+
+	opts := ParseQuestionOptions(screen)
+	if len(opts) != 2 {
+		t.Fatalf("expected 2 options, got %d: %v", len(opts), opts)
+	}
+}
+
 // ── ensureGitignore ─────────────────────────────────────────────
 
 func TestEnsureGitignore_CreatesFile(t *testing.T) {

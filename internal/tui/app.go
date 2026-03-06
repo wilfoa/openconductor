@@ -1916,14 +1916,21 @@ func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, d
 	}
 
 	// Filter screen lines through the agent adapter to remove sidebar noise,
-	// strip fixed chrome rows (header/footer), and remove content-aware
-	// chrome lines (status bar, model selector, shortcut hints) that aren't
-	// conversation content.
+	// strip the fixed header row, and remove content-aware chrome lines
+	// (status bar, model selector, shortcut hints) that aren't conversation
+	// content.
+	//
+	// Only the top skip from ChromeSkipRows is applied here. The bottom skip
+	// is intentionally omitted because FilterChromeLines already handles all
+	// bottom chrome (status bar, shortcut hints, "esc interrupt" footer), and
+	// applying a fixed bottom skip would strip dialog footers ("enter submit
+	// esc dismiss") that ParseQuestionOptions needs to find inline keyboard
+	// buttons.
 	if s := a.mgr.GetSession(sessionID); s != nil {
 		lines = agent.FilterScreen(s.Project.Agent, lines)
-		top, bottom := agent.ChromeSkipRows(s.Project.Agent)
-		if top+bottom > 0 && top+bottom < len(lines) {
-			lines = lines[top : len(lines)-bottom]
+		top, _ := agent.ChromeSkipRows(s.Project.Agent)
+		if top > 0 && top < len(lines) {
+			lines = lines[top:]
 		}
 		lines = agent.FilterChromeLines(s.Project.Agent, lines)
 	}
