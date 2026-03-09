@@ -4,6 +4,8 @@
 package tui
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -2291,5 +2293,292 @@ func TestSystemTabExitedMsg_ReloadsConfig(t *testing.T) {
 	// Config should still be valid.
 	if app.cfg == nil {
 		t.Fatal("expected config to be non-nil after reload")
+	}
+}
+
+// ── Border drag zone does not eat tab clicks ────────────────────
+
+func TestBorderDragDoesNotEatTabClick(t *testing.T) {
+	// Regression test: the border drag zone was [borderX-1, borderX+1],
+	// extending 1 column into the right panel and eating clicks on the
+	// first tab's left border. The fix narrows it to [borderX-1, borderX].
+	cfg := configWith3Projects()
+	app := NewApp(cfg, "", nil)
+	app.width = 160
+	app.height = 40
+
+	for _, p := range cfg.Projects {
+		s := &session.Session{ID: p.Name, Instance: 1, Project: p, State: session.StateRunning}
+		app.mgr.InjectSession(p.Name, s)
+	}
+	app.addTab("beta")
+	app.addTab("gamma")
+
+	sbWidth := app.sidebar.Width()
+	// The first column of the right panel (first tab's left border).
+	rightPanelStartX := screenPadding + sbWidth
+	msg := tea.MouseMsg{
+		X:      rightPanelStartX,
+		Y:      1,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+
+	model, cmd := app.Update(msg)
+	app = model.(App)
+
+	// Should NOT start dragging.
+	if app.dragging {
+		t.Fatal("click at right panel start should NOT initiate border drag")
+	}
+
+	// The click should reach the tab handler.
+	// localX=0 is the left border of the first (active) tab.
+	// Clicking the active tab enters edit mode.
+	if app.editingTab < 0 {
+		// If not in edit mode, it should at least have produced a command
+		// (but active tab click enters edit mode, no command).
+		if cmd != nil {
+			// Got a command — that's also fine (e.g. TabSwitchedMsg).
+		}
+	}
+	// The key assertion: dragging must NOT be true.
+}
+
+func TestBorderDragStillWorksAtBorder(t *testing.T) {
+	// Verify the border drag still works at the actual border column.
+	app := NewApp(configWithProjects(), "", nil)
+	app.width = 160
+	app.height = 40
+
+	sbWidth := app.sidebar.Width()
+	borderX := screenPadding + sbWidth - 1
+
+	msg := tea.MouseMsg{
+		X:      borderX,
+		Y:      10,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+
+	model, _ := app.Update(msg)
+	app = model.(App)
+
+	if !app.dragging {
+		t.Fatal("click on border column should initiate drag")
+	}
+}
+
+// ── Trackpad / mouse wheel tests ────────────────────────────────
+//
+// These emulated tests verify that wheel events are routed correctly
+// depending on whether the child PTY has mouse tracking enabled.
+
+// appWithPipeSession creates a test app with a VT-backed session whose
+// Ptmx is a pipe, so we can capture what the app writes to the PTY.
+// The VT has mouse button tracking + SGR mode enabled.
+// Returns (app, pipe reader). Caller must close reader.
+func appWithPipeSession(t *testing.T, mouseMode bool) (App, *os.File) {
+	t.Helper()
+
+	cfg := &config.Config{
+		Projects: []config.Project{
+			{Name: "proj1", Repo: "/tmp/p1", Agent: config.AgentOpenCode},
+		},
+	}
+	app := NewApp(cfg, "", nil)
+	app.width = 120
+	app.height = 40
+	app.focus = focusTerminal
+	app.layout()
+
+	const vtW, vtH = 80, 30
+	vt := vt10x.New(vt10x.WithSize(vtW, vtH))
+
+	// Enable alt-screen mode + mouse tracking in the VT by writing the
+	// relevant escape sequences. 1049h = alt-screen, 1000h = button
+	// tracking, 1006h = SGR encoding. syncTerminalFromSession reads
+	// mode flags from the VT, so they must be set in the VT itself.
+	vt.Write([]byte("\x1b[?1049h")) // alt-screen (always, since tests need it)
+	if mouseMode {
+		vt.Write([]byte("\x1b[?1000h\x1b[?1006h"))
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	t.Cleanup(func() { w.Close() })
+
+	sess := &session.Session{
+		ID:      "proj1",
+		Project: cfg.Projects[0],
+		VT:      vt,
+		State:   session.StateRunning,
+		Width:   vtW,
+		Height:  vtH,
+	}
+	sess.Ptmx = w
+	app.mgr.InjectSession("proj1", sess)
+
+	// Wire the terminal to this session. syncTerminalFromSession reads
+	// alt-screen and mouse mode flags from the VT, so calling it is
+	// sufficient — no need to set terminal fields manually.
+	app.syncTerminalFromSession()
+
+	return app, r
+}
+
+// readPipe reads whatever was written to the pipe with a small timeout.
+func readPipe(t *testing.T, r *os.File) []byte {
+	t.Helper()
+	r.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	buf := make([]byte, 512)
+	n, _ := r.Read(buf)
+	return buf[:n]
+}
+
+func TestWheelAltScreen_MouseMode_ForwardsMouseProtocol(t *testing.T) {
+	// When the child has mouse mode enabled, wheel events should be
+	// forwarded as SGR mouse protocol sequences (not PageUp/PageDown).
+	// This prevents the full-page jumps that make trackpad scrolling
+	// unusable.
+	app, r := appWithPipeSession(t, true)
+
+	sbWidth := app.sidebar.Width()
+	termX := screenPadding + sbWidth + 10 // well inside terminal area
+	termY := 10                           // well inside terminal area
+
+	msg := tea.MouseMsg{
+		X:      termX,
+		Y:      termY,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	}
+
+	model, cmd := app.Update(msg)
+	_ = model.(App)
+
+	if cmd != nil {
+		t.Fatal("expected nil cmd from wheel in alt-screen (event forwarded to PTY)")
+	}
+
+	got := readPipe(t, r)
+	if len(got) == 0 {
+		t.Fatal("expected data written to PTY for wheel event")
+	}
+
+	// SGR mouse wheel up: \x1b[<64;col;rowM where col/row are 1-indexed
+	// terminal-local coordinates.
+	gotStr := string(got)
+	if !strings.HasPrefix(gotStr, "\x1b[<64;") {
+		t.Fatalf("expected SGR mouse wheel up sequence (\\x1b[<64;...), got %q", gotStr)
+	}
+	if gotStr[len(gotStr)-1] != 'M' {
+		t.Fatalf("expected sequence ending with 'M', got %q", gotStr)
+	}
+
+	// Verify it's NOT PageUp/PageDown.
+	if gotStr == "\x1b[5~" || gotStr == "\x1b[6~" {
+		t.Fatal("wheel should NOT produce PageUp/PageDown when mouse mode is enabled")
+	}
+}
+
+func TestWheelAltScreen_MouseMode_WheelDown(t *testing.T) {
+	// Same as above but for wheel down — button code 65.
+	app, r := appWithPipeSession(t, true)
+
+	sbWidth := app.sidebar.Width()
+	msg := tea.MouseMsg{
+		X:      screenPadding + sbWidth + 10,
+		Y:      10,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelDown,
+	}
+
+	app.Update(msg)
+
+	got := string(readPipe(t, r))
+	if !strings.HasPrefix(got, "\x1b[<65;") {
+		t.Fatalf("expected SGR mouse wheel down (\\x1b[<65;...), got %q", got)
+	}
+}
+
+func TestWheelAltScreen_NoMouseMode_FallsBackToPageUpDown(t *testing.T) {
+	// When the child does NOT have mouse mode enabled (e.g. a basic TUI
+	// or less), wheel should fall back to PageUp/PageDown.
+	app, r := appWithPipeSession(t, false)
+
+	sbWidth := app.sidebar.Width()
+	msg := tea.MouseMsg{
+		X:      screenPadding + sbWidth + 10,
+		Y:      10,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	}
+
+	app.Update(msg)
+
+	got := string(readPipe(t, r))
+	if got != "\x1b[5~" {
+		t.Fatalf("expected PageUp (\\x1b[5~) without mouse mode, got %q", got)
+	}
+
+	// Test wheel down too.
+	msg.Button = tea.MouseButtonWheelDown
+	app.Update(msg)
+
+	got = string(readPipe(t, r))
+	if got != "\x1b[6~" {
+		t.Fatalf("expected PageDown (\\x1b[6~) without mouse mode, got %q", got)
+	}
+}
+
+func TestWheelAltScreen_MouseMode_ClampsOutOfBounds(t *testing.T) {
+	// When the cursor is outside the terminal area, wheel events should
+	// not be forwarded (no data written to PTY).
+	app, r := appWithPipeSession(t, true)
+
+	// Y=1 is in the tab bar area (localY would be negative).
+	msg := tea.MouseMsg{
+		X:      screenPadding + app.sidebar.Width() + 10,
+		Y:      1,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	}
+
+	app.Update(msg)
+
+	got := readPipe(t, r)
+	if len(got) != 0 {
+		t.Fatalf("expected no PTY write for out-of-bounds wheel, got %q", string(got))
+	}
+}
+
+func TestWheelAltScreen_MouseMode_CoordinatesCorrect(t *testing.T) {
+	// Verify the SGR coordinates map correctly from screen to terminal-local.
+	app, r := appWithPipeSession(t, true)
+
+	sbWidth := app.sidebar.Width()
+	// Screen coordinates: X = screenPadding + sbWidth + 1 (PaddingLeft) + 5
+	// → localX = 5, terminal col = 6 (1-indexed)
+	// Screen Y = 3 + 7 = 10 → localY = 7, terminal row = 8 (1-indexed)
+	screenX := screenPadding + sbWidth + 1 + 5
+	screenY := 3 + 7
+
+	msg := tea.MouseMsg{
+		X:      screenX,
+		Y:      screenY,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	}
+
+	app.Update(msg)
+
+	got := string(readPipe(t, r))
+	// SGR format: \x1b[<64;6;8M
+	want := fmt.Sprintf("\x1b[<64;%d;%dM", 6, 8)
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }

@@ -546,11 +546,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		sbWidth := a.sidebar.Width()
 
-		// Detect click on border (±1 column of sidebar right edge).
-		// Account for screen padding offset.
+		// Detect click on sidebar border for drag-to-resize.
+		// The border is at column (screenPadding + sbWidth - 1). We extend
+		// the hit zone 1 column to the LEFT for easier grab, but NOT to the
+		// right — that would eat clicks on the first tab's left border.
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			borderX := screenPadding + sbWidth - 1
-			if msg.X >= borderX-1 && msg.X <= borderX+1 {
+			if msg.X >= borderX-1 && msg.X <= borderX {
 				a.dragging = true
 				a.sidebar.dragging = true
 				return a, nil
@@ -617,10 +619,39 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// used for non-alt-screen terminal sessions.
 				if a.terminal.altScreen {
 					if s := a.mgr.ActiveSession(); s != nil {
-						if msg.Button == tea.MouseButtonWheelUp {
-							s.Write([]byte("\x1b[5~")) // PageUp
+						// Check if the child has mouse tracking enabled.
+						// TUI apps like OpenCode request mouse mode so they
+						// can handle wheel events natively with smooth (per-
+						// line) scrolling. Forwarding as mouse protocol
+						// sequences instead of PageUp/PageDown prevents the
+						// jarring full-page jumps that trackpad gestures
+						// produce (many rapid wheel ticks).
+						s.Mu.RLock()
+						var vtMode vt10x.ModeFlag
+						if s.VT != nil {
+							vtMode = s.VT.Mode()
+						}
+						s.Mu.RUnlock()
+
+						if vtMode&vt10x.ModeMouseMask != 0 {
+							localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
+							localY := msg.Y - 3                           // -3 for tab bar height
+							termW, termH := a.termDimensions()
+							if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
+								sgrMode := vtMode&vt10x.ModeMouseSgr != 0
+								motionMode := vtMode&(vt10x.ModeMouseMotion|vt10x.ModeMouseMany) != 0
+								if seq := mouseToBytes(msg, localX, localY, sgrMode, motionMode); seq != nil {
+									s.Write(seq)
+								}
+							}
 						} else {
-							s.Write([]byte("\x1b[6~")) // PageDown
+							// No mouse tracking: fall back to PageUp/PageDown
+							// for alt-screen apps that handle keyboard nav only.
+							if msg.Button == tea.MouseButtonWheelUp {
+								s.Write([]byte("\x1b[5~")) // PageUp
+							} else {
+								s.Write([]byte("\x1b[6~")) // PageDown
+							}
 						}
 					}
 					return a, nil
