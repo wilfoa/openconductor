@@ -1906,7 +1906,9 @@ func TestKittyShiftEnter_ForwardedToPTY(t *testing.T) {
 	app.mgr.InjectSession("proj1", sess)
 
 	// Simulate kitty-encoded Shift+Enter: \x1b[13;2u
-	// This should still be forwarded to the PTY (not intercepted).
+	// This must be forwarded as raw bytes to the PTY (not intercepted as
+	// plain Enter) so the agent can distinguish Shift+Enter (newline)
+	// from Enter (submit).
 	kittyShiftEnter := unknownCSISequenceMsg([]byte{0x1b, '[', '1', '3', ';', '2', 'u'})
 
 	model, cmd := app.Update(kittyShiftEnter)
@@ -1914,7 +1916,13 @@ func TestKittyShiftEnter_ForwardedToPTY(t *testing.T) {
 
 	// Should return nil (forwarded to PTY, no app-level action).
 	if cmd != nil {
-		t.Fatal("expected Shift+Enter to be forwarded (nil cmd), got a command")
+		t.Fatal("expected Shift+Enter to be forwarded to PTY (nil cmd), got a command")
+	}
+
+	// Verify parseKittyCSI returns false for Shift+Enter.
+	_, ok := parseKittyCSI([]byte{0x1b, '[', '1', '3', ';', '2', 'u'})
+	if ok {
+		t.Fatal("parseKittyCSI should return false for Shift+Enter so raw bytes reach PTY")
 	}
 }
 
@@ -2165,17 +2173,14 @@ func TestParseKittyCSI_PrintableRunes(t *testing.T) {
 }
 
 func TestParseKittyCSI_ShiftEnter_NotIntercepted(t *testing.T) {
-	// Shift+Enter: \x1b[13;2u — should NOT be intercepted (forwarded to PTY).
+	// Shift+Enter: \x1b[13;2u — must NOT be intercepted. The raw bytes
+	// are forwarded to the PTY so the agent can insert a newline instead
+	// of submitting.
 	raw := []byte{0x1b, '[', '1', '3', ';', '2', 'u'}
-	keyMsg, ok := parseKittyCSI(raw)
-	// Shift+Enter has codepoint 13, modifier 2 (shift). Our code now handles
-	// Enter with shift (modBits == 1, hasShift true). This is acceptable —
-	// the form treats it as Enter.
-	if ok && keyMsg.Type == tea.KeyEnter {
-		// This is fine — Shift+Enter acts as Enter in the form.
-		return
+	_, ok := parseKittyCSI(raw)
+	if ok {
+		t.Fatal("Shift+Enter should not be intercepted — must be forwarded to PTY for newline")
 	}
-	// If not intercepted, that's also fine for PTY forwarding.
 }
 
 // TestLegacyCtrlJ_SwitchesTab verifies that a standard (non-kitty) Ctrl+J

@@ -998,10 +998,16 @@ func parseKittyCSI(raw []byte) (tea.KeyMsg, bool) {
 	// Without this, Esc (\x1b[27u) and Enter (\x1b[13u) are dropped
 	// when the sidebar form has focus, making the form inescapable.
 	if modBits == 0 || (hasShift && !hasCtrl && !hasAlt) {
+		// Shift+Enter → forward to PTY so the agent can insert a
+		// newline instead of submitting. The raw \x1b[13;2u sequence
+		// preserves the Shift modifier for the agent to distinguish.
+		if codepoint == 13 && hasShift {
+			return tea.KeyMsg{}, false
+		}
 		switch codepoint {
 		case 27: // Esc
 			return tea.KeyMsg{Type: tea.KeyEscape}, true
-		case 13: // Enter / CR
+		case 13: // Enter / CR (unmodified only; Shift case handled above)
 			return tea.KeyMsg{Type: tea.KeyEnter}, true
 		case 127: // Backspace
 			return tea.KeyMsg{Type: tea.KeyBackspace}, true
