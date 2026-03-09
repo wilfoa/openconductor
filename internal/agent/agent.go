@@ -41,17 +41,22 @@ type AgentAdapter interface {
 	// the agent is launched for the first time.
 	BootstrapFiles() []BootstrapFile
 
-	// ApproveKeystroke returns the raw bytes to send to the PTY to approve a
-	// permission request (e.g. "y\n" for Claude Code, "a" for OpenCode).
+	// ApproveKeystroke returns raw bytes to approve a permission request.
+	// For single-step agents (Claude Code), this includes the full response
+	// ("y\n"). For selection dialogs (OpenCode), this is Enter to confirm
+	// the default "Allow once" selection.
 	ApproveKeystroke() []byte
 
-	// ApproveSessionKeystroke returns bytes that approve the permission for the
-	// entire session (e.g. "A" for OpenCode). Returns nil if the agent does not
-	// support session-wide approval.
+	// ApproveSessionKeystroke returns bytes to approve for the entire session.
+	// For selection dialogs (OpenCode), this is navigation keys only (e.g.
+	// Right arrow); the caller appends Enter after a SubmitDelay pause.
+	// Returns nil if the agent does not support session-wide approval.
 	ApproveSessionKeystroke() []byte
 
-	// DenyKeystroke returns the raw bytes to send to the PTY to deny a
-	// permission request.
+	// DenyKeystroke returns raw bytes to deny a permission request. For
+	// selection dialogs, this is navigation keys only; the caller appends
+	// Enter after a SubmitDelay pause. For single-step agents, this
+	// includes the full response (e.g. "n\n").
 	DenyKeystroke() []byte
 }
 

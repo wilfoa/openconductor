@@ -42,14 +42,21 @@ func (a *opencodeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd
 	return cmd
 }
 
-// ApproveKeystroke returns "a" — OpenCode uses single-key permission dialog.
-func (a *opencodeAdapter) ApproveKeystroke() []byte { return []byte("a") }
+// ApproveKeystroke sends Enter to confirm "Allow once" — the first (default-
+// selected) option in OpenCode's permission dialog. The dialog is a selection-
+// based widget: arrow keys navigate, Enter confirms.
+func (a *opencodeAdapter) ApproveKeystroke() []byte { return []byte("\r") }
 
-// ApproveSessionKeystroke returns "A" — OpenCode supports session-wide approval.
-func (a *opencodeAdapter) ApproveSessionKeystroke() []byte { return []byte("A") }
+// ApproveSessionKeystroke navigates to "Allow always" (second option) and
+// confirms. Right arrow moves from the default "Allow once" to "Allow always".
+// Enter is sent separately by the handler after a SubmitDelay pause so the
+// dialog processes the navigation before confirmation.
+func (a *opencodeAdapter) ApproveSessionKeystroke() []byte { return []byte("\x1b[C") }
 
-// DenyKeystroke returns "d".
-func (a *opencodeAdapter) DenyKeystroke() []byte { return []byte("d") }
+// DenyKeystroke navigates to "Reject" (third option) and confirms.
+// Two right arrows move from "Allow once" past "Allow always" to "Reject".
+// Enter is sent separately by the handler after a SubmitDelay pause.
+func (a *opencodeAdapter) DenyKeystroke() []byte { return []byte("\x1b[C\x1b[C") }
 
 // BootstrapFiles returns no bootstrap files for OpenCode.
 func (a *opencodeAdapter) BootstrapFiles() []BootstrapFile {

@@ -1396,6 +1396,36 @@ func TestFormatImageInput_TopLevel_NoCaption(t *testing.T) {
 	}
 }
 
+// ── Permission keystrokes ───────────────────────────────────────
+
+func TestOpenCode_ApproveKeystroke_IsEnter(t *testing.T) {
+	// "Allow once" is the default selection — just Enter to confirm.
+	adapter := &opencodeAdapter{}
+	ks := adapter.ApproveKeystroke()
+	if string(ks) != "\r" {
+		t.Errorf("expected \\r, got %q", ks)
+	}
+}
+
+func TestOpenCode_ApproveSessionKeystroke_NavigatesRight(t *testing.T) {
+	// "Allow always" is the second option — Right arrow to navigate.
+	// Enter is sent separately by the handler after SubmitDelay.
+	adapter := &opencodeAdapter{}
+	ks := adapter.ApproveSessionKeystroke()
+	if string(ks) != "\x1b[C" {
+		t.Errorf("expected Right arrow (\\x1b[C), got %q", ks)
+	}
+}
+
+func TestOpenCode_DenyKeystroke_NavigatesRightTwice(t *testing.T) {
+	// "Reject" is the third option — two Right arrows.
+	adapter := &opencodeAdapter{}
+	ks := adapter.DenyKeystroke()
+	if string(ks) != "\x1b[C\x1b[C" {
+		t.Errorf("expected two Right arrows, got %q", ks)
+	}
+}
+
 // ── SubmitDelay ─────────────────────────────────────────────────
 
 func TestOpenCode_SubmitDelay(t *testing.T) {

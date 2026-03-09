@@ -109,17 +109,20 @@ func (h *handler) HandleCallback(b *Bot, query *tgbotapi.CallbackQuery) {
 		}
 		switch action {
 		case "allow":
+			// "Allow once" is the default selection — just confirm.
 			s.Write(adapter.ApproveKeystroke())
 			actionLabel = "Allowed once"
 		case "allowall":
 			ks := adapter.ApproveSessionKeystroke()
 			if ks == nil {
-				ks = adapter.ApproveKeystroke()
+				// Agent has no session-wide approval — fall back to single approve.
+				s.Write(adapter.ApproveKeystroke())
+			} else {
+				writePermKeystroke(s, ks)
 			}
-			s.Write(ks)
 			actionLabel = "Allowed always"
 		case "deny":
-			s.Write(adapter.DenyKeystroke())
+			writePermKeystroke(s, adapter.DenyKeystroke())
 			actionLabel = "Denied"
 		default:
 			b.answerCallbackRaw(query.ID, "Unknown action")
@@ -197,6 +200,25 @@ func (h *handler) getAdapter(project string) agent.AgentAdapter {
 // don't need a delay (e.g. Claude Code) return 0.
 func writeWithEnter(s *session.Session, text string) {
 	s.Write([]byte(text))
+	if d := agent.GetSubmitDelay(s.Project.Agent); d > 0 {
+		time.Sleep(d)
+	}
+	s.Write([]byte("\r"))
+}
+
+// writePermKeystroke writes a permission keystroke to the session's PTY. If
+// the keystroke already ends with a submit character (\r or \n), it is written
+// as-is (e.g. Claude Code's "y\n"). Otherwise, the keystroke is navigation
+// for a selection dialog (e.g. OpenCode's arrow keys), so a SubmitDelay pause
+// and Enter are appended to confirm the selection.
+func writePermKeystroke(s *session.Session, ks []byte) {
+	s.Write(ks)
+	// If the keystroke already includes Enter/LF, the agent handles
+	// confirmation internally (e.g. Claude Code's "n\n").
+	if len(ks) > 0 && (ks[len(ks)-1] == '\r' || ks[len(ks)-1] == '\n') {
+		return
+	}
+	// Navigation-only keystroke (e.g. arrow keys) — confirm with Enter.
 	if d := agent.GetSubmitDelay(s.Project.Agent); d > 0 {
 		time.Sleep(d)
 	}

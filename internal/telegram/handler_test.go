@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
@@ -530,6 +531,69 @@ func TestParseQuestionOptions_FooterInSecondToLastRow(t *testing.T) {
 	opts := ParseQuestionOptions(screen)
 	if len(opts) != 2 {
 		t.Fatalf("expected 2 options, got %d: %v", len(opts), opts)
+	}
+}
+
+// ── writePermKeystroke ───────────────────────────────────────────
+
+// pipeSession creates a session with a pipe as the PTY fd. The reader
+// end collects what writePermKeystroke sends. Close reader when done.
+func pipeSession(t *testing.T, agentType config.AgentType) (*session.Session, *os.File) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	t.Cleanup(func() { w.Close() })
+	s := &session.Session{
+		ID:       "test",
+		Instance: 1,
+		Project:  config.Project{Name: "test", Agent: agentType},
+	}
+	s.Ptmx = w
+	s.State = session.StateRunning
+	return s, r
+}
+
+func readAll(r *os.File) []byte {
+	// Read with a small timeout — the pipe should have all data by now.
+	r.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	buf := make([]byte, 256)
+	n, _ := r.Read(buf)
+	return buf[:n]
+}
+
+func TestWritePermKeystroke_NavigationAddsEnter(t *testing.T) {
+	// OpenCode "Allow always": navigation-only keystroke (Right arrow).
+	// writePermKeystroke should append Enter after SubmitDelay.
+	s, r := pipeSession(t, "opencode")
+	writePermKeystroke(s, []byte("\x1b[C"))
+	got := readAll(r)
+	// Expect: Right arrow + Enter.
+	want := "\x1b[C\r"
+	if string(got) != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func TestWritePermKeystroke_AlreadyHasLF_NoExtra(t *testing.T) {
+	// Claude Code "deny": keystroke already ends with \n.
+	// writePermKeystroke should NOT send an extra Enter.
+	s, r := pipeSession(t, "claude")
+	writePermKeystroke(s, []byte("n\n"))
+	got := readAll(r)
+	if string(got) != "n\n" {
+		t.Errorf("expected %q, got %q", "n\n", got)
+	}
+}
+
+func TestWritePermKeystroke_EndsWithCR_NoExtra(t *testing.T) {
+	// OpenCode "Allow once": keystroke is just \r.
+	s, r := pipeSession(t, "opencode")
+	writePermKeystroke(s, []byte("\r"))
+	got := readAll(r)
+	if string(got) != "\r" {
+		t.Errorf("expected %q, got %q", "\r", got)
 	}
 }
 
