@@ -148,9 +148,11 @@ func TestE2E_ClaudeCode_ToolUsePermission(t *testing.T) {
 	if event == nil {
 		t.Fatal("expected attention event for permission prompt, got nil")
 	}
-	// Could be NeedsPermission (from generic pattern) or NeedsInput (from
-	// Claude Code prompt detection) — both are valid since the agent-specific
-	// check catches "> " first.
+	// Permission prompt must be detected as NeedsPermission, not NeedsInput.
+	// The "(y/n)" pattern takes priority over the "> " prompt on row 23.
+	if event.Type != NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event.Type)
+	}
 	t.Logf("Permission → %s: %s (source: %s)", event.Type, event.Detail, event.Source)
 }
 
@@ -199,6 +201,126 @@ func TestE2E_ClaudeCode_StateTransitions(t *testing.T) {
 	}
 	if isWorking {
 		t.Error("phase 3: expected isWorking=false")
+	}
+}
+
+func TestE2E_ClaudeCode_PermissionYN(t *testing.T) {
+	// Claude Code shows a "(y/n)" permission prompt — must detect NeedsPermission.
+	d := NewDetector()
+	lines := simulateClaudeCodePermissionYN()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
+
+	if isWorking {
+		t.Error("expected isWorking=false for permission prompt")
+	}
+	if event == nil {
+		t.Fatal("expected attention event for (y/n) permission, got nil")
+	}
+	if event.Type != NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event.Type)
+	}
+}
+
+func TestE2E_ClaudeCode_PermissionBashAllow(t *testing.T) {
+	// Claude Code shows "Allow running bash command: git status?" — must detect.
+	d := NewDetector()
+	lines := simulateClaudeCodePermissionBashAllow()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
+
+	if isWorking {
+		t.Error("expected isWorking=false for bash allow prompt")
+	}
+	if event == nil {
+		t.Fatal("expected attention event for bash allow prompt, got nil")
+	}
+	if event.Type != NeedsPermission {
+		t.Errorf("expected NeedsPermission, got %v", event.Type)
+	}
+}
+
+func TestE2E_ClaudeCode_SpinnerOverridesPermission(t *testing.T) {
+	// Active spinner + stale permission text visible → Working (not Permission).
+	d := NewDetector()
+	lines := simulateClaudeCodeSpinnerWithStalePermission()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
+
+	if event != nil {
+		t.Errorf("expected nil event (spinner overrides stale permission), got %v", event)
+	}
+	if !isWorking {
+		t.Error("expected isWorking=true while spinner active")
+	}
+}
+
+func TestE2E_ClaudeCode_PermissionWithPromptVisible(t *testing.T) {
+	// Permission + "> " prompt both visible → Permission wins.
+	d := NewDetector()
+	lines := simulateClaudeCodePermissionWithPrompt()
+
+	event, isWorking := d.Check(context.Background(), "proj1", lines, livePID(), e2eClaudeChecker)
+
+	if isWorking {
+		t.Error("expected isWorking=false for permission prompt")
+	}
+	if event == nil {
+		t.Fatal("expected attention event, got nil")
+	}
+	if event.Type != NeedsPermission {
+		t.Errorf("expected NeedsPermission (not NeedsInput), got %v", event.Type)
+	}
+}
+
+func TestE2E_ClaudeCode_FullLifecycle(t *testing.T) {
+	// Full lifecycle: idle → working → permission → working → idle
+	d := NewDetector()
+	ctx := context.Background()
+
+	// Phase 1: Welcome screen → NeedsInput
+	event, isWorking := d.Check(ctx, "proj1", simulateClaudeCodeWelcome(), livePID(), e2eClaudeChecker)
+	if event == nil || event.Type != NeedsInput {
+		t.Fatalf("phase 1: expected NeedsInput, got event=%v", event)
+	}
+	if isWorking {
+		t.Error("phase 1: expected isWorking=false")
+	}
+
+	// Phase 2: User types, agent starts thinking → Working
+	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodeThinking(), livePID(), e2eClaudeChecker)
+	if event != nil {
+		t.Errorf("phase 2: expected nil event, got %v", event)
+	}
+	if !isWorking {
+		t.Error("phase 2: expected isWorking=true")
+	}
+
+	// Phase 3: Agent hits permission prompt → NeedsPermission
+	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodePermission(), livePID(), e2eClaudeChecker)
+	if event == nil || event.Type != NeedsPermission {
+		t.Fatalf("phase 3: expected NeedsPermission, got event=%v", event)
+	}
+	if isWorking {
+		t.Error("phase 3: expected isWorking=false")
+	}
+
+	// Phase 4: User approves, agent resumes working → Working
+	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodeThinking(), livePID(), e2eClaudeChecker)
+	if event != nil {
+		t.Errorf("phase 4: expected nil event, got %v", event)
+	}
+	if !isWorking {
+		t.Error("phase 4: expected isWorking=true")
+	}
+
+	// Phase 5: Agent finishes → NeedsInput
+	event, isWorking = d.Check(ctx, "proj1", simulateClaudeCodeFinished(), livePID(), e2eClaudeChecker)
+	if event == nil || event.Type != NeedsInput {
+		t.Fatalf("phase 5: expected NeedsInput, got event=%v", event)
+	}
+	if isWorking {
+		t.Error("phase 5: expected isWorking=false")
 	}
 }
 
@@ -481,6 +603,67 @@ func simulateClaudeCodeFixingErrors() []string {
 	for i := 4; i < 24; i++ {
 		lines[i] = ""
 	}
+	return lines
+}
+
+func simulateClaudeCodePermissionYN() []string {
+	// Permission prompt with explicit (y/n) indicator.
+	lines := make([]string, 24)
+	lines[0] = "> create a new config file"
+	lines[1] = ""
+	lines[2] = "  I'll create a new config.yaml file:"
+	lines[3] = ""
+	lines[4] = "  Allow creating file config.yaml? (y/n)"
+	for i := 5; i < 23; i++ {
+		lines[i] = ""
+	}
+	lines[23] = "> "
+	return lines
+}
+
+func simulateClaudeCodePermissionBashAllow() []string {
+	// "Allow running bash command: ..." permission prompt.
+	lines := make([]string, 24)
+	lines[0] = "> check the git status"
+	lines[1] = ""
+	lines[2] = "  I'll check the repository status:"
+	lines[3] = ""
+	lines[4] = "  Allow running bash command: git status?"
+	for i := 5; i < 23; i++ {
+		lines[i] = ""
+	}
+	lines[23] = "> "
+	return lines
+}
+
+func simulateClaudeCodeSpinnerWithStalePermission() []string {
+	// Spinner is active, but old permission text from a prior prompt is
+	// still visible in the vt10x buffer above. The spinner should win.
+	lines := make([]string, 24)
+	lines[0] = "> fix the bug"
+	lines[1] = ""
+	lines[2] = "  Do you want to proceed? (y/n)"
+	lines[3] = ""
+	lines[4] = "✦ Applying…"
+	for i := 5; i < 24; i++ {
+		lines[i] = ""
+	}
+	return lines
+}
+
+func simulateClaudeCodePermissionWithPrompt() []string {
+	// Permission prompt visible along with "> " on row 23.
+	// Permission should take priority over the idle prompt.
+	lines := make([]string, 24)
+	lines[0] = "> deploy the changes"
+	lines[1] = ""
+	lines[2] = "  I'd like to run the deploy script:"
+	lines[3] = ""
+	lines[4] = "  Allow running bash command: ./deploy.sh?"
+	for i := 5; i < 23; i++ {
+		lines[i] = ""
+	}
+	lines[23] = "> "
 	return lines
 }
 

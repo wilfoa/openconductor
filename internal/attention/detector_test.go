@@ -5,6 +5,7 @@ package attention
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -21,11 +22,26 @@ func (m *mockLLMClient) Classify(_ context.Context, _ string) (string, error) {
 	return m.response, m.err
 }
 
+// testClaudePermPatterns mirrors the permission patterns from the real
+// claudeAdapter for test purposes.
+var testClaudePermPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\(y/n\)`),
+	regexp.MustCompile(`\[y/n\]`),
+	regexp.MustCompile(`\(yes/no\)`),
+	regexp.MustCompile(`\[yes/no\]`),
+	regexp.MustCompile(`(?i)\bproceed\?\s*$`),
+	regexp.MustCompile(`(?i)\ballow\b.*\?\s*$`),
+}
+
 // testClaudeChecker mimics the Claude Code adapter's CheckAttention for testing.
+// It detects spinner (Working), permission prompts (NeedsPermission), and idle
+// prompt (NeedsInput) with the same priority ordering as the real adapter:
+// Spinner > Permission > Prompt > Nothing.
 type testClaudeChecker struct{}
 
 func (c *testClaudeChecker) CheckAttention(lastLines []string) (HeuristicResult, *AttentionEvent) {
 	hasSpinner := false
+	hasPermission := false
 	hasPrompt := false
 	scanned := 0
 	for i := len(lastLines) - 1; i >= 0 && scanned < 5; i-- {
@@ -41,12 +57,24 @@ func (c *testClaudeChecker) CheckAttention(lastLines []string) (HeuristicResult,
 				break
 			}
 		}
+		// Permission detection — matches real adapter's patterns.
+		if !hasPermission {
+			for _, re := range testClaudePermPatterns {
+				if re.MatchString(trimmed) {
+					hasPermission = true
+					break
+				}
+			}
+		}
 		if !hasPrompt && (strings.HasSuffix(lastLines[i], "> ") || trimmed == ">") {
 			hasPrompt = true
 		}
 	}
 	if hasSpinner {
 		return Working, nil
+	}
+	if hasPermission {
+		return Certain, &AttentionEvent{Type: NeedsPermission, Detail: "claude code permission prompt detected", Source: "heuristic"}
 	}
 	if hasPrompt {
 		return Certain, &AttentionEvent{Type: NeedsInput, Detail: "claude code idle", Source: "heuristic"}
