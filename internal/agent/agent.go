@@ -189,6 +189,32 @@ func FormatImageInput(agentType config.AgentType, imagePath string, caption stri
 	return "[Image saved to " + imagePath + "]"
 }
 
+// OutputFilter is an optional interface that agents can implement to
+// preprocess raw PTY output before it reaches the vt10x terminal emulator.
+// This allows agents to strip escape sequences that vt10x cannot handle
+// correctly (e.g. kitty keyboard protocol sequences that vt10x misparses
+// as cursor restore, causing the cursor to teleport to (0,0)).
+//
+// NewOutputFilter returns a per-session filter function. Each session gets
+// its own function instance so that cross-chunk state (partial escape
+// sequences spanning two PTY reads) is tracked independently.
+type OutputFilter interface {
+	NewOutputFilter() func(data []byte) []byte
+}
+
+// GetOutputFilter returns the OutputFilter for the given agent type, or nil
+// if the adapter does not implement one.
+func GetOutputFilter(agentType config.AgentType) OutputFilter {
+	a, err := Get(agentType)
+	if err != nil {
+		return nil
+	}
+	if f, ok := a.(OutputFilter); ok {
+		return f
+	}
+	return nil
+}
+
 // HistoryProvider is an optional interface that agents can implement to supply
 // previous conversation history for scrollback pre-population. When a session
 // tab opens, the app calls LoadHistory to get text lines that are pushed into

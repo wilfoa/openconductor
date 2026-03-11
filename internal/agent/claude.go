@@ -232,6 +232,122 @@ This file provides context to Claude Code about the project.
 	}
 }
 
+// ── OutputFilter ────────────────────────────────────────────────────────────
+
+// NewOutputFilter returns a per-session filter that strips CSI escape sequences
+// containing prefix bytes (>, <, =) that vt10x cannot parse. Without this
+// filter, sequences like CSI > 1 u (kitty keyboard protocol) are misparsed as
+// CSI u (cursor restore), teleporting the cursor to position (0,0).
+//
+// The returned function is stateful — it tracks partial escape sequences that
+// may span PTY read boundaries — and must only be used by a single session.
+func (a *claudeAdapter) NewOutputFilter() func([]byte) []byte {
+	f := &csiFilter{}
+	return f.filter
+}
+
+// csiFilter strips CSI sequences with extended prefix bytes (>, <, =) from
+// raw terminal output. These prefix bytes are part of ECMA-48 but vt10x only
+// handles the ? prefix, causing sequences with other prefixes to be misparsed.
+//
+// CSI sequence format: ESC [ (prefix)? (params)* (intermediate)* (final)
+//   - Prefix bytes:       0x3C-0x3F (includes < = > ?)
+//   - Parameter bytes:    0x30-0x3F (digits, semicolons, etc.)
+//   - Intermediate bytes: 0x20-0x2F
+//   - Final byte:         0x40-0x7E
+type csiFilter struct {
+	state   int    // parser state
+	pending []byte // buffered bytes from an incomplete ESC or ESC [ at chunk end
+}
+
+// Parser states.
+const (
+	csiStateNormal = iota // passing through bytes unchanged
+	csiStateEsc           // saw ESC, waiting for next byte
+	csiStateCSI           // saw ESC [, need to check for prefix byte
+	csiStateSkip          // inside an extended CSI, discarding until final byte
+)
+
+// filter processes a chunk of raw PTY data and returns the data with extended
+// CSI sequences removed. It maintains state across calls to handle sequences
+// that span chunk boundaries.
+func (f *csiFilter) filter(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+
+	// Fast path: if no ESC in the data and we're in normal state, return as-is.
+	if f.state == csiStateNormal && !containsByte(data, 0x1B) {
+		return data
+	}
+
+	out := make([]byte, 0, len(data))
+
+	for _, b := range data {
+		switch f.state {
+		case csiStateNormal:
+			if b == 0x1B {
+				// Start of a potential escape sequence. Buffer the ESC
+				// in case we need to pass it through (normal CSI).
+				f.pending = append(f.pending[:0], b)
+				f.state = csiStateEsc
+			} else {
+				out = append(out, b)
+			}
+
+		case csiStateEsc:
+			if b == '[' {
+				// ESC [ — could be a CSI we need to filter.
+				f.pending = append(f.pending, b)
+				f.state = csiStateCSI
+			} else {
+				// Not a CSI (e.g. ESC O for SS3, ESC ] for OSC).
+				// Flush the buffered ESC and this byte.
+				out = append(out, f.pending...)
+				out = append(out, b)
+				f.pending = f.pending[:0]
+				f.state = csiStateNormal
+			}
+
+		case csiStateCSI:
+			// We've seen ESC [. Check if the next byte is an extended prefix.
+			if b == '>' || b == '<' || b == '=' {
+				// Extended CSI — discard the entire sequence.
+				f.pending = f.pending[:0]
+				f.state = csiStateSkip
+			} else {
+				// Normal CSI (no prefix, or ? prefix which vt10x handles).
+				// Flush the buffered ESC [ and this byte.
+				out = append(out, f.pending...)
+				out = append(out, b)
+				f.pending = f.pending[:0]
+				f.state = csiStateNormal
+			}
+
+		case csiStateSkip:
+			// Inside an extended CSI. Discard bytes until the final byte.
+			if b >= 0x40 && b <= 0x7E {
+				// Final byte — sequence is complete, return to normal.
+				f.state = csiStateNormal
+			}
+			// All bytes (parameter, intermediate, and final) are discarded.
+		}
+	}
+
+	return out
+}
+
+// containsByte returns true if b is present in data. Used for the fast path
+// check to avoid allocation when no filtering is needed.
+func containsByte(data []byte, b byte) bool {
+	for _, v := range data {
+		if v == b {
+			return true
+		}
+	}
+	return false
+}
+
 // ── HistoryProvider ─────────────────────────────────────────────────────────
 
 // LoadHistory reads the most recent Claude Code conversation for the given

@@ -40,6 +40,11 @@ type Session struct {
 	VT       vt10x.Terminal
 	State    State
 
+	// outputFilter, when non-nil, preprocesses raw PTY output before it
+	// reaches the vt10x terminal emulator. Used to strip escape sequences
+	// that vt10x cannot parse correctly (e.g. kitty keyboard protocol).
+	outputFilter func([]byte) []byte
+
 	Mu            sync.RWMutex
 	Width, Height int
 	closed        bool
@@ -53,11 +58,19 @@ func NewSession(project config.Project) (*Session, error) {
 		return nil, fmt.Errorf("creating session for %q: %w", project.Name, err)
 	}
 
-	return &Session{
+	s := &Session{
 		Project: project,
 		Agent:   adapter,
 		State:   StateIdle,
-	}, nil
+	}
+
+	// If the agent implements OutputFilter, create a per-session filter
+	// function to preprocess PTY output before vt10x.
+	if f := agent.GetOutputFilter(project.Agent); f != nil {
+		s.outputFilter = f.NewOutputFilter()
+	}
+
+	return s, nil
 }
 
 // NewSystemSession creates a Session that runs an arbitrary command instead
@@ -236,6 +249,13 @@ func (s *Session) ReadLoop() <-chan []byte {
 
 			data := make([]byte, n)
 			copy(data, buf[:n])
+
+			// If the agent provides an output filter, apply it before
+			// vt10x sees the data. This strips escape sequences that
+			// vt10x would misparse (e.g. kitty keyboard protocol).
+			if s.outputFilter != nil {
+				data = s.outputFilter(data)
+			}
 
 			// Write to the vt10x terminal emulator.
 			s.Mu.Lock()

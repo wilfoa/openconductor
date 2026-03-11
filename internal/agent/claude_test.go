@@ -557,3 +557,225 @@ func joinLines(lines []string) string {
 	}
 	return result
 }
+
+// ── OutputFilter (CSI filter tests) ─────────────────────────────────────────
+
+func TestClaudeCode_OutputFilterInterface(t *testing.T) {
+	adapter := &claudeAdapter{}
+	f := adapter.NewOutputFilter()
+	if f == nil {
+		t.Fatal("NewOutputFilter() returned nil")
+	}
+}
+
+func TestClaudeCode_FilterPassthrough(t *testing.T) {
+	// Data with no ESC bytes should pass through unchanged.
+	f := (&claudeAdapter{}).NewOutputFilter()
+	input := []byte("Hello, world! Normal terminal output.\r\n")
+	got := f(input)
+	if string(got) != string(input) {
+		t.Errorf("expected passthrough, got %q", got)
+	}
+}
+
+func TestClaudeCode_FilterStripKittyKeyboard(t *testing.T) {
+	// CSI > 1 u (kitty keyboard enable) must be stripped.
+	f := (&claudeAdapter{}).NewOutputFilter()
+	input := []byte("before\x1b[>1uafter")
+	got := f(input)
+	if string(got) != "beforeafter" {
+		t.Errorf("expected %q, got %q", "beforeafter", got)
+	}
+}
+
+func TestClaudeCode_FilterStripKittyKeyboardDisable(t *testing.T) {
+	// CSI < u (kitty keyboard disable/pop) must be stripped.
+	f := (&claudeAdapter{}).NewOutputFilter()
+	input := []byte("before\x1b[<uafter")
+	got := f(input)
+	if string(got) != "beforeafter" {
+		t.Errorf("expected %q, got %q", "beforeafter", got)
+	}
+}
+
+func TestClaudeCode_FilterStripExtendedSGR(t *testing.T) {
+	// CSI > 4 ; 2 m (extended SGR) must be stripped.
+	f := (&claudeAdapter{}).NewOutputFilter()
+	input := []byte("before\x1b[>4;2mafter")
+	got := f(input)
+	if string(got) != "beforeafter" {
+		t.Errorf("expected %q, got %q", "beforeafter", got)
+	}
+}
+
+func TestClaudeCode_FilterStripEqualPrefix(t *testing.T) {
+	// CSI = 1 c (DA3 tertiary device attributes) must be stripped.
+	f := (&claudeAdapter{}).NewOutputFilter()
+	input := []byte("before\x1b[=1cafter")
+	got := f(input)
+	if string(got) != "beforeafter" {
+		t.Errorf("expected %q, got %q", "beforeafter", got)
+	}
+}
+
+func TestClaudeCode_FilterPreserveNormalCSI(t *testing.T) {
+	// Normal CSI sequences (no extended prefix) must be preserved.
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"SGR bold", "hello\x1b[1mworld"},
+		{"cursor move", "\x1b[10;20Htext"},
+		{"erase line", "\x1b[2Kline"},
+		{"private mode set", "\x1b[?25hcursor"},
+		{"private mode reset", "\x1b[?25lcursor"},
+		{"SGR color", "\x1b[38;5;196mred"},
+	}
+	f := (&claudeAdapter{}).NewOutputFilter()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := f([]byte(tt.input))
+			if string(got) != tt.input {
+				t.Errorf("expected %q preserved, got %q", tt.input, got)
+			}
+		})
+	}
+}
+
+func TestClaudeCode_FilterPreserveOtherEsc(t *testing.T) {
+	// Non-CSI escape sequences (OSC, SS3, etc.) must be preserved.
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"OSC title", "\x1b]0;title\x07"},
+		{"SS3 F1", "\x1bOP"},
+		{"RIS reset", "\x1bc"},
+	}
+	f := (&claudeAdapter{}).NewOutputFilter()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := f([]byte(tt.input))
+			if string(got) != tt.input {
+				t.Errorf("expected %q preserved, got %q", tt.input, got)
+			}
+		})
+	}
+}
+
+func TestClaudeCode_FilterMultipleSequences(t *testing.T) {
+	// Multiple extended CSI sequences in one chunk should all be stripped.
+	f := (&claudeAdapter{}).NewOutputFilter()
+	input := []byte("a\x1b[>1ub\x1b[<uc\x1b[>4;2md")
+	got := f(input)
+	if string(got) != "abcd" {
+		t.Errorf("expected %q, got %q", "abcd", got)
+	}
+}
+
+func TestClaudeCode_FilterMixedSequences(t *testing.T) {
+	// Mix of normal CSI (preserved) and extended CSI (stripped).
+	f := (&claudeAdapter{}).NewOutputFilter()
+	input := []byte("\x1b[1m\x1b[>1uhello\x1b[0m")
+	got := f(input)
+	expected := "\x1b[1mhello\x1b[0m"
+	if string(got) != expected {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestClaudeCode_FilterCrossBoundary_EscAtEnd(t *testing.T) {
+	// ESC at end of chunk 1, [ > 1 u at start of chunk 2.
+	f := (&claudeAdapter{}).NewOutputFilter()
+
+	chunk1 := []byte("hello\x1b")
+	chunk2 := []byte("[>1uworld")
+
+	got1 := f(chunk1)
+	got2 := f(chunk2)
+	combined := string(got1) + string(got2)
+
+	if combined != "helloworld" {
+		t.Errorf("cross-boundary: expected %q, got %q", "helloworld", combined)
+	}
+}
+
+func TestClaudeCode_FilterCrossBoundary_EscBracketAtEnd(t *testing.T) {
+	// ESC [ at end of chunk 1, > 1 u at start of chunk 2.
+	f := (&claudeAdapter{}).NewOutputFilter()
+
+	chunk1 := []byte("hello\x1b[")
+	chunk2 := []byte(">1uworld")
+
+	got1 := f(chunk1)
+	got2 := f(chunk2)
+	combined := string(got1) + string(got2)
+
+	if combined != "helloworld" {
+		t.Errorf("cross-boundary: expected %q, got %q", "helloworld", combined)
+	}
+}
+
+func TestClaudeCode_FilterCrossBoundary_NormalCSI(t *testing.T) {
+	// ESC [ at end of chunk 1, normal params at start of chunk 2.
+	// The normal CSI must be preserved.
+	f := (&claudeAdapter{}).NewOutputFilter()
+
+	chunk1 := []byte("hello\x1b[")
+	chunk2 := []byte("1mworld")
+
+	got1 := f(chunk1)
+	got2 := f(chunk2)
+	combined := string(got1) + string(got2)
+
+	expected := "hello\x1b[1mworld"
+	if combined != expected {
+		t.Errorf("cross-boundary normal CSI: expected %q, got %q", expected, combined)
+	}
+}
+
+func TestClaudeCode_FilterCrossBoundary_ExtendedSplit(t *testing.T) {
+	// Extended CSI split in the middle of params: ESC [ > 1 in chunk 1, u in chunk 2.
+	f := (&claudeAdapter{}).NewOutputFilter()
+
+	chunk1 := []byte("hello\x1b[>1")
+	chunk2 := []byte("uworld")
+
+	got1 := f(chunk1)
+	got2 := f(chunk2)
+	combined := string(got1) + string(got2)
+
+	if combined != "helloworld" {
+		t.Errorf("cross-boundary extended split: expected %q, got %q", "helloworld", combined)
+	}
+}
+
+func TestClaudeCode_FilterEmpty(t *testing.T) {
+	f := (&claudeAdapter{}).NewOutputFilter()
+	got := f([]byte{})
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestClaudeCode_FilterIndependentSessions(t *testing.T) {
+	// Two filters must maintain independent state.
+	adapter := &claudeAdapter{}
+	f1 := adapter.NewOutputFilter()
+	f2 := adapter.NewOutputFilter()
+
+	// Leave f1 in mid-sequence state.
+	f1([]byte("hello\x1b["))
+
+	// f2 should work independently — no cross-contamination.
+	got := f2([]byte("normal text"))
+	if string(got) != "normal text" {
+		t.Errorf("f2 contaminated by f1 state: got %q", got)
+	}
+
+	// f1 should still strip the extended CSI when completed.
+	got1 := f1([]byte(">1uworld"))
+	if string(got1) != "world" {
+		t.Errorf("f1 should strip extended CSI: got %q", got1)
+	}
+}
