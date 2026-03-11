@@ -83,7 +83,7 @@ func TestClaudeCode_SpinnerSuppressesGenericError(t *testing.T) {
 }
 
 func TestClaudeCode_PromptIdleCertain(t *testing.T) {
-	// When Claude Code shows "> " without a spinner, it's idle — Certain.
+	// When Claude Code shows its prompt without a spinner, it's idle — Certain.
 	tests := []struct {
 		name  string
 		lines []string
@@ -109,6 +109,18 @@ func TestClaudeCode_PromptIdleCertain(t *testing.T) {
 				"",
 				"> ",
 			},
+		},
+		{
+			"unicode prompt U+203A",
+			[]string{"some output", "› "},
+		},
+		{
+			"unicode prompt bare",
+			[]string{"some output", "›"},
+		},
+		{
+			"unicode prompt with trailing spaces",
+			[]string{"some output", "›                                     "},
 		},
 	}
 
@@ -155,6 +167,108 @@ func TestClaudeCode_NoPromptNoSpinnerReturnsNo(t *testing.T) {
 	result, event := adapter.CheckAttention(lines)
 	if result != attention.No {
 		t.Errorf("expected No for no signal, got %v", result)
+	}
+	if event != nil {
+		t.Errorf("expected nil event, got %v", event)
+	}
+}
+
+// ── Completion summary detection tests ──────────────────────────
+
+func TestClaudeCode_CompletionSummaryIdle(t *testing.T) {
+	// "* Worked for Ns" without an active spinner signals idle.
+	tests := []struct {
+		name  string
+		lines []string
+	}{
+		{
+			"worked for seconds",
+			[]string{
+				"Want me to add tests for any of these gaps?",
+				"* Worked for 56s",
+				"",
+				"› ",
+			},
+		},
+		{
+			"worked for minutes",
+			[]string{
+				"Done refactoring the module.",
+				"* Worked for 2m 30s",
+				"› ",
+			},
+		},
+		{
+			"star prefix without prompt visible",
+			[]string{
+				"All changes applied.",
+				"* Worked for 10s",
+			},
+		},
+		{
+			"diamond prefix",
+			[]string{
+				"Finished.",
+				"✦ Worked for 120s",
+			},
+		},
+		{
+			"dot prefix",
+			[]string{
+				"Complete.",
+				"· Worked for 5s",
+			},
+		},
+		{
+			"real screenshot scenario",
+			[]string{
+				"The biggest risk areas are the admin edit/delete operations.",
+				"* Worked for 56s",
+				"────────────────────────────────────────",
+				"› ",
+				"→ assign_it git:(main) | in: 1.5K out: 54.5K",
+				"F2 rename  Ctrl+C exit",
+			},
+		},
+	}
+
+	adapter := &claudeAdapter{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, event := adapter.CheckAttention(tt.lines)
+			if result != attention.Certain {
+				t.Errorf("expected Certain, got %v", result)
+			}
+			if event == nil {
+				t.Fatal("expected event, got nil")
+			}
+			if event.Type != attention.NeedsInput {
+				t.Errorf("expected NeedsInput, got %v", event.Type)
+			}
+		})
+	}
+}
+
+func TestClaudeCode_CompletionNotMistokenAsSpinner(t *testing.T) {
+	// "* Worked for 56s" must NOT be detected as a spinner.
+	adapter := &claudeAdapter{}
+	lines := []string{"* Worked for 56s"}
+	result, _ := adapter.CheckAttention(lines)
+	if result == attention.Working {
+		t.Error("completion summary incorrectly detected as Working spinner")
+	}
+}
+
+func TestClaudeCode_SpinnerOverridesCompletion(t *testing.T) {
+	// If a spinner appears AFTER the completion line, spinner wins.
+	adapter := &claudeAdapter{}
+	lines := []string{
+		"* Worked for 56s",
+		"✦ Thinking…",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Working {
+		t.Errorf("expected Working (spinner overrides completion), got %v", result)
 	}
 	if event != nil {
 		t.Errorf("expected nil event, got %v", event)

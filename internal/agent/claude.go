@@ -73,6 +73,14 @@ var claudePermissionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\ballow\b.*\?\s*$`), // "Allow running bash command: git status?"
 }
 
+// claudeCompletionPattern matches the "* Worked for <duration>" summary line
+// that Claude Code prints when it finishes a task. The presence of this line
+// (without an active spinner after it) is a definitive idle signal — the agent
+// has completed work and transitioned to the input prompt.
+//
+// Examples: "* Worked for 56s", "* Worked for 2m 30s", "✦ Worked for 10s"
+var claudeCompletionPattern = regexp.MustCompile(`^[✦·*]\s+Worked for \d`)
+
 // CheckAttention detects Claude Code's working/idle/permission state from its
 // terminal output.
 //
@@ -91,13 +99,19 @@ var claudePermissionPatterns = []*regexp.Regexp{
 // "Do you want to proceed? (y/n)" or "Allow running bash command: git status?"
 // When detected, the agent needs user approval before it can continue.
 //
-// Idle: When neither spinner nor permission is found, Claude Code shows "> "
-// as its input prompt. The absence of a spinner + presence of "> " is a
-// definitive signal that the agent is waiting for input.
+// Idle: When neither spinner nor permission is found, Claude Code shows its
+// input prompt ("› " with U+203A, or "> " in some terminal renderings).
+// The absence of a spinner + presence of the prompt is a definitive signal
+// that the agent is waiting for input.
+//
+// Completion: Claude Code also prints "* Worked for <duration>" when it
+// finishes a task. This line is a secondary idle signal — if it appears
+// without an active spinner after it, the agent has completed work.
 func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicResult, *attention.AttentionEvent) {
 	hasSpinner := false
 	hasPermission := false
 	hasPrompt := false
+	hasCompletion := false
 	scanned := 0
 
 	for i := len(lastLines) - 1; i >= 0 && scanned < maxScanLines; i-- {
@@ -118,6 +132,15 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 			break
 		}
 
+		// Completion summary: "* Worked for 56s" — the agent finished its
+		// task. This is a definitive idle signal (no spinner follows it).
+		if !hasCompletion && claudeCompletionPattern.MatchString(trimmed) {
+			hasCompletion = true
+			logging.Debug("heuristic: claude-code completion detected",
+				"line", trimmed,
+			)
+		}
+
 		// Permission detection — check every scanned line against all
 		// permission patterns. Does not break; we continue scanning to
 		// also look for prompt signals.
@@ -134,9 +157,10 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 			}
 		}
 
-		// Claude Code's prompt: line ends with "> " (with the trailing
-		// space) or the trimmed content is exactly ">".
-		if !hasPrompt && (strings.HasSuffix(lastLines[i], "> ") || trimmed == ">") {
+		// Claude Code's prompt: "› " (U+203A single right-pointing angle
+		// quotation mark) or ASCII "> ". The trimmed form catches cases
+		// where the line is padded with trailing spaces.
+		if !hasPrompt && isClaudeCodePrompt(lastLines[i], trimmed) {
 			hasPrompt = true
 			logging.Debug("heuristic: claude-code prompt detected",
 				"line", trimmed,
@@ -159,11 +183,15 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 		}
 	}
 
-	if hasPrompt {
-		// No spinner, no permission + prompt visible = agent is idle.
+	if hasPrompt || hasCompletion {
+		// No spinner, no permission + prompt or completion visible = agent is idle.
+		detail := "claude code is idle, waiting for prompt"
+		if hasCompletion && !hasPrompt {
+			detail = "claude code completed task (Worked for ...)"
+		}
 		return attention.Certain, &attention.AttentionEvent{
 			Type:   attention.NeedsInput,
-			Detail: "claude code is idle, waiting for prompt",
+			Detail: detail,
 			Source: "heuristic",
 		}
 	}
@@ -211,6 +239,22 @@ func isVerbEllipsis(s string) bool {
 		return false
 	}
 	return strings.HasSuffix(s, "…") || strings.HasSuffix(s, "...")
+}
+
+// isClaudeCodePrompt returns true if the line looks like Claude Code's input
+// prompt. Claude Code renders "› " (U+203A single right-pointing angle
+// quotation mark) but some terminals or screen captures may show ASCII "> ".
+// The raw line is checked for suffix patterns; trimmed is used for exact match.
+func isClaudeCodePrompt(raw, trimmed string) bool {
+	// ASCII: "> " suffix or bare ">"
+	if strings.HasSuffix(raw, "> ") || trimmed == ">" {
+		return true
+	}
+	// Unicode: "› " (U+203A) suffix or bare "›"
+	if strings.HasSuffix(raw, "› ") || trimmed == "›" {
+		return true
+	}
+	return false
 }
 
 // BootstrapFiles returns a placeholder CLAUDE.md for the repository.
