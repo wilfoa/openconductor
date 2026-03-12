@@ -31,13 +31,11 @@ func (a *claudeAdapter) Type() config.AgentType {
 }
 
 // Command returns an *exec.Cmd that launches the "claude" CLI in the given
-// repo directory. Supports --continue to resume the last conversation and
-// --prompt to send an initial message.
+// repo directory. Always passes --dangerously-skip-permissions so that Claude
+// Code runs without interactive permission prompts (OpenConductor manages
+// approval separately). Also passes --continue to resume the last conversation.
 func (a *claudeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
-	args := []string{}
-	if opts.Continue {
-		args = append(args, "--continue")
-	}
+	args := []string{"--dangerously-skip-permissions", "--continue"}
 	if opts.Prompt != "" {
 		args = append(args, "--prompt", opts.Prompt)
 	}

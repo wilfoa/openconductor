@@ -434,65 +434,50 @@ func TestClaudeCode_PermissionOverridesPrompt(t *testing.T) {
 
 // ── Command() tests ─────────────────────────────────────────────
 
-func TestClaudeCode_CommandContinue(t *testing.T) {
+func TestClaudeCode_CommandAlwaysHasBaseFlags(t *testing.T) {
+	// --dangerously-skip-permissions and --continue are always present.
 	adapter := &claudeAdapter{}
-	cmd := adapter.Command("/tmp/repo", LaunchOptions{Continue: true})
+	cmd := adapter.Command("/tmp/repo", LaunchOptions{})
 	args := cmd.Args
-	// args[0] is "claude", the rest are flags.
-	found := false
+	hasSkip := false
+	hasContinue := false
 	for _, a := range args {
+		if a == "--dangerously-skip-permissions" {
+			hasSkip = true
+		}
 		if a == "--continue" {
-			found = true
+			hasContinue = true
 		}
 	}
-	if !found {
+	if !hasSkip {
+		t.Errorf("expected --dangerously-skip-permissions in args, got %v", args)
+	}
+	if !hasContinue {
 		t.Errorf("expected --continue in args, got %v", args)
+	}
+	if cmd.Dir != "/tmp/repo" {
+		t.Errorf("expected Dir=/tmp/repo, got %q", cmd.Dir)
 	}
 }
 
-func TestClaudeCode_CommandPromptAndContinue(t *testing.T) {
+func TestClaudeCode_CommandWithPrompt(t *testing.T) {
 	adapter := &claudeAdapter{}
 	cmd := adapter.Command("/tmp/repo", LaunchOptions{
-		Continue: true,
-		Prompt:   "fix the bug",
+		Prompt: "fix the bug",
 	})
 	args := cmd.Args
-	// Expect: ["claude", "--continue", "--prompt", "fix the bug"]
-	continueIdx := -1
 	promptIdx := -1
 	for i, a := range args {
-		if a == "--continue" {
-			continueIdx = i
-		}
 		if a == "--prompt" {
 			promptIdx = i
 		}
 	}
-	if continueIdx < 0 {
-		t.Fatalf("expected --continue in args, got %v", args)
-	}
 	if promptIdx < 0 {
 		t.Fatalf("expected --prompt in args, got %v", args)
-	}
-	if continueIdx >= promptIdx {
-		t.Errorf("expected --continue before --prompt, got continue=%d prompt=%d in %v",
-			continueIdx, promptIdx, args)
 	}
 	// Verify prompt value follows --prompt flag.
 	if promptIdx+1 >= len(args) || args[promptIdx+1] != "fix the bug" {
 		t.Errorf("expected prompt value 'fix the bug', got %v", args)
-	}
-}
-
-func TestClaudeCode_CommandNoFlags(t *testing.T) {
-	adapter := &claudeAdapter{}
-	cmd := adapter.Command("/tmp/repo", LaunchOptions{})
-	// Just "claude" with no extra args.
-	if len(cmd.Args) != 1 {
-		t.Errorf("expected 1 arg (just claude), got %v", cmd.Args)
-	}
-	if cmd.Dir != "/tmp/repo" {
-		t.Errorf("expected Dir=/tmp/repo, got %q", cmd.Dir)
 	}
 }
 
