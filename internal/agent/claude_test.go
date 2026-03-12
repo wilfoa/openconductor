@@ -22,8 +22,12 @@ func TestClaudeCode_SpinnerWorking(t *testing.T) {
 		{"star prefix", "✦ Sublimating…"},
 		{"dot prefix", "· Thinking…"},
 		{"asterisk prefix", "* Reading…"},
+		{"heavy asterisk prefix", "✱ Slithering…"},
 		{"three dots", "✦ Processing..."},
 		{"dot three dots", "· Analyzing..."},
+		{"with stats suffix", "✱ Slithering… (49m 25s · ↓ 8.3k tokens · thought for 4s)"},
+		{"with short stats", "✦ Thinking… (3s)"},
+		{"with token count", "· Reading… (12s · ↓ 1.2k tokens)"},
 	}
 
 	adapter := &claudeAdapter{}

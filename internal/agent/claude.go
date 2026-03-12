@@ -200,34 +200,39 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 	return attention.No, nil
 }
 
+// spinnerPrefixes lists the characters Claude Code uses for its animated
+// spinner. The animation cycles through these while the agent is working.
+//
+//   - ✦  U+2726  four-pointed star
+//   - ·  U+00B7  middle dot
+//   - ✱  U+2731  heavy asterisk
+//   - *  U+002A  ASCII asterisk (fallback in some terminals)
+var spinnerPrefixes = []string{"✦ ", "· ", "✱ ", "* "}
+
 // isClaudeCodeSpinner returns true if the line matches Claude Code's animated
-// status pattern: a prefix character (✦ or ·) followed by a space and a
-// capitalized verb ending in "…".
+// status pattern: a prefix character followed by a space and a capitalized
+// verb containing "…". The verb may be followed by optional stats in parens.
 //
 // Examples:
 //
-//	"✦ Sublimating…"  → true
-//	"· Thinking…"     → true
-//	"· some output"   → false (no trailing …)
-//	"normal text"     → false (no prefix)
+//	"✦ Sublimating…"                                      → true
+//	"· Thinking…"                                         → true
+//	"✱ Slithering… (49m 25s · ↓ 8.3k tokens)"            → true
+//	"* Worked for 56s"                                    → false (no …)
+//	"normal text"                                         → false (no prefix)
 func isClaudeCodeSpinner(line string) bool {
-	// Check for ✦ (U+2726 four-pointed star) prefix.
-	if rest, ok := strings.CutPrefix(line, "✦ "); ok {
-		return isVerbEllipsis(rest)
-	}
-	// Check for · (U+00B7 middle dot) prefix.
-	if rest, ok := strings.CutPrefix(line, "· "); ok {
-		return isVerbEllipsis(rest)
-	}
-	// Check for * (ASCII asterisk, sometimes seen in plain captures).
-	if rest, ok := strings.CutPrefix(line, "* "); ok {
-		return isVerbEllipsis(rest)
+	for _, prefix := range spinnerPrefixes {
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			return isVerbEllipsis(rest)
+		}
 	}
 	return false
 }
 
-// isVerbEllipsis returns true if s starts with an uppercase letter and ends
-// with "…" (U+2026 horizontal ellipsis) or "..." (three ASCII dots).
+// isVerbEllipsis returns true if s starts with an uppercase letter and
+// contains "…" (U+2026 horizontal ellipsis) or "..." (three ASCII dots).
+// The ellipsis does not need to be at the end — Claude Code appends
+// duration and token stats after it (e.g. "Thinking… (30s · ↓ 2k tokens)").
 func isVerbEllipsis(s string) bool {
 	if s == "" {
 		return false
@@ -236,7 +241,7 @@ func isVerbEllipsis(s string) bool {
 	if !unicode.IsUpper(runes[0]) {
 		return false
 	}
-	return strings.HasSuffix(s, "…") || strings.HasSuffix(s, "...")
+	return strings.Contains(s, "…") || strings.Contains(s, "...")
 }
 
 // isClaudeCodePrompt returns true if the line looks like Claude Code's input
