@@ -1923,6 +1923,8 @@ func (a *App) checkAttention() {
 				delete(a.autoApproveRuns, sessionID)
 			} else if s.State == session.StateRunning && prevState == StateWorking {
 				// Working → Idle (agent finished responding).
+				a.sessionStates[sessionID] = StateIdle
+				a.statusbar.states[sessionID] = StateIdle
 				a.sendTelegramEvent(projectName, sessionID, StateIdle, "", lines)
 			}
 		}
