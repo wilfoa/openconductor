@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
@@ -71,13 +72,11 @@ var claudePermissionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\ballow\b.*\?\s*$`), // "Allow running bash command: git status?"
 }
 
-// claudeCompletionPattern matches the "* Worked for <duration>" summary line
-// that Claude Code prints when it finishes a task. The presence of this line
-// (without an active spinner after it) is a definitive idle signal — the agent
-// has completed work and transitioned to the input prompt.
-//
-// Examples: "* Worked for 56s", "* Worked for 2m 30s", "✦ Worked for 10s"
-var claudeCompletionPattern = regexp.MustCompile(`^[✦·*]\s+Worked for \d`)
+// claudeCompletionDuration matches the duration part of a completion summary
+// line. Applied to the text AFTER the symbol prefix (e.g. "Baked for 8m 15s").
+// The verb varies (Worked, Baked, Sock-hopped, etc.) so we only anchor on
+// "for <digit>" which is the constant part.
+var claudeCompletionDuration = regexp.MustCompile(`\bfor \d+[smh]`)
 
 // CheckAttention detects Claude Code's working/idle/permission state from its
 // terminal output.
@@ -130,13 +129,18 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 			break
 		}
 
-		// Completion summary: "* Worked for 56s" — the agent finished its
-		// task. This is a definitive idle signal (no spinner follows it).
-		if !hasCompletion && claudeCompletionPattern.MatchString(trimmed) {
-			hasCompletion = true
-			logging.Debug("heuristic: claude-code completion detected",
-				"line", trimmed,
-			)
+		// Completion summary: "✱ Baked for 8m 15s" — the agent finished its
+		// task. Must have a symbol prefix + duration, but no "…" (that's a
+		// spinner, not a completion line).
+		if !hasCompletion {
+			if rest, ok := hasSymbolPrefix(trimmed); ok {
+				if claudeCompletionDuration.MatchString(rest) && !strings.Contains(rest, "…") {
+					hasCompletion = true
+					logging.Debug("heuristic: claude-code completion detected",
+						"line", trimmed,
+					)
+				}
+			}
 		}
 
 		// Permission detection — check every scanned line against all
@@ -200,40 +204,55 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 	return attention.No, nil
 }
 
-// spinnerPrefixes lists the characters Claude Code uses for its animated
-// spinner. The animation cycles through these while the agent is working.
+// hasSymbolPrefix checks whether line starts with a non-alphanumeric, non-space
+// Unicode character followed by a space. This matches the prefix pattern used
+// by Claude Code's spinner and completion summary lines, which use animated
+// Unicode symbols (✦, ·, ✱, ✻, ❋, *, etc.) that cycle during processing.
 //
-//   - ✦  U+2726  four-pointed star
-//   - ·  U+00B7  middle dot
-//   - ✱  U+2731  heavy asterisk
-//   - *  U+002A  ASCII asterisk (fallback in some terminals)
-var spinnerPrefixes = []string{"✦ ", "· ", "✱ ", "* "}
+// Returns the text after "<symbol> " and true if the pattern matches.
+func hasSymbolPrefix(line string) (rest string, ok bool) {
+	r, size := utf8.DecodeRuneInString(line)
+	if r == utf8.RuneError || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) {
+		return "", false
+	}
+	if size >= len(line) || line[size] != ' ' {
+		return "", false
+	}
+	return line[size+1:], true
+}
 
 // isClaudeCodeSpinner returns true if the line matches Claude Code's animated
-// status pattern: a prefix character followed by a space and a capitalized
-// verb containing "…". The verb may be followed by optional stats in parens.
+// status pattern: any non-alphanumeric symbol followed by a space and a
+// capitalized word ending in "…". The word may be followed by stats in parens.
+//
+// Rather than enumerating specific prefix characters (which change across
+// Claude Code versions and animation frames), we accept any symbol prefix.
 //
 // Examples:
 //
 //	"✦ Sublimating…"                                      → true
 //	"· Thinking…"                                         → true
 //	"✱ Slithering… (49m 25s · ↓ 8.3k tokens)"            → true
+//	"✻ Schlepping… (6m 23s · ↓ 589 tokens)"              → true
 //	"* Worked for 56s"                                    → false (no …)
+//	"● Bash(docker compose...)"                           → false (not a verb…)
 //	"normal text"                                         → false (no prefix)
 func isClaudeCodeSpinner(line string) bool {
-	for _, prefix := range spinnerPrefixes {
-		if rest, ok := strings.CutPrefix(line, prefix); ok {
-			return isVerbEllipsis(rest)
-		}
+	rest, ok := hasSymbolPrefix(line)
+	if !ok {
+		return false
 	}
-	return false
+	return isSpinnerVerb(rest)
 }
 
-// isVerbEllipsis returns true if s starts with an uppercase letter and
-// contains "…" (U+2026 horizontal ellipsis) or "..." (three ASCII dots).
-// The ellipsis does not need to be at the end — Claude Code appends
-// duration and token stats after it (e.g. "Thinking… (30s · ↓ 2k tokens)").
-func isVerbEllipsis(s string) bool {
+// isSpinnerVerb returns true if s starts with an uppercase letter and contains
+// a word ending in "…" (U+2026) or "..." before any parenthesized stats.
+// The verb can be multi-word (e.g. "Compacting conversation…").
+//
+// To avoid false positives on tool output like "Bash(python3 -c 'import json…)",
+// only tokens BEFORE the first "(" are checked — the ellipsis inside tool
+// arguments is always after a parenthesis.
+func isSpinnerVerb(s string) bool {
 	if s == "" {
 		return false
 	}
@@ -241,7 +260,12 @@ func isVerbEllipsis(s string) bool {
 	if !unicode.IsUpper(runes[0]) {
 		return false
 	}
-	return strings.Contains(s, "…") || strings.Contains(s, "...")
+	// Only look at the part before any parenthesized stats/args.
+	text := s
+	if idx := strings.IndexByte(s, '('); idx >= 0 {
+		text = s[:idx]
+	}
+	return strings.Contains(text, "…") || strings.Contains(text, "...")
 }
 
 // isClaudeCodePrompt returns true if the line looks like Claude Code's input

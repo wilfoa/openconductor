@@ -23,11 +23,16 @@ func TestClaudeCode_SpinnerWorking(t *testing.T) {
 		{"dot prefix", "· Thinking…"},
 		{"asterisk prefix", "* Reading…"},
 		{"heavy asterisk prefix", "✱ Slithering…"},
+		{"teardrop asterisk", "✻ Schlepping…"},
+		{"eight spoked", "✳ Compacting…"},
+		{"propeller", "❋ Weaving…"},
 		{"three dots", "✦ Processing..."},
 		{"dot three dots", "· Analyzing..."},
 		{"with stats suffix", "✱ Slithering… (49m 25s · ↓ 8.3k tokens · thought for 4s)"},
 		{"with short stats", "✦ Thinking… (3s)"},
 		{"with token count", "· Reading… (12s · ↓ 1.2k tokens)"},
+		{"compacting conversation", "· Compacting conversation… (2m 57s · ↑ 5.8k tokens)"},
+		{"hyphenated verb", "✱ Sock-hopping… (10s)"},
 	}
 
 	adapter := &claudeAdapter{}
@@ -55,6 +60,13 @@ func TestClaudeCode_SpinnerNotMatched(t *testing.T) {
 		{"no ellipsis", "✦ Reading"},
 		{"just dot", "·"},
 		{"normal output", "Building project..."},
+		{"tool output bash", "● Bash(docker compose exec backend python -m app.seed)"},
+		{"tool output with ellipsis in arg", "● Bash(python3 -c 'import json…)"},
+		{"tool output read", "● Read 1 file (ctrl+o to expand)"},
+		{"completion line", "✱ Baked for 8m 15s"},
+		{"letter prefix", "A Thinking…"},
+		{"digit prefix", "1 Thinking…"},
+		{"space prefix", "  Thinking…"},
 	}
 
 	adapter := &claudeAdapter{}
@@ -180,7 +192,7 @@ func TestClaudeCode_NoPromptNoSpinnerReturnsNo(t *testing.T) {
 // ── Completion summary detection tests ──────────────────────────
 
 func TestClaudeCode_CompletionSummaryIdle(t *testing.T) {
-	// "* Worked for Ns" without an active spinner signals idle.
+	// Completion summary with any verb + "for <duration>" signals idle.
 	tests := []struct {
 		name  string
 		lines []string
@@ -195,18 +207,18 @@ func TestClaudeCode_CompletionSummaryIdle(t *testing.T) {
 			},
 		},
 		{
-			"worked for minutes",
+			"baked for minutes",
 			[]string{
-				"Done refactoring the module.",
-				"* Worked for 2m 30s",
+				"25/25 passed! All tests green.",
+				"✱ Baked for 8m 15s",
 				"› ",
 			},
 		},
 		{
-			"star prefix without prompt visible",
+			"random verb",
 			[]string{
 				"All changes applied.",
-				"* Worked for 10s",
+				"✻ Sock-hopped for 10s",
 			},
 		},
 		{
@@ -220,7 +232,7 @@ func TestClaudeCode_CompletionSummaryIdle(t *testing.T) {
 			"dot prefix",
 			[]string{
 				"Complete.",
-				"· Worked for 5s",
+				"· Cooked for 5s",
 			},
 		},
 		{
