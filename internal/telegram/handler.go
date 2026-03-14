@@ -103,11 +103,18 @@ func (h *handler) HandleCallback(b *Bot, query *tgbotapi.CallbackQuery) {
 
 	switch kind {
 	case "perm":
+		// Permission response: send the appropriate keystroke.
 		adapter := h.getAdapter(project)
 		if adapter == nil {
 			b.answerCallbackRaw(query.ID, "Unknown agent")
 			return
 		}
+		logging.Info("telegram: sending permission keystroke",
+			"project", project,
+			"session", s.ID,
+			"action", action,
+			"agent", string(s.Project.Agent),
+		)
 		switch action {
 		case "allow":
 			// "Allow once" is the default selection — just confirm.

@@ -16,6 +16,7 @@ import (
 	"github.com/hinshun/vt10x"
 	"github.com/openconductorhq/openconductor/internal/agent"
 	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/logging"
 )
 
 // State represents the lifecycle state of a session.
@@ -169,7 +170,22 @@ func (s *Session) Write(data []byte) {
 	defer s.Mu.RUnlock()
 
 	if s.Ptmx != nil && !s.closed {
-		s.Ptmx.Write(data)
+		n, err := s.Ptmx.Write(data)
+		if err != nil {
+			logging.Error("session: PTY write failed",
+				"session", s.ID,
+				"bytes", len(data),
+				"written", n,
+				"error", err,
+			)
+		}
+	} else {
+		logging.Warn("session: Write skipped (ptmx nil or closed)",
+			"session", s.ID,
+			"ptmxNil", s.Ptmx == nil,
+			"closed", s.closed,
+			"bytes", len(data),
+		)
 	}
 }
 

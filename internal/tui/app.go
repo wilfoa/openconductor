@@ -1856,6 +1856,13 @@ func (a *App) checkAttention() {
 						} else {
 							// Send the approval keystroke to the PTY and treat
 							// the session as Working — no notification needed.
+							logging.Info("auto-approve: sending keystroke",
+								"project", projectName,
+								"session", sessionID,
+								"run", a.autoApproveRuns[sessionID],
+								"bytesHex", fmt.Sprintf("%x", result.Keystroke),
+								"bytesLen", len(result.Keystroke),
+							)
 							s.Write(result.Keystroke)
 							a.sessionStates[sessionID] = StateWorking
 							a.statusbar.states[sessionID] = StateWorking
