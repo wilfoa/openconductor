@@ -1393,6 +1393,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 
 	w, h := s.Width, s.Height
 	altScreen := s.VT.Mode()&vt10x.ModeAltScreen != 0
+	cursorY := s.VT.Cursor().Y
 
 	// Build current screen snapshot (text + glyphs).
 	curTexts := make([]string, h)
@@ -1437,25 +1438,26 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 			sb.Push(oldGlyphs[i])
 			pushed++
 		}
-	} else if shift == 0 && oldGlyphs != nil {
-		// No traditional scroll detected — the screen may have been fully
-		// repainted (large output burst that replaced the entire visible
-		// area between ticks). Push old non-blank rows that disappeared
-		// from the new screen so the user can scroll back.
-		//
-		// This handles both:
-		//   - Alt-screen TUI apps (OpenCode) that do full-screen redraws
-		//   - Non-alt-screen CLIs (Claude Code) that output faster than
-		//     detectScrollShift's maxShift (height/2) can track
-		//
-		// For alt-screen apps, TUI chrome rows (header, status bar) are
-		// excluded via ChromeSkipRows to avoid polluting scrollback.
-		// Non-alt-screen apps have no chrome to skip.
-		chromeTop, chromeBottom := 0, 0
-		if altScreen {
-			chromeTop, chromeBottom = agent.ChromeSkipRows(s.Project.Agent)
-		}
+	} else if shift == 0 && altScreen && oldGlyphs != nil {
+		// Alt-screen TUI app: no traditional scroll, but the screen may have
+		// been fully repainted. Push old non-blank rows that disappeared from
+		// the new screen, so the user can scroll back to see previous content.
+		chromeTop, chromeBottom := agent.ChromeSkipRows(s.Project.Agent)
 		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, chromeTop, chromeBottom)
+	} else if shift == 0 && !altScreen && oldGlyphs != nil {
+		// Non-alt-screen CLI (e.g. Claude Code): large output burst replaced
+		// the entire visible area faster than detectScrollShift's maxShift
+		// (height/2) can track. Push old rows that disappeared, but ONLY
+		// rows above the cursor position — content at/below the cursor is
+		// "active" (spinner, prompt) being updated in-place, not content
+		// that scrolled off. Without this limit, the spinner line gets
+		// pushed to scrollback on every tick because its text changes
+		// (different time counter, animation character).
+		skipBottom := h - cursorY
+		if skipBottom < 0 {
+			skipBottom = 0
+		}
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, skipBottom)
 	}
 
 	// Store current snapshot for next comparison.
