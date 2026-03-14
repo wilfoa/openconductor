@@ -190,7 +190,11 @@ func (s *Session) Write(data []byte) {
 }
 
 // GetScreenLines returns the current visible terminal content as a slice of
-// strings, one per row.
+// strings, one per row. For alt-screen apps (like OpenCode), all rows are
+// returned since the app manages the entire screen. For non-alt-screen
+// sessions (like Claude Code), rows below the cursor position are truncated
+// because they contain stale content from previous renders that the app
+// didn't clear.
 func (s *Session) GetScreenLines() []string {
 	s.Mu.RLock()
 	defer s.Mu.RUnlock()
@@ -199,8 +203,19 @@ func (s *Session) GetScreenLines() []string {
 		return nil
 	}
 
-	lines := make([]string, s.Height)
-	for row := 0; row < s.Height; row++ {
+	altScreen := s.VT.Mode()&vt10x.ModeAltScreen != 0
+	cursorY := s.VT.Cursor().Y
+
+	// For non-alt-screen sessions, only return rows up to the cursor.
+	// Content below the cursor is stale — the app wrote output above
+	// and never cleared what was previously rendered below.
+	h := s.Height
+	if !altScreen && cursorY+1 < h {
+		h = cursorY + 1
+	}
+
+	lines := make([]string, h)
+	for row := 0; row < h; row++ {
 		var sb strings.Builder
 		for col := 0; col < s.Width; col++ {
 			g := s.VT.Cell(col, row)
