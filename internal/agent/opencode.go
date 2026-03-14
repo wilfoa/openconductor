@@ -186,8 +186,10 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	hasAllowOnce := false
 	hasReject := false
 	hasQuestionDialog := false
-	hasFullscreen := false // "ctrl+f fullscreen" appears in permission dialog footer
-	hasConfirmTab := false // question series "Confirm" review tab
+	hasFullscreen := false      // "ctrl+f fullscreen" appears in permission dialog footer
+	hasConfirmTab := false      // question series "Confirm" review tab
+	hasAlwaysAllowText := false // "Always allow" text in dialog header
+	hasConfirmCancel := false   // "Confirm" + "Cancel" button pair
 
 	// TUI chrome signals (dialog buttons, status bar, keyboard shortcuts)
 	// always appear in the bottom portion of the screen. We restrict most
@@ -274,6 +276,20 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 			!strings.Contains(lower, "select") {
 			hasConfirmTab = true
 		}
+		// "Always allow" second-stage confirmation dialog. After selecting
+		// "Allow always" on a permission, OpenCode shows:
+		//   △ Always allow
+		//   This will allow read until OpenCode is restarted.
+		//   [Confirm]  Cancel          ⇆ select  enter confirm
+		// "Confirm" is already highlighted — just press Enter.
+		// Require both "always allow" text AND "confirm"+"cancel" buttons
+		// to avoid false positives from conversation content.
+		if strings.Contains(lower, "always allow") {
+			hasAlwaysAllowText = true
+		}
+		if strings.Contains(lower, "confirm") && strings.Contains(lower, "cancel") {
+			hasConfirmCancel = true
+		}
 	}
 
 	logging.Debug("heuristic: opencode scan result",
@@ -285,7 +301,22 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		"fullscreen", hasFullscreen,
 		"questionDialog", hasQuestionDialog,
 		"confirmTab", hasConfirmTab,
+		"alwaysAllowText", hasAlwaysAllowText,
+		"confirmCancel", hasConfirmCancel,
 	)
+
+	// "Always allow" second-stage confirmation — auto-confirm by pressing
+	// Enter. This dialog appears after the user (or auto-approve) selected
+	// "Allow always" on a permission. "Confirm" is already highlighted.
+	// Handled before regular permission detection so it doesn't get stuck
+	// waiting for user input.
+	if hasAlwaysAllowText && hasConfirmCancel {
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsPermission,
+			Detail: "opencode always-allow auto-confirm",
+			Source: "heuristic",
+		}
+	}
 
 	// Permission and question dialogs take priority over the working
 	// signal. When OpenCode renders a modal overlay it only redraws the

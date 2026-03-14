@@ -728,6 +728,47 @@ func TestOpenCode_QuestionOverridesEscInterrupt(t *testing.T) {
 	}
 }
 
+func TestOpenCode_AlwaysAllowConfirmDialog(t *testing.T) {
+	// Second-stage "Always allow" confirmation dialog — should be auto-confirmed.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"▣  Build · claude-opus-4-6",
+		"",
+		"△ Always allow",
+		"This will allow read until OpenCode is restarted.",
+		"",
+		"Confirm  Cancel                                   ⇆ select  enter confirm",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsPermission {
+		t.Fatalf("expected NeedsPermission, got %v", event)
+	}
+	if !strings.Contains(event.Detail, "auto-confirm") {
+		t.Errorf("expected 'auto-confirm' in detail, got %q", event.Detail)
+	}
+}
+
+func TestOpenCode_AlwaysAllowNotFalsePositive(t *testing.T) {
+	// Conversation content mentioning "always allow" should NOT trigger
+	// the auto-confirm when other permission signals are absent.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"▣  Build · claude-opus-4-6 · interrupted",
+		"",
+		"The system will always allow read access...",
+		"",
+		"· · · · ■ ■  esc interrupt",
+	}
+	result, _ := adapter.CheckAttention(lines)
+	// Should detect Working (esc interrupt), not permission.
+	if result != attention.Working {
+		t.Errorf("expected Working, got %v", result)
+	}
+}
+
 func TestOpenCode_QuestionSeriesIntermediateTab(t *testing.T) {
 	// Multi-question series: intermediate tab has "enter confirm" not "enter submit".
 	// Footer: "⇆ tab  ↑↓ select  enter confirm  esc dismiss"

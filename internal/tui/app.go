@@ -1900,6 +1900,24 @@ func (a *App) checkAttention() {
 				continue
 			}
 
+			// Auto-confirm "Always allow" second-stage dialog. After
+			// selecting "Allow always" on a permission (via auto-approve
+			// or Telegram button), OpenCode shows a confirmation dialog
+			// with "Confirm" already highlighted. Press Enter to proceed.
+			if event.Type == attention.NeedsPermission && strings.Contains(event.Detail, "auto-confirm") {
+				s.Write([]byte("\r"))
+				a.sessionStates[sessionID] = StateWorking
+				a.statusbar.states[sessionID] = StateWorking
+				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+				delete(a.stateStickUntil, sessionID)
+				delete(a.autoApproveRuns, sessionID)
+				logging.Info("auto-confirm: confirmed always-allow dialog",
+					"project", projectName,
+					"session", sessionID,
+				)
+				continue
+			}
+
 			state := attentionEventToState(event)
 			logging.Debug("attention event",
 				"session", sessionID,
