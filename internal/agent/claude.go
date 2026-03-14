@@ -238,8 +238,20 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 		}
 	}
 
+	// Dump the last scanned lines to help diagnose false negatives.
+	var debugLines []string
+	s2 := 0
+	for i := len(lastLines) - 1; i >= 0 && s2 < maxScanLines; i-- {
+		t := strings.TrimSpace(lastLines[i])
+		if t == "" {
+			continue
+		}
+		s2++
+		debugLines = append(debugLines, t)
+	}
 	logging.Debug("heuristic: claude-code no signal",
 		"scanned", scanned,
+		"lines", debugLines,
 	)
 	return attention.No, nil
 }
