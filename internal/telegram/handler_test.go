@@ -651,12 +651,20 @@ func TestQuestionKeystroke_Option0_FallsBackToEnter(t *testing.T) {
 	}
 }
 
-func TestClaudeCode_NotQuestionResponder(t *testing.T) {
-	// Claude Code does not implement QuestionResponder — handler should
-	// fall back to writeWithEnter for opt callbacks.
-	a, _ := agent.Get("claude")
-	if _, ok := a.(agent.QuestionResponder); ok {
-		t.Error("claude adapter should not implement QuestionResponder")
+func TestClaudeCode_ImplementsQuestionResponder(t *testing.T) {
+	// Claude Code implements QuestionResponder for AskUserQuestion dialogs.
+	a, _ := agent.Get("claude-code")
+	qr, ok := a.(agent.QuestionResponder)
+	if !ok {
+		t.Fatal("claude adapter should implement QuestionResponder")
+	}
+	// Option 1 → nil (default, just Enter).
+	if ks := qr.QuestionKeystroke(1); ks != nil {
+		t.Errorf("option 1: expected nil, got %q", ks)
+	}
+	// Option 2 → one down arrow.
+	if ks := qr.QuestionKeystroke(2); string(ks) != "\x1b[B" {
+		t.Errorf("option 2: expected down arrow, got %q", ks)
 	}
 }
 

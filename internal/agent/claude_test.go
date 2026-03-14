@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openconductorhq/openconductor/internal/attention"
@@ -445,6 +446,136 @@ func TestClaudeCode_PermissionOverridesPrompt(t *testing.T) {
 	}
 	if event.Type != attention.NeedsPermission {
 		t.Errorf("expected NeedsPermission (not NeedsInput), got %v", event.Type)
+	}
+}
+
+// ── AskUserQuestion detection ───────────────────────────────────
+
+func TestClaudeCode_QuestionSingleFooter(t *testing.T) {
+	// Single-question AskUserQuestion dialog.
+	adapter := &claudeAdapter{}
+	lines := []string{
+		"  Which framework do you want to use?",
+		"  ❯ 1. React",
+		"    2. Vue",
+		"    3. Angular",
+		"Enter to select · ↑/↓ to navigate · Esc to cancel",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Fatalf("expected NeedsAnswer, got %v", event)
+	}
+	if strings.Contains(event.Detail, "confirm tab") {
+		t.Error("single question should not be confirm tab")
+	}
+}
+
+func TestClaudeCode_QuestionMultiFooter(t *testing.T) {
+	// Multi-question AskUserQuestion with Tab navigation.
+	adapter := &claudeAdapter{}
+	lines := []string{
+		"  Language  Framework  Submit",
+		"  Which language?",
+		"  ❯ 1. Python",
+		"    2. TypeScript",
+		"Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Fatalf("expected NeedsAnswer, got %v", event)
+	}
+}
+
+func TestClaudeCode_QuestionReviewScreen(t *testing.T) {
+	// AskUserQuestion review/confirm screen.
+	adapter := &claudeAdapter{}
+	lines := []string{
+		"  Language  Framework  Submit",
+		"  Review your answers",
+		"  • Language: Python",
+		"  • Framework: Django",
+		"  Ready to submit your answers?",
+		"  ❯ Submit answers",
+		"    Cancel",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Fatalf("expected NeedsAnswer, got %v", event)
+	}
+	if !strings.Contains(event.Detail, "confirm tab") {
+		t.Errorf("review screen should be detected as confirm tab, got %q", event.Detail)
+	}
+}
+
+func TestClaudeCode_QuestionOverridesPrompt(t *testing.T) {
+	// When both question footer and prompt are visible, question wins.
+	adapter := &claudeAdapter{}
+	lines := make([]string, 24)
+	lines[18] = "  ❯ 1. React"
+	lines[19] = "    2. Vue"
+	lines[20] = "Enter to select · ↑/↓ to navigate · Esc to cancel"
+	lines[23] = "> "
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Errorf("expected NeedsAnswer (not NeedsInput), got %v", event)
+	}
+}
+
+func TestClaudeCode_SpinnerOverridesQuestion(t *testing.T) {
+	// Spinner takes priority over stale question dialog text.
+	adapter := &claudeAdapter{}
+	lines := []string{
+		"Enter to select · ↑/↓ to navigate · Esc to cancel",
+		"✦ Thinking…",
+	}
+	result, _ := adapter.CheckAttention(lines)
+	if result != attention.Working {
+		t.Errorf("expected Working, got %v", result)
+	}
+}
+
+func TestClaudeCode_QuestionFooterNotFalsePositive(t *testing.T) {
+	// Lines mentioning "enter" and "select" in conversation content should
+	// NOT trigger question detection (missing "esc to cancel").
+	adapter := &claudeAdapter{}
+	lines := []string{
+		"  Use Enter to select the item from the dropdown.",
+		"  You can navigate with arrow keys.",
+		"> ",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if event != nil && event.Type == attention.NeedsAnswer {
+		t.Error("should not detect question from conversation content")
+	}
+	// Should detect prompt instead.
+	if result != attention.Certain || event == nil || event.Type != attention.NeedsInput {
+		t.Errorf("expected NeedsInput, got result=%v event=%v", result, event)
+	}
+}
+
+func TestClaudeCode_QuestionResponder(t *testing.T) {
+	adapter := &claudeAdapter{}
+	// Verify interface implementation.
+	var _ QuestionResponder = adapter
+	// Option 1 → nil, option 3 → 2 down arrows.
+	if ks := adapter.QuestionKeystroke(1); ks != nil {
+		t.Errorf("option 1: expected nil, got %q", ks)
+	}
+	want := "\x1b[B\x1b[B"
+	if ks := adapter.QuestionKeystroke(3); string(ks) != want {
+		t.Errorf("option 3: expected %q, got %q", want, ks)
 	}
 }
 

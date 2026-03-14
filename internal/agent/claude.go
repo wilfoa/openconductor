@@ -57,8 +57,9 @@ func (a *claudeAdapter) DenyKeystroke() []byte { return []byte("n\n") }
 
 // maxScanLines limits how many non-empty lines from the bottom of the
 // screen we inspect. Scanning too far up risks false positives from
-// stale output.
-const maxScanLines = 5
+// stale output. Increased from 5 to support AskUserQuestion which
+// renders a multi-line dialog with options above the footer.
+const maxScanLines = 15
 
 // claudePermissionPatterns match inline permission prompts that Claude Code
 // renders when requesting approval for tool use, file edits, or bash commands.
@@ -109,6 +110,8 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 	hasPermission := false
 	hasPrompt := false
 	hasCompletion := false
+	hasQuestion := false       // AskUserQuestion option-selection dialog
+	hasQuestionReview := false // AskUserQuestion review/submit screen
 	scanned := 0
 
 	for i := len(lastLines) - 1; i >= 0 && scanned < maxScanLines; i-- {
@@ -160,20 +163,57 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 		}
 
 		// Claude Code's prompt: "› " (U+203A single right-pointing angle
-		// quotation mark) or ASCII "> ". The trimmed form catches cases
-		// where the line is padded with trailing spaces.
+		// quotation mark) or ASCII "> ". The raw line is checked for suffix
+		// patterns; trimmed is used for exact match.
 		if !hasPrompt && isClaudeCodePrompt(lastLines[i], trimmed) {
 			hasPrompt = true
 			logging.Debug("heuristic: claude-code prompt detected",
 				"line", trimmed,
 			)
 		}
+
+		// AskUserQuestion detection — Claude Code renders a selection dialog
+		// with a footer containing keyboard hints. The footer patterns are:
+		//   Single:  "Enter to select · ↑/↓ to navigate · Esc to cancel"
+		//   Multi:   "Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel"
+		//   Review:  "Ready to submit your answers?" + Submit/Cancel selection
+		lower := strings.ToLower(trimmed)
+		if !hasQuestion && isClaudeQuestionFooter(lower) {
+			hasQuestion = true
+			logging.Debug("heuristic: claude-code question detected",
+				"line", trimmed,
+			)
+		}
+		if !hasQuestionReview && isClaudeQuestionReview(lower) {
+			hasQuestionReview = true
+			logging.Debug("heuristic: claude-code question review detected",
+				"line", trimmed,
+			)
+		}
 	}
 
-	// Priority: Spinner > Permission > Prompt > Nothing.
+	// Priority: Spinner > Question > Permission > Prompt > Nothing.
 	if hasSpinner {
 		// Agent is actively working — suppress everything else.
 		return attention.Working, nil
+	}
+
+	if hasQuestion {
+		// AskUserQuestion dialog is visible — agent needs answers.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsAnswer,
+			Detail: "claude code question dialog detected",
+			Source: "heuristic",
+		}
+	}
+
+	if hasQuestionReview {
+		// AskUserQuestion review screen — all questions answered. Auto-submit.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsAnswer,
+			Detail: "claude code question confirm tab",
+			Source: "heuristic",
+		}
 	}
 
 	if hasPermission {
@@ -202,6 +242,31 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 		"scanned", scanned,
 	)
 	return attention.No, nil
+}
+
+// isClaudeQuestionFooter returns true if the line matches the keyboard hints
+// rendered at the bottom of Claude Code's AskUserQuestion dialog.
+// Patterns:
+//
+//	"enter to select · ↑/↓ to navigate · esc to cancel"
+//	"enter to select · tab/arrow keys to navigate · esc to cancel"
+func isClaudeQuestionFooter(lower string) bool {
+	return strings.Contains(lower, "enter to select") &&
+		strings.Contains(lower, "to navigate") &&
+		strings.Contains(lower, "esc to cancel")
+}
+
+// isClaudeQuestionReview returns true if the line matches Claude Code's
+// AskUserQuestion review/submit screen. The review screen shows
+// "Ready to submit your answers?" or the "Submit answers" option text.
+func isClaudeQuestionReview(lower string) bool {
+	if strings.Contains(lower, "ready to submit your answers") {
+		return true
+	}
+	if strings.Contains(lower, "submit answers") {
+		return true
+	}
+	return false
 }
 
 // hasSymbolPrefix checks whether line starts with a non-alphanumeric, non-space
@@ -282,6 +347,21 @@ func isClaudeCodePrompt(raw, trimmed string) bool {
 		return true
 	}
 	return false
+}
+
+// QuestionKeystroke returns down-arrow sequences to navigate Claude Code's
+// AskUserQuestion dialog to the given option. Like OpenCode, option 1 is the
+// default selection. For option N, (N-1) down arrows are sent. Enter is
+// appended separately by the handler after SubmitDelay (0 for Claude Code).
+func (a *claudeAdapter) QuestionKeystroke(optionNum int) []byte {
+	if optionNum <= 1 {
+		return nil
+	}
+	ks := make([]byte, 0, (optionNum-1)*3)
+	for i := 1; i < optionNum; i++ {
+		ks = append(ks, '\x1b', '[', 'B') // Down arrow: ESC [ B
+	}
+	return ks
 }
 
 // BootstrapFiles returns a placeholder CLAUDE.md for the repository.
