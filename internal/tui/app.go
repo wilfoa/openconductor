@@ -1437,15 +1437,24 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 			sb.Push(oldGlyphs[i])
 			pushed++
 		}
-	} else if shift == 0 && altScreen && oldGlyphs != nil {
-		// Alt-screen TUI app: no traditional scroll, but the screen may have
-		// been fully repainted. Push old non-blank rows that disappeared from
-		// the new screen, so the user can scroll back to see previous content.
+	} else if shift == 0 && oldGlyphs != nil {
+		// No traditional scroll detected — the screen may have been fully
+		// repainted (large output burst that replaced the entire visible
+		// area between ticks). Push old non-blank rows that disappeared
+		// from the new screen so the user can scroll back.
 		//
-		// Skip TUI chrome rows configured by the agent adapter (e.g. OpenCode
-		// skips row 0 header and last 2 rows for status bar + footer). These
-		// change frequently and would pollute the scrollback buffer with noise.
-		chromeTop, chromeBottom := agent.ChromeSkipRows(s.Project.Agent)
+		// This handles both:
+		//   - Alt-screen TUI apps (OpenCode) that do full-screen redraws
+		//   - Non-alt-screen CLIs (Claude Code) that output faster than
+		//     detectScrollShift's maxShift (height/2) can track
+		//
+		// For alt-screen apps, TUI chrome rows (header, status bar) are
+		// excluded via ChromeSkipRows to avoid polluting scrollback.
+		// Non-alt-screen apps have no chrome to skip.
+		chromeTop, chromeBottom := 0, 0
+		if altScreen {
+			chromeTop, chromeBottom = agent.ChromeSkipRows(s.Project.Agent)
+		}
 		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, chromeTop, chromeBottom)
 	}
 
