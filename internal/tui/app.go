@@ -1843,6 +1843,27 @@ func (a *App) checkAttention() {
 		if event != nil {
 			// Auto-approve permission requests when the project is configured
 			// to do so and the classifier identifies the category as allowed.
+			// Auto-confirm "Always allow" second-stage dialog. After
+			// selecting "Allow always" on a permission (via auto-approve
+			// or Telegram button), OpenCode shows a confirmation dialog
+			// with "Confirm" already highlighted. Press Enter to proceed.
+			// Must run BEFORE auto-approve — otherwise auto-approve
+			// consumes the NeedsPermission event and sends the wrong
+			// keystroke to the confirm dialog.
+			if event.Type == attention.NeedsPermission && strings.Contains(event.Detail, "auto-confirm") {
+				s.Write([]byte("\r"))
+				a.sessionStates[sessionID] = StateWorking
+				a.statusbar.states[sessionID] = StateWorking
+				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+				delete(a.stateStickUntil, sessionID)
+				delete(a.autoApproveRuns, sessionID)
+				logging.Info("auto-confirm: confirmed always-allow dialog",
+					"project", projectName,
+					"session", sessionID,
+				)
+				continue
+			}
+
 			if event.Type == attention.NeedsPermission && a.autoApprover != nil {
 				adapter, adapterErr := agent.Get(s.Project.Agent)
 				if adapterErr == nil {
@@ -1896,24 +1917,6 @@ func (a *App) checkAttention() {
 				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
 				delete(a.stateStickUntil, sessionID)
 				logging.Info("auto-confirm: submitted question series confirm tab",
-					"project", projectName,
-					"session", sessionID,
-				)
-				continue
-			}
-
-			// Auto-confirm "Always allow" second-stage dialog. After
-			// selecting "Allow always" on a permission (via auto-approve
-			// or Telegram button), OpenCode shows a confirmation dialog
-			// with "Confirm" already highlighted. Press Enter to proceed.
-			if event.Type == attention.NeedsPermission && strings.Contains(event.Detail, "auto-confirm") {
-				s.Write([]byte("\r"))
-				a.sessionStates[sessionID] = StateWorking
-				a.statusbar.states[sessionID] = StateWorking
-				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
-				delete(a.stateStickUntil, sessionID)
-				delete(a.autoApproveRuns, sessionID)
-				logging.Info("auto-confirm: confirmed always-allow dialog",
 					"project", projectName,
 					"session", sessionID,
 				)
