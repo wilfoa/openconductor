@@ -8,6 +8,7 @@ import (
 	"html"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,8 +131,16 @@ func (h *handler) HandleCallback(b *Bot, query *tgbotapi.CallbackQuery) {
 		}
 
 	case "opt":
-		// Question option: send the number, then Enter.
-		writeWithEnter(s, action)
+		// Question option: navigate to the selected option and confirm.
+		// Agents with selection-based dialogs (e.g. OpenCode) need arrow-key
+		// navigation; others accept typed text.
+		adapter := h.getAdapter(project)
+		if qr, ok := adapter.(agent.QuestionResponder); ok {
+			num, _ := strconv.Atoi(action)
+			writePermKeystroke(s, qr.QuestionKeystroke(num))
+		} else {
+			writeWithEnter(s, action)
+		}
 		actionLabel = fmt.Sprintf("Selected: %s", action)
 
 	case "reply":

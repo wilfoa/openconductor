@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openconductorhq/openconductor/internal/agent"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
 )
@@ -594,6 +595,68 @@ func TestWritePermKeystroke_EndsWithCR_NoExtra(t *testing.T) {
 	got := readAll(r)
 	if string(got) != "\r" {
 		t.Errorf("expected %q, got %q", "\r", got)
+	}
+}
+
+// ── QuestionKeystroke (OpenCode) ─────────────────────────────────
+
+func TestQuestionKeystroke_Option1_JustEnter(t *testing.T) {
+	// Option 1 is already selected — QuestionKeystroke returns nil,
+	// writePermKeystroke sends delay + Enter.
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(1))
+	got := readAll(r)
+	if string(got) != "\r" {
+		t.Errorf("option 1: expected %q, got %q", "\r", got)
+	}
+}
+
+func TestQuestionKeystroke_Option2_OneDownArrow(t *testing.T) {
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(2))
+	got := readAll(r)
+	// Expect: 1 down arrow + Enter.
+	want := "\x1b[B\r"
+	if string(got) != want {
+		t.Errorf("option 2: expected %q, got %q", want, got)
+	}
+}
+
+func TestQuestionKeystroke_Option3_TwoDownArrows(t *testing.T) {
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(3))
+	got := readAll(r)
+	// Expect: 2 down arrows + Enter.
+	want := "\x1b[B\x1b[B\r"
+	if string(got) != want {
+		t.Errorf("option 3: expected %q, got %q", want, got)
+	}
+}
+
+func TestQuestionKeystroke_Option0_FallsBackToEnter(t *testing.T) {
+	// Edge case: option 0 (e.g. failed Atoi) → nil → just Enter.
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(0))
+	got := readAll(r)
+	if string(got) != "\r" {
+		t.Errorf("option 0: expected %q, got %q", "\r", got)
+	}
+}
+
+func TestClaudeCode_NotQuestionResponder(t *testing.T) {
+	// Claude Code does not implement QuestionResponder — handler should
+	// fall back to writeWithEnter for opt callbacks.
+	a, _ := agent.Get("claude")
+	if _, ok := a.(agent.QuestionResponder); ok {
+		t.Error("claude adapter should not implement QuestionResponder")
 	}
 }
 

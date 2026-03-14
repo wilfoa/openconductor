@@ -1867,6 +1867,23 @@ func (a *App) checkAttention() {
 				}
 			}
 
+			// Auto-confirm question series Confirm tab. After the user
+			// answered all questions via Telegram buttons, the dialog
+			// auto-advances to a review screen. Press Enter to submit
+			// the collected answers so the agent can continue.
+			if event.Type == attention.NeedsAnswer && strings.Contains(event.Detail, "confirm tab") {
+				s.Write([]byte("\r"))
+				a.sessionStates[sessionID] = StateWorking
+				a.statusbar.states[sessionID] = StateWorking
+				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+				delete(a.stateStickUntil, sessionID)
+				logging.Info("auto-confirm: submitted question series confirm tab",
+					"project", projectName,
+					"session", sessionID,
+				)
+				continue
+			}
+
 			state := attentionEventToState(event)
 			logging.Debug("attention event",
 				"session", sessionID,
@@ -1894,6 +1911,13 @@ func (a *App) checkAttention() {
 					// Send Telegram event on attention state transitions.
 					a.sendTelegramEvent(projectName, sessionID, state, event.Detail, lines)
 				}
+			} else if isAttentionState(state) {
+				// Same attention state — re-send to Telegram so question
+				// series (Asking→Asking with different content) deliver
+				// each new question. The bridge dedup drops identical
+				// screens, so only genuinely new content triggers a send.
+				a.stateStickUntil[sessionID] = now.Add(stateStickDuration)
+				a.sendTelegramEvent(projectName, sessionID, state, event.Detail, lines)
 			}
 			a.sessionStates[sessionID] = state
 			a.statusbar.states[sessionID] = state

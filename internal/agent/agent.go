@@ -215,6 +215,17 @@ func GetOutputFilter(agentType config.AgentType) OutputFilter {
 	return nil
 }
 
+// QuestionResponder is an optional interface for agents whose question dialogs
+// use selection-based navigation (arrow keys) instead of typed text input.
+// OpenCode's question dialog is a vertical list navigated with ↕ arrows;
+// without this interface, the handler falls back to typing the option number.
+type QuestionResponder interface {
+	// QuestionKeystroke returns the keystroke sequence to select the given
+	// option number (1-based) in a question dialog. Return nil for the
+	// default/first option (only Enter is needed to confirm).
+	QuestionKeystroke(optionNum int) []byte
+}
+
 // HistoryProvider is an optional interface that agents can implement to supply
 // previous conversation history for scrollback pre-population. When a session
 // tab opens, the app calls LoadHistory to get text lines that are pushed into

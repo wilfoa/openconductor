@@ -58,6 +58,22 @@ func (a *opencodeAdapter) ApproveSessionKeystroke() []byte { return []byte("\x1b
 // Enter is sent separately by the handler after a SubmitDelay pause.
 func (a *opencodeAdapter) DenyKeystroke() []byte { return []byte("\x1b[C\x1b[C") }
 
+// QuestionKeystroke returns down-arrow sequences to navigate OpenCode's
+// vertical question dialog to the given option. Option 1 is already selected
+// by default, so no navigation is needed (returns nil → caller sends Enter).
+// For option N, (N-1) down arrows are sent. Enter is appended separately
+// by the handler after SubmitDelay.
+func (a *opencodeAdapter) QuestionKeystroke(optionNum int) []byte {
+	if optionNum <= 1 {
+		return nil
+	}
+	ks := make([]byte, 0, (optionNum-1)*3)
+	for i := 1; i < optionNum; i++ {
+		ks = append(ks, '\x1b', '[', 'B') // Down arrow: ESC [ B
+	}
+	return ks
+}
+
 // BootstrapFiles returns no bootstrap files for OpenCode.
 func (a *opencodeAdapter) BootstrapFiles() []BootstrapFile {
 	return nil
@@ -171,6 +187,7 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	hasReject := false
 	hasQuestionDialog := false
 	hasFullscreen := false // "ctrl+f fullscreen" appears in permission dialog footer
+	hasConfirmTab := false // question series "Confirm" review tab
 
 	// TUI chrome signals (dialog buttons, status bar, keyboard shortcuts)
 	// always appear in the bottom portion of the screen. We restrict most
@@ -247,6 +264,16 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 			strings.Contains(lower, "esc dismiss") {
 			hasQuestionDialog = true
 		}
+		// Question series Confirm tab footer: "⇆ tab  enter submit  esc dismiss".
+		// This appears after all questions in a series have been answered.
+		// Unlike intermediate question tabs, it has NO "select" — the
+		// Confirm tab shows a review screen, not selectable options.
+		if strings.Contains(lower, "tab") &&
+			strings.Contains(lower, "enter submit") &&
+			strings.Contains(lower, "esc dismiss") &&
+			!strings.Contains(lower, "select") {
+			hasConfirmTab = true
+		}
 	}
 
 	logging.Debug("heuristic: opencode scan result",
@@ -257,6 +284,7 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		"reject", hasReject,
 		"fullscreen", hasFullscreen,
 		"questionDialog", hasQuestionDialog,
+		"confirmTab", hasConfirmTab,
 	)
 
 	// Permission and question dialogs take priority over the working
@@ -287,6 +315,17 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		return attention.Certain, &attention.AttentionEvent{
 			Type:   attention.NeedsAnswer,
 			Detail: "opencode question dialog detected",
+			Source: "heuristic",
+		}
+	}
+
+	if hasConfirmTab {
+		// Question series Confirm tab — all questions answered, review screen
+		// is showing. The user already provided answers via Telegram buttons;
+		// the attention loop auto-submits this by pressing Enter.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsAnswer,
+			Detail: "opencode question confirm tab",
 			Source: "heuristic",
 		}
 	}
