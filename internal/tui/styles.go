@@ -30,6 +30,7 @@ var (
 	defaultSidebarWidth = 26
 	minSidebarWidth     = 20
 	screenPadding       = 1 // horizontal padding on each side of the screen
+	statusBarRows       = 1 // status bar is always 1 row
 
 	// Minimum host terminal dimensions below which the app shows a
 	// "terminal too small" overlay instead of the normal UI. These are

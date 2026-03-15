@@ -164,6 +164,11 @@ type App struct {
 	// tabs were open on exit. Set via SetStatePath before starting the
 	// program.
 	statePath string
+
+	// tabBarHeight is the rendered height of the tab bar in rows. Computed
+	// once in layout() from the actual tab style, rather than hardcoded, so
+	// it adapts to style changes or different terminal environments.
+	tabBarHeight int
 }
 
 // NewApp creates the application model from a loaded configuration.
@@ -226,6 +231,11 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		sidebar.openTabs[name] = true
 	}
 
+	// Compute tab bar height from the actual tab style so mouse coordinate
+	// translation is correct regardless of terminal environment.
+	sampleTab := tabStyle.Render("x")
+	tabBarH := strings.Count(sampleTab, "\n") + 1
+
 	return App{
 		cfg:                  cfg,
 		configPath:           configPath,
@@ -251,6 +261,7 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		scrollOffsets:        make(map[string]int),
 		scrollPinned:         make(map[string]bool),
 		pendingRestoreTabs:   openTabs,
+		tabBarHeight:         tabBarH,
 	}
 }
 
@@ -572,8 +583,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		} else {
-			// Right panel: check if click is in the tab bar (first 3 rows).
-			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && msg.Y < 3 {
+			// Right panel: check if click is in the tab bar.
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && msg.Y < a.tabBarHeight {
 				// Click outside a tab while editing → cancel edit.
 				localX := msg.X - screenPadding - sbWidth
 				if tabIdx, isClose := a.tabHitTest(localX); tabIdx >= 0 {
@@ -635,7 +646,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 						if vtMode&vt10x.ModeMouseMask != 0 {
 							localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
-							localY := msg.Y - 3                           // -3 for tab bar height
+							localY := msg.Y - a.tabBarHeight
 							termW, termH := a.termDimensions()
 							if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
 								sgrMode := vtMode&vt10x.ModeMouseSgr != 0
@@ -685,7 +696,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				if vtMode&vt10x.ModeMouseMask != 0 {
 					localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
-					localY := msg.Y - 3                           // -3 for tab bar height
+					localY := msg.Y - a.tabBarHeight
 					termW, termH := a.termDimensions()
 					if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
 						sgrMode := vtMode&vt10x.ModeMouseSgr != 0
@@ -1177,7 +1188,7 @@ func (a App) tabBarView() string {
 
 func (a *App) layout() {
 	termW, termH := a.termDimensions()
-	panelHeight := a.height - 1 // -1 for status bar
+	panelHeight := a.height - statusBarRows
 
 	a.sidebar.height = panelHeight
 	a.terminal.SetSize(termW, termH)
@@ -1191,7 +1202,7 @@ func (a *App) termDimensions() (int, int) {
 	inner := a.innerWidth()
 	sbWidth := a.sidebar.Width()
 	termWidth := inner - sbWidth - 1 // -1 for terminal PaddingLeft(1)
-	termHeight := a.height - 4       // -1 status bar, -3 tab bar
+	termHeight := a.height - a.tabBarHeight - statusBarRows
 
 	if termWidth < 1 {
 		termWidth = 1
