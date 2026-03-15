@@ -1417,9 +1417,35 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		return 0
 	}
 
+	// Drain any lines captured by the Session's VT.Write() scroll-off
+	// detection. These are lines that scrolled off the vt10x grid between
+	// snapshot ticks — too fast for our snapshot-based detection to catch.
+	captured := s.DrainScrollCapture()
+	for _, cl := range captured {
+		sb.Push(scrollbackLine(cl.Glyphs))
+	}
+	pushed := len(captured)
+
 	// Detect scroll shift between last snapshot and current screen.
 	shift := detectScrollShift(oldTexts, curTexts)
-	pushed := 0
+
+	// Count how many rows actually changed between snapshots.
+	changedRows := 0
+	for i := 0; i < len(oldTexts) && i < len(curTexts); i++ {
+		if oldTexts[i] != curTexts[i] {
+			changedRows++
+		}
+	}
+	if changedRows > 3 || shift > 0 {
+		logging.Debug("scrollback: snapshot diff",
+			"session", sessionID,
+			"shift", shift,
+			"changedRows", changedRows,
+			"totalRows", h,
+			"altScreen", altScreen,
+			"cursorY", cursorY,
+		)
+	}
 
 	if shift > 0 && oldGlyphs != nil {
 		// Traditional scroll detected — push scrolled-off rows.

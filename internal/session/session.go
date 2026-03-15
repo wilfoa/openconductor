@@ -46,9 +46,20 @@ type Session struct {
 	// that vt10x cannot parse correctly (e.g. kitty keyboard protocol).
 	outputFilter func([]byte) []byte
 
+	// scrollCapture collects lines that scroll off the top of the vt10x
+	// grid during VT.Write(). The App's checkScrollback() drains these.
+	scrollCapture []ScrollCapturedLine
+
 	Mu            sync.RWMutex
 	Width, Height int
 	closed        bool
+}
+
+// ScrollCapturedLine holds a single terminal row captured as it scrolled
+// off the top of the vt10x grid.
+type ScrollCapturedLine struct {
+	Text   string
+	Glyphs []vt10x.Glyph
 }
 
 // NewSession creates a Session for the given project. It looks up the
@@ -288,10 +299,11 @@ func (s *Session) ReadLoop() <-chan []byte {
 				data = s.outputFilter(data)
 			}
 
-			// Write to the vt10x terminal emulator.
+			// Write to the vt10x terminal emulator, capturing any
+			// lines that scroll off the top of the grid.
 			s.Mu.Lock()
 			if s.VT != nil {
-				s.VT.Write(data)
+				s.captureScrollOff(data)
 			}
 			s.Mu.Unlock()
 
@@ -300,6 +312,136 @@ func (s *Session) ReadLoop() <-chan []byte {
 	}()
 
 	return ch
+}
+
+// captureScrollOff snapshots the top rows before VT.Write(), writes the data,
+// then detects how many lines scrolled off by comparing the old top rows with
+// the new screen. Any rows that scrolled off are saved to s.scrollCapture.
+//
+// Must be called with s.Mu held (write lock).
+func (s *Session) captureScrollOff(data []byte) {
+	vt := s.VT
+	cursor := vt.Cursor()
+	h := s.Height
+
+	// For alt-screen apps (like OpenCode), skip the capture — their TUI
+	// manages the full screen and scrollback is handled by pushAltScreenDiff.
+	// Only non-alt-screen apps (like Claude Code) need this.
+	if vt.Mode()&vt10x.ModeAltScreen != 0 {
+		vt.Write(data)
+		return
+	}
+	_ = cursor
+
+	// Snapshot the top rows before write. We save up to height rows because
+	// a large write can scroll the entire screen.
+	preTexts := make([]string, h)
+	preGlyphs := make([][]vt10x.Glyph, h)
+	w := s.Width
+	for row := 0; row < h; row++ {
+		glyphs := make([]vt10x.Glyph, w)
+		var sb strings.Builder
+		for col := 0; col < w; col++ {
+			g := vt.Cell(col, row)
+			glyphs[col] = g
+			if g.Char == 0 {
+				sb.WriteRune(' ')
+			} else {
+				sb.WriteRune(g.Char)
+			}
+		}
+		preTexts[row] = strings.TrimRight(sb.String(), " ")
+		preGlyphs[row] = glyphs
+	}
+
+	// Perform the actual write.
+	vt.Write(data)
+
+	// Detect how many rows scrolled off by finding where old content
+	// ended up in the new screen. Check multiple old rows against the
+	// new screen to find the shift.
+	scrolled := 0
+	for shift := 1; shift < h; shift++ {
+		// Check if old[shift] == new[0]: the old row at position 'shift'
+		// is now at position 0, meaning 'shift' rows scrolled off.
+		if preTexts[shift] == "" {
+			continue
+		}
+		var sb strings.Builder
+		for col := 0; col < w; col++ {
+			g := vt.Cell(col, 0)
+			if g.Char == 0 {
+				sb.WriteRune(' ')
+			} else {
+				sb.WriteRune(g.Char)
+			}
+		}
+		newRow0 := strings.TrimRight(sb.String(), " ")
+		if preTexts[shift] == newRow0 {
+			scrolled = shift
+			break
+		}
+	}
+
+	// Fallback: if we couldn't find a matching row (entire screen changed),
+	// check how many old rows are NOT in the new screen at all. This handles
+	// bursts larger than the screen height where no old content survives.
+	if scrolled == 0 {
+		newTexts := make(map[string]struct{}, h)
+		for row := 0; row < h; row++ {
+			var sb strings.Builder
+			for col := 0; col < w; col++ {
+				g := vt.Cell(col, row)
+				if g.Char == 0 {
+					sb.WriteRune(' ')
+				} else {
+					sb.WriteRune(g.Char)
+				}
+			}
+			t := strings.TrimRight(sb.String(), " ")
+			if t != "" {
+				newTexts[t] = struct{}{}
+			}
+		}
+		// Count old non-blank rows that are completely gone from the new screen.
+		for i := 0; i < h; i++ {
+			if preTexts[i] == "" {
+				continue
+			}
+			if _, exists := newTexts[preTexts[i]]; !exists {
+				scrolled++
+			} else {
+				break // Found a surviving row — stop counting.
+			}
+		}
+	}
+
+	// Push scrolled-off rows to the capture buffer.
+	if scrolled > 0 {
+		for i := 0; i < scrolled; i++ {
+			if preTexts[i] == "" {
+				continue
+			}
+			s.scrollCapture = append(s.scrollCapture, ScrollCapturedLine{
+				Text:   preTexts[i],
+				Glyphs: preGlyphs[i],
+			})
+		}
+	}
+}
+
+// DrainScrollCapture returns and clears all lines captured during VT.Write()
+// scroll-off events. Called by the App's checkScrollback() to push these
+// lines into the scrollback buffer.
+//
+// Must be called with s.Mu held (at least read lock).
+func (s *Session) DrainScrollCapture() []ScrollCapturedLine {
+	if len(s.scrollCapture) == 0 {
+		return nil
+	}
+	lines := s.scrollCapture
+	s.scrollCapture = nil
+	return lines
 }
 
 // Size returns the current terminal dimensions.
