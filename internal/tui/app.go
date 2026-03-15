@@ -1922,6 +1922,17 @@ func (a *App) checkAttention() {
 								"bytesLen", len(result.Keystroke),
 							)
 							s.Write(result.Keystroke)
+							// If the keystroke is a navigation sequence (e.g.
+							// Right arrow to "Allow always"), it needs Enter
+							// to confirm the selection. Same logic as the
+							// Telegram handler's writePermKeystroke.
+							ks := result.Keystroke
+							if len(ks) > 0 && ks[len(ks)-1] != '\r' && ks[len(ks)-1] != '\n' {
+								if d := agent.GetSubmitDelay(s.Project.Agent); d > 0 {
+									time.Sleep(d)
+								}
+								s.Write([]byte("\r"))
+							}
 							a.sessionStates[sessionID] = StateWorking
 							a.statusbar.states[sessionID] = StateWorking
 							a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
