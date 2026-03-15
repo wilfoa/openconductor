@@ -861,6 +861,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionStartedMsg:
+		logging.Info("session started",
+			"session", msg.SessionID,
+		)
 		a.mgr.SetActive(msg.SessionID)
 		a.statusbar.activeName = msg.SessionID
 		a.addTab(msg.SessionID)
@@ -1292,6 +1295,7 @@ func (a *App) readPTYOnce(sessionID string, s *session.Session) tea.Cmd {
 func (a *App) syncTerminalFromSession() {
 	s := a.mgr.ActiveSession()
 	if s == nil {
+		logging.Debug("syncTerminal: no active session")
 		return
 	}
 

@@ -582,28 +582,34 @@ func TestClaudeCode_QuestionResponder(t *testing.T) {
 // ── Command() tests ─────────────────────────────────────────────
 
 func TestClaudeCode_CommandAlwaysHasBaseFlags(t *testing.T) {
-	// --dangerously-skip-permissions and --continue are always present.
+	// --dangerously-skip-permissions is always present.
 	adapter := &claudeAdapter{}
 	cmd := adapter.Command("/tmp/repo", LaunchOptions{})
 	args := cmd.Args
 	hasSkip := false
-	hasContinue := false
 	for _, a := range args {
 		if a == "--dangerously-skip-permissions" {
 			hasSkip = true
-		}
-		if a == "--continue" {
-			hasContinue = true
 		}
 	}
 	if !hasSkip {
 		t.Errorf("expected --dangerously-skip-permissions in args, got %v", args)
 	}
-	if !hasContinue {
-		t.Errorf("expected --continue in args, got %v", args)
-	}
 	if cmd.Dir != "/tmp/repo" {
 		t.Errorf("expected Dir=/tmp/repo, got %q", cmd.Dir)
+	}
+}
+
+func TestClaudeCode_CommandNoContinueForFreshRepo(t *testing.T) {
+	// For a repo with no Claude session files, --continue should NOT be
+	// passed even when opts.Continue is true — otherwise Claude Code
+	// prints "No conversation found to continue" and exits immediately.
+	adapter := &claudeAdapter{}
+	cmd := adapter.Command("/tmp/nonexistent-repo-12345", LaunchOptions{Continue: true})
+	for _, a := range cmd.Args {
+		if a == "--continue" {
+			t.Error("--continue should not be passed for repo without session files")
+		}
 	}
 }
 

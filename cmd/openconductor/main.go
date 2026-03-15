@@ -159,23 +159,30 @@ func newLLMClient(cfg *config.Config) llm.Client {
 }
 
 func runTUI(debug bool) {
-	// Initialize file logger. Always logs at info level; --debug adds
-	// verbose debug messages. Log file: ~/.openconductor/openconductor.log.
-	if err := logging.Init(logging.Options{Debug: debug}); err != nil {
+	// Initialize file logger. OC_LOG_DIR overrides the log directory.
+	logDir := os.Getenv("OC_LOG_DIR")
+	if err := logging.Init(logging.Options{Debug: debug, Dir: logDir}); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
 	defer logging.Close()
 	defer logging.RecoverPanic()
 
-	configPath := config.DefaultConfigPath()
+	// OC_CONFIG_PATH overrides the config file location.
+	configPath := os.Getenv("OC_CONFIG_PATH")
+	if configPath == "" {
+		configPath = config.DefaultConfigPath()
+	}
 	cfg := config.LoadOrDefault(configPath)
 	logging.Info("config loaded",
 		"path", configPath,
 		"projects", len(cfg.Projects),
 	)
 
-	// Load saved state (open tabs from previous session).
-	statePath := config.DefaultStatePath()
+	// Load saved state. OC_STATE_PATH overrides the state file location.
+	statePath := os.Getenv("OC_STATE_PATH")
+	if statePath == "" {
+		statePath = config.DefaultStatePath()
+	}
 	restoredState := config.LoadState(statePath)
 	if len(restoredState.OpenTabs) > 0 {
 		logging.Info("restoring tabs from previous session",

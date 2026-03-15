@@ -34,9 +34,14 @@ func (a *claudeAdapter) Type() config.AgentType {
 // Command returns an *exec.Cmd that launches the "claude" CLI in the given
 // repo directory. Always passes --dangerously-skip-permissions so that Claude
 // Code runs without interactive permission prompts (OpenConductor manages
-// approval separately). Also passes --continue to resume the last conversation.
+// approval separately). Passes --continue only when opts.Continue is true
+// (restored tabs, sidebar select) — omitting it for fresh repos avoids
+// "No conversation found to continue" followed by immediate exit.
 func (a *claudeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
-	args := []string{"--dangerously-skip-permissions", "--continue"}
+	args := []string{"--dangerously-skip-permissions"}
+	if opts.Continue && hasClaudeSession(repoPath) {
+		args = append(args, "--continue")
+	}
 	if opts.Prompt != "" {
 		args = append(args, "--prompt", opts.Prompt)
 	}
@@ -44,6 +49,34 @@ func (a *claudeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = repoPath
 	return cmd
+}
+
+// hasClaudeSession checks if there are any Claude Code session files for
+// the given repo. Claude Code stores sessions as JSONL files under
+// ~/.claude/projects/<path-encoded-dir>/. If no sessions exist, --continue
+// would cause Claude Code to print "No conversation found" and exit.
+func hasClaudeSession(repoPath string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	// Claude Code encodes the repo path by replacing "/" with "-" and
+	// stripping the leading "-".
+	encoded := strings.ReplaceAll(repoPath, "/", "-")
+	if strings.HasPrefix(encoded, "-") {
+		encoded = encoded[1:]
+	}
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			return true
+		}
+	}
+	return false
 }
 
 // ApproveKeystroke returns "y\n" — Claude Code uses y/n prompts.
