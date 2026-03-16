@@ -225,6 +225,7 @@ func runTUI(debug bool) {
 			fmt.Fprintf(os.Stderr, "Warning: Telegram bot failed to start: %v\n", err)
 		} else {
 			app.SetTelegramChannel(bot.EventChannel())
+			app.SetOnProjectAdded(bot.EnsureTopic)
 			tgBot = bot
 			logging.Info("telegram bot configured")
 		}

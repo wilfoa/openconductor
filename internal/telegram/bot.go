@@ -650,6 +650,25 @@ func (b *Bot) createTopic(name string) (int, error) {
 	return result.Result.MessageThreadID, nil
 }
 
+// EnsureTopic creates a Forum Topic for the given project name if one does
+// not already exist. Safe to call from any goroutine. This is used when
+// projects are added dynamically (via the sidebar) after the bot has started.
+func (b *Bot) EnsureTopic(projectName string) {
+	if b.state.Get(projectName) != 0 {
+		return // already exists
+	}
+	topicID, err := b.createTopic(projectName)
+	if err != nil {
+		logging.Error("telegram: failed to create topic for new project", "project", projectName, "err", err)
+		return
+	}
+	b.state.Set(projectName, topicID)
+	logging.Info("telegram: created topic for new project", "project", projectName, "topic_id", topicID)
+	if err := b.state.Save(); err != nil {
+		logging.Error("telegram: failed to save topic state", "err", err)
+	}
+}
+
 // reactToMessage adds an emoji reaction to a message. This provides visual
 // feedback that the bot received and processed the user's message.
 func (b *Bot) reactToMessage(messageID int, emoji string) {

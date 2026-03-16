@@ -108,6 +108,10 @@ type App struct {
 	// Set via SetTelegramChannel before starting the program.
 	telegramCh chan<- telegram.Event
 
+	// onProjectAdded, when non-nil, is called when a project is added
+	// via the sidebar. Used to create a Telegram topic for the new project.
+	onProjectAdded func(projectName string)
+
 	// stateStickUntil records the earliest time each project's attention
 	// state can be downgraded to Working. Prevents flip-flop when
 	// transient signals scroll off screen between ticks.
@@ -305,6 +309,13 @@ func (a App) SaveStatePublic() {
 // limiting on the receiving side.
 func (a *App) SetTelegramChannel(ch chan<- telegram.Event) {
 	a.telegramCh = ch
+}
+
+// SetOnProjectAdded registers a callback invoked when a project is added
+// via the sidebar form. The Telegram bot uses this to create a Forum Topic
+// for the newly added project.
+func (a *App) SetOnProjectAdded(fn func(projectName string)) {
+	a.onProjectAdded = fn
 }
 
 // SessionManager returns the underlying session manager. Used by the Telegram
@@ -827,6 +838,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.focus = focusTerminal
 		a.sidebar.focused = false
 		a.terminal.focused = true
+
+		// Create a Telegram topic for the new project (non-blocking).
+		if a.onProjectAdded != nil {
+			go a.onProjectAdded(project.Name)
+		}
 
 		// Save config and start session with --continue to pick up any
 		// prior conversation.
