@@ -88,6 +88,13 @@ func (a *claudeAdapter) ApproveSessionKeystroke() []byte { return nil }
 // DenyKeystroke returns "n\n".
 func (a *claudeAdapter) DenyKeystroke() []byte { return []byte("n\n") }
 
+// IsChromeLine returns true for Claude Code spinner/status lines (e.g.
+// "✻ Symbioting…") so they are excluded from scrollback captures and
+// Telegram messages.
+func (a *claudeAdapter) IsChromeLine(line string) bool {
+	return isClaudeCodeSpinner(strings.TrimSpace(line))
+}
+
 // maxScanLines limits how many non-empty lines from the bottom of the
 // screen we inspect. Scanning too far up risks false positives from
 // stale output. Increased from 5 to support AskUserQuestion which

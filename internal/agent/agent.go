@@ -117,6 +117,22 @@ type ChromeLineFilter interface {
 	IsChromeLine(line string) bool
 }
 
+// GetChromeLineFilter returns the agent's IsChromeLine function, or nil if
+// the adapter does not implement ChromeLineFilter. Useful for per-line
+// filtering in hot paths (e.g. scrollback capture) without repeated type
+// assertions.
+func GetChromeLineFilter(agentType config.AgentType) func(string) bool {
+	a, err := Get(agentType)
+	if err != nil {
+		return nil
+	}
+	f, ok := a.(ChromeLineFilter)
+	if !ok {
+		return nil
+	}
+	return f.IsChromeLine
+}
+
 // FilterChromeLines removes lines identified as TUI chrome by the agent's
 // ChromeLineFilter (if implemented). Returns lines unchanged if the adapter
 // does not implement the interface.

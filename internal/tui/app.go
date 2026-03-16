@@ -1479,8 +1479,14 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 	// Drain any lines captured by the Session's VT.Write() scroll-off
 	// detection. These are lines that scrolled off the vt10x grid between
 	// snapshot ticks — too fast for our snapshot-based detection to catch.
+	// Filter out agent chrome lines (e.g. Claude Code spinner) to avoid
+	// polluting the scrollback with transient status text.
 	captured := s.DrainScrollCapture()
+	isChrome := agent.GetChromeLineFilter(s.Project.Agent)
 	for _, cl := range captured {
+		if isChrome != nil && isChrome(cl.Text) {
+			continue
+		}
 		sb.Push(scrollbackLine(cl.Glyphs))
 	}
 	pushed := len(captured)
@@ -1520,6 +1526,9 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		}
 
 		for i := firstDiff; i < end; i++ {
+			if isChrome != nil && isChrome(oldTexts[i]) {
+				continue
+			}
 			sb.Push(oldGlyphs[i])
 			pushed++
 		}
