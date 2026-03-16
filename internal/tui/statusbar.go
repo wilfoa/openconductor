@@ -108,7 +108,7 @@ func (m statusBarModel) View() string {
 	right := strings.Join(rightParts, statusDimStyle.Render("  "))
 
 	leftStr := left.String()
-	available := m.width - lipgloss.Width(leftStr) - lipgloss.Width(right) - 2
+	available := m.width - lipgloss.Width(leftStr) - lipgloss.Width(right) - statusBarHPad
 	if available < 0 {
 		available = 0
 	}

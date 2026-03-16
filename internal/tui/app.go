@@ -645,7 +645,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						s.Mu.RUnlock()
 
 						if vtMode&vt10x.ModeMouseMask != 0 {
-							localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
+							localX := msg.X - screenPadding - sbWidth - terminalPadLeft
 							localY := msg.Y - a.tabBarHeight
 							termW, termH := a.termDimensions()
 							if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
@@ -695,7 +695,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.Mu.RUnlock()
 
 				if vtMode&vt10x.ModeMouseMask != 0 {
-					localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
+					localX := msg.X - screenPadding - sbWidth - terminalPadLeft
 					localY := msg.Y - a.tabBarHeight
 					termW, termH := a.termDimensions()
 					if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
@@ -1201,7 +1201,7 @@ func (a *App) layout() {
 func (a *App) termDimensions() (int, int) {
 	inner := a.innerWidth()
 	sbWidth := a.sidebar.Width()
-	termWidth := inner - sbWidth - 1 // -1 for terminal PaddingLeft(1)
+	termWidth := inner - sbWidth - terminalPadLeft
 	termHeight := a.height - a.tabBarHeight - statusBarRows
 
 	if termWidth < 1 {
@@ -1642,9 +1642,8 @@ func (a App) tabHitTest(localX int) (int, bool) {
 		}
 
 		if localX >= offset && localX < offset+w {
-			// Check if the click is in the close region
-			// (last 4 columns: space + ✕ + padding).
-			closeRegionStart := offset + w - 4
+			// Check if the click is in the close region.
+			closeRegionStart := offset + w - tabCloseRegion
 			if localX >= closeRegionStart {
 				return i, true
 			}
