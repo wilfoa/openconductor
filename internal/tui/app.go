@@ -522,7 +522,35 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 
-		// Any keyboard input snaps the terminal back to live view.
+		// PageUp/PageDown: for non-alt-screen sessions (Claude Code),
+		// scroll OpenConductor's scrollback buffer instead of forwarding
+		// to the PTY. CLI agents don't handle PageUp/PageDown, so these
+		// keys are more useful for navigating conversation history.
+		// For alt-screen sessions (OpenCode), forward to the child PTY
+		// as the TUI app handles its own scrolling.
+		if isKey(msg, tea.KeyPgUp) || isKey(msg, tea.KeyPgDown) {
+			if !a.terminal.altScreen {
+				a.syncTerminalFromSession()
+				pageSize := a.terminal.height / 2
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				if isKey(msg, tea.KeyPgUp) {
+					a.terminal.ScrollBy(pageSize)
+				} else {
+					a.terminal.ScrollBy(-pageSize)
+				}
+				if sid := a.terminal.sessionID; sid != "" {
+					a.scrollOffsets[sid] = a.terminal.scrollOffset
+					a.scrollPinned[sid] = a.terminal.scrollPinned
+				}
+				return a, nil
+			}
+			// Alt-screen: fall through to forward to PTY below.
+		}
+
+		// Any keyboard input (except scroll keys handled above) snaps
+		// the terminal back to live view.
 		if a.terminal.InScrollMode() {
 			a.terminal.ScrollToBottom()
 			if sid := a.terminal.sessionID; sid != "" {
