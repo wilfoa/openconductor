@@ -115,6 +115,13 @@ type ProjectDeletedMsg struct {
 	Name string
 }
 
+// FocusTerminalMsg is sent when the sidebar wants to return focus to the
+// terminal. When ForwardEsc is true, an Esc keypress is also forwarded to
+// the active session's PTY (e.g. to dismiss a dialog in OpenCode).
+type FocusTerminalMsg struct {
+	ForwardEsc bool
+}
+
 // FormCancelledMsg is sent when the add-project form is cancelled.
 type FormCancelledMsg struct{}
 

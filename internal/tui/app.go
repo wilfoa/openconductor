@@ -850,6 +850,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.startSessionCmd(project, true))
 		return a, tea.Batch(cmds...)
 
+	case FocusTerminalMsg:
+		a.focus = focusTerminal
+		a.sidebar.focused = false
+		a.terminal.focused = true
+		if msg.ForwardEsc {
+			if s := a.mgr.ActiveSession(); s != nil {
+				s.Write([]byte{0x1b}) // Esc
+			}
+		}
+		return a, nil
+
 	case ProjectDeletedMsg:
 		name := msg.Name
 

@@ -107,6 +107,12 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 
 	default: // sidebarNormal
 		switch {
+		case isKey(msg, tea.KeyEscape):
+			// Esc in sidebar → focus terminal. The app handler forwards
+			// the Esc to the PTY so the agent (e.g. OpenCode) can
+			// dismiss dialogs.
+			return m, func() tea.Msg { return FocusTerminalMsg{ForwardEsc: true} }
+
 		case isRuneKey(msg, 'a'):
 			return m.openForm()
 
