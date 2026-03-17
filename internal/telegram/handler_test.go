@@ -303,26 +303,25 @@ func TestQuestionKeyboard_MatchesOptions(t *testing.T) {
 	options := []string{"1. Create file", "2. Edit file", "3. Delete file"}
 	kb := QuestionKeyboard("proj", options)
 
-	// QuestionKeyboard puts all buttons in one row.
-	if len(kb.InlineKeyboard) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(kb.InlineKeyboard))
-	}
-	row := kb.InlineKeyboard[0]
-	if len(row) != 3 {
-		t.Fatalf("expected 3 buttons, got %d", len(row))
+	// QuestionKeyboard stacks buttons vertically (one per row).
+	if len(kb.InlineKeyboard) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(kb.InlineKeyboard))
 	}
 
 	// Button labels should be the full option text with emoji prefix.
-	for i, btn := range row {
+	for i, row := range kb.InlineKeyboard {
+		if len(row) != 1 {
+			t.Fatalf("row %d: expected 1 button, got %d", i, len(row))
+		}
 		want := "🟣 " + options[i]
-		if btn.Text != want {
-			t.Errorf("button %d: expected label %q, got %q", i, want, btn.Text)
+		if row[0].Text != want {
+			t.Errorf("button %d: expected label %q, got %q", i, want, row[0].Text)
 		}
 	}
 
 	// Callback data should contain just the number.
-	for i, btn := range row {
-		parts := strings.SplitN(*btn.CallbackData, ":", 3)
+	for i, row := range kb.InlineKeyboard {
+		parts := strings.SplitN(*row[0].CallbackData, ":", 3)
 		expectedNum := extractLeadingNumber(options[i])
 		if parts[2] != expectedNum {
 			t.Errorf("button %d: expected action %q, got %q", i, expectedNum, parts[2])
@@ -333,12 +332,11 @@ func TestQuestionKeyboard_MatchesOptions(t *testing.T) {
 func TestQuestionKeyboard_ParenFormat(t *testing.T) {
 	options := []string{"1) Yes", "2) No"}
 	kb := QuestionKeyboard("proj", options)
-	row := kb.InlineKeyboard[0]
-	if len(row) != 2 {
-		t.Fatalf("expected 2 buttons, got %d", len(row))
+	if len(kb.InlineKeyboard) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(kb.InlineKeyboard))
 	}
 	// "1) Yes" → number should be "1".
-	parts := strings.SplitN(*row[0].CallbackData, ":", 3)
+	parts := strings.SplitN(*kb.InlineKeyboard[0][0].CallbackData, ":", 3)
 	if parts[2] != "1" {
 		t.Errorf("expected action '1', got %q", parts[2])
 	}

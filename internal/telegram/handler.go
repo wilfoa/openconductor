@@ -381,15 +381,17 @@ func ErrorKeyboard(project string) tgbotapi.InlineKeyboardMarkup {
 // QuestionKeyboard returns an inline keyboard for question options.
 // Each option gets a purple circle prefix for visual distinction.
 func QuestionKeyboard(project string, options []string) tgbotapi.InlineKeyboardMarkup {
-	var buttons []tgbotapi.InlineKeyboardButton
+	// Stack buttons vertically (one per row) for readability — question
+	// option labels are often long and don't fit side-by-side.
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(options))
 	for _, opt := range options {
 		// Extract just the leading number (before "." or ")").
 		num := extractLeadingNumber(strings.TrimSpace(opt))
-		buttons = append(buttons,
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🟣 "+opt, FormatCallbackData("opt", project, num)),
-		)
+		))
 	}
-	return tgbotapi.NewInlineKeyboardMarkup(buttons)
+	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 // extractLeadingNumber returns the leading digits from a string.
@@ -419,11 +421,12 @@ func ParseQuestionOptions(lines []string) []string {
 		}
 	}
 
-	// If no dialog footer found, try a broader scan for "select" + "dismiss".
+	// If no dialog footer found, try a broader scan for "select" + ("dismiss" or "cancel").
+	// Claude Code uses "Esc to cancel" while OpenCode uses "esc dismiss".
 	if footerIdx < 0 {
 		for i := len(lines) - 1; i >= 0; i-- {
 			lower := strings.ToLower(strings.TrimSpace(lines[i]))
-			if strings.Contains(lower, "select") && strings.Contains(lower, "dismiss") {
+			if strings.Contains(lower, "select") && (strings.Contains(lower, "dismiss") || strings.Contains(lower, "cancel")) {
 				footerIdx = i
 				break
 			}
@@ -443,8 +446,9 @@ func ParseQuestionOptions(lines []string) []string {
 		if trimmed == "" {
 			continue
 		}
-		// Strip leading box-drawing border characters (│, ┃) from OpenCode dialogs.
-		stripped := strings.TrimLeft(trimmed, "│┃|▏▎ ")
+		// Strip leading border/cursor characters from agent dialogs.
+		// OpenCode uses box-drawing (│, ┃); Claude Code uses › cursor.
+		stripped := strings.TrimLeft(trimmed, "│┃|▏▎›❯ ")
 		stripped = strings.TrimSpace(stripped)
 		if stripped == "" {
 			continue
@@ -455,7 +459,7 @@ func ParseQuestionOptions(lines []string) []string {
 			continue
 		}
 		// Indented text (description line for a previous option) — skip but keep scanning.
-		if strings.HasPrefix(trimmed, " ") || strings.HasPrefix(trimmed, "│") || strings.HasPrefix(trimmed, "┃") {
+		if strings.HasPrefix(trimmed, " ") || strings.HasPrefix(trimmed, "│") || strings.HasPrefix(trimmed, "┃") || strings.HasPrefix(trimmed, "›") {
 			continue
 		}
 		// Non-option, non-indented line — we've left the dialog. Stop.
