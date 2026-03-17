@@ -60,9 +60,13 @@ func hasClaudeSession(repoPath string) bool {
 	if err != nil {
 		return false
 	}
-	// Claude Code encodes the repo path by replacing "/" with "-".
-	// The leading "-" is kept (e.g. "/Users/amir" → "-Users-amir").
-	encoded := strings.ReplaceAll(repoPath, "/", "-")
+	// Claude Code encodes the repo path by:
+	// 1. Stripping the trailing slash (if any)
+	// 2. Replacing "/" and "_" with "-"
+	// Example: "/Users/amir/Development/safe_gan/" → "-Users-amir-Development-safe-gan"
+	clean := strings.TrimRight(repoPath, "/")
+	encoded := strings.ReplaceAll(clean, "/", "-")
+	encoded = strings.ReplaceAll(encoded, "_", "-")
 	dir := filepath.Join(home, ".claude", "projects", encoded)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
