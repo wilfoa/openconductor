@@ -38,7 +38,7 @@ func (a *opencodeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd
 		args = append(args, "--continue")
 	}
 	cmd := exec.Command("opencode", args...)
-	cmd.Dir = repoPath
+	cmd.Dir = strings.TrimRight(repoPath, "/")
 	return cmd
 }
 
@@ -776,11 +776,12 @@ func (a *opencodeAdapter) LoadHistory(repoPath string) ([]string, error) {
 	}
 
 	// Find the most recent session for this directory.
-	// OpenCode stores absolute paths in session.directory.
+	// OpenCode stores absolute paths without trailing slashes.
 	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
 		absRepo = repoPath
 	}
+	absRepo = strings.TrimRight(absRepo, "/")
 
 	sessionQuery := `SELECT id FROM session WHERE directory = '` +
 		sqliteEscape(absRepo) +

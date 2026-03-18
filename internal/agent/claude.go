@@ -47,7 +47,7 @@ func (a *claudeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
 	}
 
 	cmd := exec.Command("claude", args...)
-	cmd.Dir = repoPath
+	cmd.Dir = strings.TrimRight(repoPath, "/")
 	return cmd
 }
 
