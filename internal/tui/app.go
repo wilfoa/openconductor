@@ -1590,7 +1590,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		// been fully repainted. Push old non-blank rows that disappeared from
 		// the new screen, so the user can scroll back to see previous content.
 		chromeTop, chromeBottom := agent.ChromeSkipRows(s.Project.Agent)
-		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, chromeTop, chromeBottom)
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, chromeTop, chromeBottom, isChrome)
 	} else if shift == 0 && !altScreen && oldGlyphs != nil {
 		// Non-alt-screen CLI (e.g. Claude Code): large output burst replaced
 		// the entire visible area faster than detectScrollShift's maxShift
@@ -1604,7 +1604,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		if skipBottom < 0 {
 			skipBottom = 0
 		}
-		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, skipBottom)
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, skipBottom, isChrome)
 	}
 
 	// Store current snapshot for next comparison.
@@ -1631,7 +1631,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 //
 // At least minAltDiffRows rows must qualify — small diffs (1-2 rows) are
 // typically just cursor blinks or status updates, not meaningful content loss.
-func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scrollbackLine, curTexts []string, chromeSkipFirst, chromeSkipLast int) int {
+func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scrollbackLine, curTexts []string, chromeSkipFirst, chromeSkipLast int, isChrome func(string) bool) int {
 	const minAltDiffRows = 3
 
 	// Build a set of all current screen text for dedup.
@@ -1664,6 +1664,10 @@ func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scro
 	for i := startRow; i < endRow; i++ {
 		oldText := oldTexts[i]
 		if oldText == "" {
+			continue
+		}
+		// Skip agent chrome lines (spinners, status, completion).
+		if isChrome != nil && isChrome(oldText) {
 			continue
 		}
 		// Skip if the row is unchanged at the same position.

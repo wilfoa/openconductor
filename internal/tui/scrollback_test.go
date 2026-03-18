@@ -789,7 +789,7 @@ func TestPushAltScreenDiff_BasicCapture(t *testing.T) {
 		"footer", // same as old
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// 4 old content rows disappeared (not in curTexts, not at same position).
 	if pushed != 4 {
@@ -833,7 +833,7 @@ func TestPushAltScreenDiff_SkipSmallDiff(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// Only 2 rows changed — below threshold of 3, so nothing pushed.
 	if pushed != 0 {
@@ -869,7 +869,7 @@ func TestPushAltScreenDiff_SkipRowsPresentElsewhere(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// Only "content A" truly disappeared (not anywhere in curTexts).
 	// That's 1 row — below minAltDiffRows, so nothing pushed.
@@ -905,7 +905,7 @@ func TestPushAltScreenDiff_BlankRowsIgnored(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// 3 old content rows disappeared (blank rows skipped).
 	if pushed != 3 {
@@ -1059,7 +1059,7 @@ func TestPushAltScreenDiff_ChromeSkipping(t *testing.T) {
 
 	// With chromeSkipFirst=1, chromeSkipLast=2: skip row 0 and rows 6-7.
 	// Only rows 1-5 are candidates. All 5 old content rows disappeared.
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 1, 2)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 1, 2, nil)
 
 	if pushed != 5 {
 		t.Fatalf("expected 5 pushed rows with chrome skipping, got %d", pushed)
@@ -1085,7 +1085,7 @@ func TestPushAltScreenDiff_ChromeSkipLargerThanScreen(t *testing.T) {
 	oldGlyphs := []scrollbackLine{makeGlyphs("only row")}
 	curTexts := []string{"changed"}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 5, 5)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 5, 5, nil)
 	if pushed != 0 {
 		t.Fatalf("expected 0 pushed for oversized skip, got %d", pushed)
 	}
@@ -1209,7 +1209,7 @@ func TestAltScreenScrollNoDuplication(t *testing.T) {
 
 		// Run the same diff logic as checkScrollback for alt-screen.
 		if prevTexts != nil {
-			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 		}
 
 		prevTexts = curTexts
@@ -1372,7 +1372,7 @@ func TestAltScreenScrollHalfPageNoDuplication(t *testing.T) {
 		}
 
 		if prevTexts != nil {
-			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 		}
 		prevTexts = curTexts
 		prevGlyphs = curGlyphs
@@ -1504,7 +1504,7 @@ func TestAltScreenTraditionalScrollPathNoDuplication(t *testing.T) {
 				t.Logf("frame %d: shift=%d, pushed rows %d-%d", frame, shift, firstDiff, end-1)
 			} else {
 				// Alt-screen diff fallback.
-				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 				if pushed > 0 {
 					t.Logf("frame %d: pushAltScreenDiff pushed %d", frame, pushed)
 				}
@@ -1632,7 +1632,7 @@ func TestAltScreenScrollMixedCapturePaths(t *testing.T) {
 				}
 				shiftCaptures++
 			} else {
-				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 				if pushed > 0 {
 					diffCaptures++
 				}

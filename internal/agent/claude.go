@@ -89,11 +89,31 @@ func (a *claudeAdapter) ApproveSessionKeystroke() []byte { return nil }
 // DenyKeystroke returns "n\n".
 func (a *claudeAdapter) DenyKeystroke() []byte { return []byte("n\n") }
 
-// IsChromeLine returns true for Claude Code spinner/status lines (e.g.
-// "✻ Symbioting…") so they are excluded from scrollback captures and
-// Telegram messages.
+// IsChromeLine returns true for Claude Code chrome lines that should be
+// excluded from scrollback captures and Telegram messages:
+//   - Spinner lines: "✻ Symbioting…", "✱ Effecting… (5m 57s · ↓ 782 tokens)"
+//   - Completion lines: "✱ Brewed for 7m 39s"
+//   - Status/cost lines: "→ repo git:(main) x | in: 16.9K out: 292.1K | ..."
 func (a *claudeAdapter) IsChromeLine(line string) bool {
-	return isClaudeCodeSpinner(strings.TrimSpace(line))
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if isClaudeCodeSpinner(trimmed) {
+		return true
+	}
+	// Completion summary: symbol prefix + duration (e.g. "✱ Brewed for 7m 39s").
+	if rest, ok := hasSymbolPrefix(trimmed); ok {
+		if claudeCompletionDuration.MatchString(rest) {
+			return true
+		}
+	}
+	// Status/cost info line: starts with "→" followed by repo/git info and
+	// pipe-separated stats (tokens, cost, model).
+	if strings.HasPrefix(trimmed, "→") && strings.Contains(trimmed, "|") {
+		return true
+	}
+	return false
 }
 
 // maxScanLines limits how many non-empty lines from the bottom of the
