@@ -621,16 +621,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.X < screenPadding+sbWidth {
-			// Route to sidebar and focus it.
-			if a.focus != focusSidebar {
-				a.focus = focusSidebar
-				a.sidebar.focused = true
-				a.terminal.focused = false
-			}
+			// Route to sidebar.
 			var cmd tea.Cmd
 			a.sidebar, cmd = a.sidebar.Update(msg)
 			if cmd != nil {
+				// Sidebar returned a command (project switch, form open,
+				// etc.) — its handler will set the correct focus. Don't
+				// change focus here to avoid a one-frame gap where
+				// keystrokes go to the sidebar before the cmd is processed.
 				cmds = append(cmds, cmd)
+			} else if a.focus != focusSidebar {
+				// No command — this is a passive click (scroll, navigate).
+				// Focus the sidebar so keyboard shortcuts work.
+				a.focus = focusSidebar
+				a.sidebar.focused = true
+				a.terminal.focused = false
 			}
 		} else {
 			// Right panel: check if click is in the tab bar.
