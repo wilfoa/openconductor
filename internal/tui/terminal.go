@@ -974,6 +974,11 @@ func parseKittyCSI(raw []byte) (tea.KeyMsg, bool) {
 	hasAlt := modBits&2 != 0
 	hasShift := modBits&1 != 0
 
+	// Ctrl+Shift+C → copy terminal content to clipboard.
+	if hasCtrl && hasShift && rune(codepoint) == 'c' {
+		return tea.KeyMsg{Type: tea.KeyCtrlC, Alt: true}, true // Alt flag signals "copy" variant
+	}
+
 	// Ctrl+letter shortcuts for app-level bindings.
 	if hasCtrl {
 		switch rune(codepoint) {

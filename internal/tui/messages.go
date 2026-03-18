@@ -149,3 +149,8 @@ type historyLoadedMsg struct {
 	SessionID string
 	Lines     []string
 }
+
+// clipboardResultMsg signals that a clipboard copy operation completed.
+type clipboardResultMsg struct {
+	Err error
+}

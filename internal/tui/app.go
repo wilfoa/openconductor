@@ -429,7 +429,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return a, tea.Batch(cmds...)
 
+	case clipboardResultMsg:
+		// Brief status flash handled by statusbar (could add later).
+		return a, nil
+
 	case tea.KeyMsg:
+		// Ctrl+Shift+C: copy visible terminal content to clipboard.
+		// The kitty parser encodes this as KeyCtrlC with Alt=true to
+		// distinguish it from plain Ctrl+C.
+		if msg.Type == tea.KeyCtrlC && msg.Alt {
+			return a, a.copyTerminalContent()
+		}
+
 		// Ctrl+C double-tap: first press forwards to PTY and shows hint,
 		// second press within ctrlCWindow exits OpenConductor.
 		if isKey(msg, keys.Quit) {
@@ -1121,6 +1132,32 @@ func (a App) tooSmall() bool {
 // innerWidth returns the usable content width after screen padding.
 func (a App) innerWidth() int {
 	return a.width - 2*screenPadding
+}
+
+// copyTerminalContent copies the visible terminal panel text to the system
+// clipboard. For scrollback mode, it copies the scrollback view; for live
+// mode, it copies the current VT screen. Lines are trimmed of trailing
+// whitespace and trailing blank lines are removed.
+func (a App) copyTerminalContent() tea.Cmd {
+	// Read the visible content from the terminal model.
+	view := a.terminal.View()
+	lines := strings.Split(view, "\n")
+
+	// Trim trailing whitespace from each line and remove trailing blank lines.
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	text := strings.Join(lines, "\n")
+
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		err := cmd.Run()
+		return clipboardResultMsg{Err: err}
+	}
 }
 
 // View renders the complete TUI.
