@@ -135,6 +135,22 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 			}
 			return m, nil
 
+		case isRuneKey(msg, 's'):
+			if len(m.projects) > 0 && m.selected < len(m.projects) {
+				p := m.projects[m.selected]
+				newAgent := config.AgentOpenCode
+				if p.Agent == config.AgentOpenCode {
+					newAgent = config.AgentClaudeCode
+				}
+				return m, func() tea.Msg {
+					return AgentSwitchedMsg{
+						ProjectName: p.Name,
+						NewAgent:    newAgent,
+					}
+				}
+			}
+			return m, nil
+
 		case isRuneKey(msg, 'd'), isRuneKey(msg, 'x'):
 			if len(m.projects) > 0 && m.selected < len(m.projects) {
 				m.mode = sidebarConfirmDelete

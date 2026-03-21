@@ -110,6 +110,14 @@ type ProjectAddedMsg struct {
 	Project config.Project
 }
 
+// AgentSwitchedMsg is sent when the user switches a project's agent type
+// via the sidebar (s key). All existing sessions are stopped and a new
+// session is started with the new agent.
+type AgentSwitchedMsg struct {
+	ProjectName string
+	NewAgent    config.AgentType
+}
+
 // ProjectDeletedMsg is sent when a project is deleted.
 type ProjectDeletedMsg struct {
 	Name string

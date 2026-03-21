@@ -65,6 +65,16 @@ type terminalModel struct {
 	// so scrollback rendering shows ONLY scrollback lines instead of
 	// mixing scrollback with live viewport rows.
 	altScreen bool
+
+	// Selection state for in-app text selection. Used when the child
+	// process does not request mouse tracking (e.g. Claude Code). The
+	// host app handles click-and-drag, highlights selected cells with
+	// reverse video, and copies the selected text to the clipboard on
+	// mouse-up.
+	selActive    bool   // true while the user is dragging
+	selStart     [2]int // [col, row] in display coordinates
+	selEnd       [2]int // [col, row] in display coordinates
+	hasSelection bool   // true after mouse-up with non-empty range
 }
 
 func newTerminalModel() terminalModel {
@@ -281,7 +291,7 @@ func (m terminalModel) viewScrollbackOnly() string {
 		if lineIdx >= 0 && lineIdx < sbLen {
 			glyphs := m.scrollback.Line(lineIdx)
 			if glyphs != nil {
-				m.renderGlyphRow(&sb, glyphs)
+				m.renderGlyphRow(&sb, glyphs, i)
 			}
 		}
 		if i < m.height-1 {
@@ -312,7 +322,7 @@ func (m terminalModel) viewScrollbackMixed() string {
 		lineIdx := sbLen - offset + i
 		glyphs := m.scrollback.Line(lineIdx)
 		if glyphs != nil {
-			m.renderGlyphRow(&sb, glyphs)
+			m.renderGlyphRow(&sb, glyphs, i)
 		}
 		rendered++
 		if rendered < m.height {
@@ -321,6 +331,7 @@ func (m terminalModel) viewScrollbackMixed() string {
 	}
 
 	// Render live viewport rows from the top (no cursor in scrollback view).
+	// Display row is offset by the number of scrollback rows above.
 	for row := 0; row < fromViewport; row++ {
 		m.renderViewportRow(&sb, row, -1)
 		rendered++
@@ -354,6 +365,11 @@ func (m terminalModel) renderViewportRow(sb *strings.Builder, row int, cursorCol
 			g.Mode ^= int16(vtAttrReverse)
 		}
 
+		// Highlight selected cells with reverse video.
+		if m.IsSelected(col, row) {
+			g.Mode ^= int16(vtAttrReverse)
+		}
+
 		if g.FG != curFG || g.BG != curBG || g.Mode != curMode {
 			sb.WriteString(glyphSGR(g))
 			curFG = g.FG
@@ -362,9 +378,9 @@ func (m terminalModel) renderViewportRow(sb *strings.Builder, row int, cursorCol
 		}
 		sb.WriteRune(ch)
 
-		// After drawing the cursor cell, force a fresh SGR on the next
-		// cell so the reverse doesn't bleed.
-		if col == cursorCol {
+		// After drawing the cursor or selection cell, force a fresh SGR
+		// on the next cell so the reverse doesn't bleed.
+		if col == cursorCol || m.IsSelected(col, row) {
 			curFG = vt10x.Color(0xFFFFFFFF)
 			curBG = vt10x.Color(0xFFFFFFFF)
 			curMode = -1
@@ -376,10 +392,11 @@ func (m terminalModel) renderViewportRow(sb *strings.Builder, row int, cursorCol
 	}
 }
 
-// renderGlyphRow writes a stored scrollback line into sb. If the line is
-// shorter than the current terminal width, the remainder is padded with
-// spaces. If longer, it is truncated.
-func (m terminalModel) renderGlyphRow(sb *strings.Builder, glyphs []vt10x.Glyph) {
+// renderGlyphRow writes a stored scrollback line into sb. displayRow is the
+// row index on screen (0 = top), used for selection highlighting. If the
+// line is shorter than the current terminal width, the remainder is padded
+// with spaces. If longer, it is truncated.
+func (m terminalModel) renderGlyphRow(sb *strings.Builder, glyphs []vt10x.Glyph, displayRow int) {
 	var curFG vt10x.Color = vt10x.DefaultFG
 	var curBG vt10x.Color = vt10x.DefaultBG
 	var curMode int16
@@ -395,6 +412,12 @@ func (m terminalModel) renderGlyphRow(sb *strings.Builder, glyphs []vt10x.Glyph)
 		if ch == 0 {
 			ch = ' '
 		}
+
+		// Highlight selected cells with reverse video.
+		if m.IsSelected(col, displayRow) {
+			g.Mode ^= int16(vtAttrReverse)
+		}
+
 		if g.FG != curFG || g.BG != curBG || g.Mode != curMode {
 			sb.WriteString(glyphSGR(g))
 			curFG = g.FG
@@ -402,6 +425,13 @@ func (m terminalModel) renderGlyphRow(sb *strings.Builder, glyphs []vt10x.Glyph)
 			curMode = g.Mode
 		}
 		sb.WriteRune(ch)
+
+		// Force fresh SGR after selection cell so reverse doesn't bleed.
+		if m.IsSelected(col, displayRow) {
+			curFG = vt10x.Color(0xFFFFFFFF)
+			curBG = vt10x.Color(0xFFFFFFFF)
+			curMode = -1
+		}
 	}
 
 	// Pad if scrollback line is shorter than current width.
@@ -420,6 +450,286 @@ func (m terminalModel) renderGlyphRow(sb *strings.Builder, glyphs []vt10x.Glyph)
 	if curFG != vt10x.DefaultFG || curBG != vt10x.DefaultBG || curMode != 0 {
 		sb.WriteString("\x1b[0m")
 	}
+}
+
+// ── In-app text selection ───────────────────────────────────────────────
+
+// StartSelection begins a drag selection at the given display coordinates.
+func (m *terminalModel) StartSelection(col, row int) {
+	col = clampInt(col, 0, m.width-1)
+	row = clampInt(row, 0, m.height-1)
+	m.selActive = true
+	m.selStart = [2]int{col, row}
+	m.selEnd = [2]int{col, row}
+	m.hasSelection = false
+}
+
+// ExtendSelection updates the end point of the current drag.
+func (m *terminalModel) ExtendSelection(col, row int) {
+	col = clampInt(col, 0, m.width-1)
+	row = clampInt(row, 0, m.height-1)
+	m.selEnd = [2]int{col, row}
+}
+
+// EndSelection finalises the drag. If start != end, hasSelection is set.
+func (m *terminalModel) EndSelection() {
+	m.selActive = false
+	m.hasSelection = m.selStart != m.selEnd
+}
+
+// ClearSelection resets all selection state.
+func (m *terminalModel) ClearSelection() {
+	m.selActive = false
+	m.hasSelection = false
+}
+
+// selectionActive reports whether any cells should be highlighted.
+func (m terminalModel) selectionActive() bool {
+	return m.selActive || m.hasSelection
+}
+
+// selNormalized returns the selection endpoints in top-left / bottom-right
+// order regardless of drag direction.
+func (m terminalModel) selNormalized() (startCol, startRow, endCol, endRow int) {
+	s, e := m.selStart, m.selEnd
+	// Ensure s is before e in reading order (top-to-bottom, left-to-right).
+	if s[1] > e[1] || (s[1] == e[1] && s[0] > e[0]) {
+		s, e = e, s
+	}
+	return s[0], s[1], e[0], e[1]
+}
+
+// IsSelected reports whether the cell at (col, row) in display coordinates
+// falls within the current selection range.
+func (m terminalModel) IsSelected(col, row int) bool {
+	if !m.selectionActive() {
+		return false
+	}
+	sc, sr, ec, er := m.selNormalized()
+	if row < sr || row > er {
+		return false
+	}
+	if sr == er {
+		// Single-line selection.
+		return col >= sc && col <= ec
+	}
+	if row == sr {
+		return col >= sc
+	}
+	if row == er {
+		return col <= ec
+	}
+	return true // middle row — fully selected
+}
+
+// SelectedText extracts the text within the current selection from the VT
+// buffer. Each line is trimmed of trailing whitespace. Lines are joined
+// with newlines. Handles both live viewport and scrollback.
+func (m terminalModel) SelectedText() string {
+	if !m.selectionActive() {
+		return ""
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.vt == nil {
+		return ""
+	}
+
+	sc, sr, ec, er := m.selNormalized()
+	var lines []string
+
+	for row := sr; row <= er; row++ {
+		colStart := 0
+		colEnd := m.width - 1
+		if row == sr {
+			colStart = sc
+		}
+		if row == er {
+			colEnd = ec
+		}
+
+		var sb strings.Builder
+		for col := colStart; col <= colEnd; col++ {
+			ch := m.displayCell(col, row)
+			if ch == 0 {
+				ch = ' '
+			}
+			sb.WriteRune(ch)
+		}
+		lines = append(lines, strings.TrimRight(sb.String(), " "))
+	}
+
+	// Drop trailing blank lines.
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// displayCell returns the character at (col, row) in display coordinates,
+// accounting for scrollback offset. row 0 is the top-most visible row.
+func (m terminalModel) displayCell(col, row int) rune {
+	if m.scrollOffset == 0 {
+		// Live viewport.
+		g := m.vt.Cell(col, row)
+		return g.Char
+	}
+
+	sbLen := m.scrollback.Len()
+	offset := m.scrollOffset
+	if offset > sbLen {
+		offset = sbLen
+	}
+
+	if m.altScreen {
+		// Alt-screen scrollback only.
+		startIdx := sbLen - m.height - offset + 1
+		lineIdx := startIdx + row
+		if lineIdx >= 0 && lineIdx < sbLen {
+			if glyphs := m.scrollback.Line(lineIdx); glyphs != nil && col < len(glyphs) {
+				return glyphs[col].Char
+			}
+		}
+		return ' '
+	}
+
+	// Non-alt-screen mixed: scrollback lines at top, then live viewport.
+	fromScrollback := offset
+	if row < fromScrollback {
+		lineIdx := sbLen - offset + row
+		if glyphs := m.scrollback.Line(lineIdx); glyphs != nil && col < len(glyphs) {
+			return glyphs[col].Char
+		}
+		return ' '
+	}
+	vtRow := row - fromScrollback
+	g := m.vt.Cell(col, vtRow)
+	return g.Char
+}
+
+// clampInt returns v clamped to [lo, hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// PlainText returns the visible terminal content as plain text, without any
+// ANSI SGR escape sequences. Use this for clipboard copy instead of View().
+func (m terminalModel) PlainText() string {
+	if !m.active {
+		return ""
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.vt == nil {
+		return ""
+	}
+	if m.scrollOffset > 0 {
+		return m.plainTextScrollback()
+	}
+	return m.plainTextLive()
+}
+
+// plainTextLive extracts plain text from the live vt10x viewport.
+func (m terminalModel) plainTextLive() string {
+	lines := make([]string, 0, m.height)
+	for row := 0; row < m.height; row++ {
+		var sb strings.Builder
+		for col := 0; col < m.width; col++ {
+			g := m.vt.Cell(col, row)
+			ch := g.Char
+			if ch == 0 {
+				ch = ' '
+			}
+			sb.WriteRune(ch)
+		}
+		lines = append(lines, strings.TrimRight(sb.String(), " "))
+	}
+	// Drop trailing blank lines.
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// plainTextScrollback dispatches to the correct plain-text scrollback renderer.
+func (m terminalModel) plainTextScrollback() string {
+	if m.altScreen {
+		return m.plainTextScrollbackOnly()
+	}
+	return m.plainTextScrollbackMixed()
+}
+
+// plainTextScrollbackOnly returns scrollback-only content as plain text
+// (for alt-screen TUI sessions).
+func (m terminalModel) plainTextScrollbackOnly() string {
+	sbLen := m.scrollback.Len()
+	if sbLen == 0 {
+		return ""
+	}
+	offset := m.scrollOffset
+	if offset > sbLen {
+		offset = sbLen
+	}
+	startIdx := sbLen - m.height - offset + 1
+	lines := make([]string, 0, m.height)
+	for i := 0; i < m.height; i++ {
+		lineIdx := startIdx + i
+		if lineIdx >= 0 && lineIdx < sbLen {
+			if glyphs := m.scrollback.Line(lineIdx); glyphs != nil {
+				lines = append(lines, glyphsToText(glyphs))
+				continue
+			}
+		}
+		lines = append(lines, "")
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// plainTextScrollbackMixed returns a mix of scrollback and live viewport as
+// plain text (for non-alt-screen sessions).
+func (m terminalModel) plainTextScrollbackMixed() string {
+	sbLen := m.scrollback.Len()
+	offset := m.scrollOffset
+	if offset > sbLen {
+		offset = sbLen
+	}
+	fromScrollback := offset
+	fromViewport := m.height - fromScrollback
+	lines := make([]string, 0, m.height)
+
+	for i := 0; i < fromScrollback; i++ {
+		lineIdx := sbLen - offset + i
+		if glyphs := m.scrollback.Line(lineIdx); glyphs != nil {
+			lines = append(lines, glyphsToText(glyphs))
+		} else {
+			lines = append(lines, "")
+		}
+	}
+	for row := 0; row < fromViewport; row++ {
+		var sb strings.Builder
+		for col := 0; col < m.width; col++ {
+			g := m.vt.Cell(col, row)
+			ch := g.Char
+			if ch == 0 {
+				ch = ' '
+			}
+			sb.WriteRune(ch)
+		}
+		lines = append(lines, strings.TrimRight(sb.String(), " "))
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // glyphSGR returns an SGR escape sequence that sets the terminal attributes

@@ -1031,3 +1031,40 @@ func TestClaudeCode_FilterIndependentSessions(t *testing.T) {
 		t.Errorf("f1 should strip extended CSI: got %q", got1)
 	}
 }
+
+// ── IsChromeLine ────────────────────────────────────────────────
+
+func TestClaudeCode_IsChromeLine(t *testing.T) {
+	a := &claudeAdapter{}
+	tests := []struct {
+		line string
+		want bool
+	}{
+		// Status line with → (U+2192).
+		{"→ repo git:(main) x | in: 16.9K out: 292.1K | ...", true},
+		// Status line with ➜ (U+279C) — oh-my-zsh/powerlevel10k prompt arrow.
+		{"➜ safe_gan git:(master) ✗ | in: 417.8K out: 669.9K | +4836 -3189 | api: 17408.9s total: 164718.0s | model: Opus 4.6 (1M context) ctx: 417.8K/1000K (42%)", true},
+		// Update banner.
+		{"Update available! Run: brew upgrade claude-code", true},
+		// Spinner lines.
+		{"✻ Symbioting…", true},
+		{"✱ Effecting… (5m 57s · ↓ 782 tokens)", true},
+		// Completion summary.
+		{"✱ Brewed for 7m 39s", true},
+		{"✱ Sock-hopped for 12m 3s", true},
+		// Normal content — must NOT be filtered.
+		{"Hello world", false},
+		{"  const x = 42;", false},
+		{"│ some border text", false},
+		// Arrow without pipes — not a status line.
+		{"→ navigating to next step", false},
+		{"➜ just an arrow", false},
+	}
+
+	for _, tt := range tests {
+		got := a.IsChromeLine(tt.line)
+		if got != tt.want {
+			t.Errorf("IsChromeLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}

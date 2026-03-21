@@ -469,6 +469,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.statusbar.ctrlCHint = false
 		}
 
+		// Any keypress clears an active text selection.
+		if a.terminal.hasSelection {
+			a.terminal.ClearSelection()
+		}
+
 		// Ctrl+J / Ctrl+K: switch to prev/next tab.
 		// Works regardless of which panel is focused.
 		if isKey(msg, tea.KeyCtrlJ) {
@@ -724,6 +729,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Non-alt-screen: use our scrollback buffer.
+				a.terminal.ClearSelection()
 				delta := scrollLinesPerTick
 				if msg.Button == tea.MouseButtonWheelUp {
 					a.terminal.ScrollBy(delta)
@@ -749,15 +755,40 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				s.Mu.RUnlock()
 
+				localX := msg.X - screenPadding - sbWidth - terminalPadLeft
+				localY := msg.Y - a.tabBarHeight
+				termW, termH := a.termDimensions()
+				inBounds := localX >= 0 && localX < termW && localY >= 0 && localY < termH
+
 				if vtMode&vt10x.ModeMouseMask != 0 {
-					localX := msg.X - screenPadding - sbWidth - terminalPadLeft
-					localY := msg.Y - a.tabBarHeight
-					termW, termH := a.termDimensions()
-					if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
+					// Child has mouse tracking — forward events.
+					if inBounds {
 						sgrMode := vtMode&vt10x.ModeMouseSgr != 0
 						motionMode := vtMode&(vt10x.ModeMouseMotion|vt10x.ModeMouseMany) != 0
 						if seq := mouseToBytes(msg, localX, localY, sgrMode, motionMode); seq != nil {
 							s.Write(seq)
+						}
+					}
+				} else if inBounds {
+					// Child has no mouse tracking (e.g. Claude Code) —
+					// handle in-app text selection.
+					switch {
+					case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+						a.terminal.StartSelection(localX, localY)
+					case msg.Action == tea.MouseActionMotion && a.terminal.selActive:
+						a.terminal.ExtendSelection(localX, localY)
+					case msg.Action == tea.MouseActionRelease && a.terminal.selActive:
+						a.terminal.EndSelection()
+						if a.terminal.hasSelection {
+							text := a.terminal.SelectedText()
+							if text != "" {
+								cmds = append(cmds, func() tea.Msg {
+									cmd := exec.Command("pbcopy")
+									cmd.Stdin = strings.NewReader(text)
+									err := cmd.Run()
+									return clipboardResultMsg{Err: err}
+								})
+							}
 						}
 					}
 				}
@@ -876,6 +907,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, nil
+
+	case AgentSwitchedMsg:
+		idx := a.projectIndexByName(msg.ProjectName)
+		if idx < 0 {
+			return a, nil
+		}
+		a.cfg.Projects[idx].Agent = msg.NewAgent
+		a.sidebar.projects = a.cfg.Projects
+
+		// Stop all existing sessions for this project and remove their tabs.
+		for _, s := range a.mgr.GetSessionsByProject(msg.ProjectName) {
+			a.removeTab(s.ID)
+			a.mgr.StopSession(s.ID)
+			delete(sessionChannels, s.ID)
+			delete(a.sessionStates, s.ID)
+			delete(a.stateStickUntil, s.ID)
+			delete(a.autoApproveRuns, s.ID)
+			delete(a.statusbar.states, s.ID)
+		}
+
+		// Save config and start a new session with the new agent.
+		project := a.cfg.Projects[idx]
+		a.focus = focusTerminal
+		a.sidebar.focused = false
+		a.terminal.focused = true
+		cmds = append(cmds, a.saveConfigCmd())
+		cmds = append(cmds, a.startSessionCmd(project, true))
+		return a, tea.Batch(cmds...)
 
 	case ProjectDeletedMsg:
 		name := msg.Name
@@ -1428,6 +1487,10 @@ func (a *App) syncTerminalFromSession() {
 	a.terminal.active = true
 	a.terminal.altScreen = alt
 	a.terminal.sessionID = s.ID
+
+	// Clear any in-app text selection from the previous session.
+	a.terminal.selActive = false
+	a.terminal.hasSelection = false
 
 	// Restore the incoming session's scroll state.
 	a.terminal.scrollOffset = a.scrollOffsets[s.ID]

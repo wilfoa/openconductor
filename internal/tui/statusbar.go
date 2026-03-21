@@ -46,6 +46,7 @@ func (m statusBarModel) View() string {
 			{"j/k", "navigate"},
 			{"^j/k", "tab"},
 			{"n", "new instance"},
+			{"s", "switch agent"},
 			{"a", "add"},
 			{"d", "delete"},
 			{"Ctrl+C", "exit"},

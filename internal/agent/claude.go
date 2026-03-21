@@ -108,9 +108,17 @@ func (a *claudeAdapter) IsChromeLine(line string) bool {
 			return true
 		}
 	}
-	// Status/cost info line: starts with "→" followed by repo/git info and
-	// pipe-separated stats (tokens, cost, model).
-	if strings.HasPrefix(trimmed, "→") && strings.Contains(trimmed, "|") {
+	// Status/cost info line: starts with an arrow character followed by
+	// repo/git info and pipe-separated stats (tokens, cost, model).
+	// Claude Code uses "→" (U+2192) but some prompt themes render "➜"
+	// (U+279C) or other arrow variants.
+	if strings.Contains(trimmed, "|") {
+		if strings.HasPrefix(trimmed, "→") || strings.HasPrefix(trimmed, "➜") {
+			return true
+		}
+	}
+	// "Update available" banner that Claude Code prints at the bottom.
+	if strings.HasPrefix(trimmed, "Update available!") {
 		return true
 	}
 	return false
