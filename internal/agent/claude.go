@@ -4,9 +4,15 @@
 package agent
 
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
@@ -26,16 +32,52 @@ func (a *claudeAdapter) Type() config.AgentType {
 }
 
 // Command returns an *exec.Cmd that launches the "claude" CLI in the given
-// repo directory.
+// repo directory. Always passes --dangerously-skip-permissions so that Claude
+// Code runs without interactive permission prompts (OpenConductor manages
+// approval separately). Passes --continue only when opts.Continue is true
+// (restored tabs, sidebar select) — omitting it for fresh repos avoids
+// "No conversation found to continue" followed by immediate exit.
 func (a *claudeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd {
-	args := []string{}
+	args := []string{"--dangerously-skip-permissions"}
+	if opts.Continue && hasClaudeSession(repoPath) {
+		args = append(args, "--continue")
+	}
 	if opts.Prompt != "" {
 		args = append(args, "--prompt", opts.Prompt)
 	}
 
 	cmd := exec.Command("claude", args...)
-	cmd.Dir = repoPath
+	cmd.Dir = strings.TrimRight(repoPath, "/")
 	return cmd
+}
+
+// hasClaudeSession checks if there are any Claude Code session files for
+// the given repo. Claude Code stores sessions as JSONL files under
+// ~/.claude/projects/<path-encoded-dir>/. If no sessions exist, --continue
+// would cause Claude Code to print "No conversation found" and exit.
+func hasClaudeSession(repoPath string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	// Claude Code encodes the repo path by:
+	// 1. Stripping the trailing slash (if any)
+	// 2. Replacing "/" and "_" with "-"
+	// Example: "/Users/amir/Development/safe_gan/" → "-Users-amir-Development-safe-gan"
+	clean := strings.TrimRight(repoPath, "/")
+	encoded := strings.ReplaceAll(clean, "/", "-")
+	encoded = strings.ReplaceAll(encoded, "_", "-")
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			return true
+		}
+	}
+	return false
 }
 
 // ApproveKeystroke returns "y\n" — Claude Code uses y/n prompts.
@@ -47,25 +89,98 @@ func (a *claudeAdapter) ApproveSessionKeystroke() []byte { return nil }
 // DenyKeystroke returns "n\n".
 func (a *claudeAdapter) DenyKeystroke() []byte { return []byte("n\n") }
 
+// IsChromeLine returns true for Claude Code chrome lines that should be
+// excluded from scrollback captures and Telegram messages:
+//   - Spinner lines: "✻ Symbioting…", "✱ Effecting… (5m 57s · ↓ 782 tokens)"
+//   - Completion lines: "✱ Brewed for 7m 39s"
+//   - Status/cost lines: "→ repo git:(main) x | in: 16.9K out: 292.1K | ..."
+func (a *claudeAdapter) IsChromeLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if isClaudeCodeSpinner(trimmed) {
+		return true
+	}
+	// Completion summary: symbol prefix + duration (e.g. "✱ Brewed for 7m 39s").
+	if rest, ok := hasSymbolPrefix(trimmed); ok {
+		if claudeCompletionDuration.MatchString(rest) {
+			return true
+		}
+	}
+	// Status/cost info line: starts with an arrow character followed by
+	// repo/git info and pipe-separated stats (tokens, cost, model).
+	// Claude Code uses "→" (U+2192) but some prompt themes render "➜"
+	// (U+279C) or other arrow variants.
+	if strings.Contains(trimmed, "|") {
+		if strings.HasPrefix(trimmed, "→") || strings.HasPrefix(trimmed, "➜") {
+			return true
+		}
+	}
+	// "Update available" banner that Claude Code prints at the bottom.
+	if strings.HasPrefix(trimmed, "Update available!") {
+		return true
+	}
+	return false
+}
+
 // maxScanLines limits how many non-empty lines from the bottom of the
 // screen we inspect. Scanning too far up risks false positives from
-// stale output.
-const maxScanLines = 5
+// stale output. Increased from 5 to support AskUserQuestion which
+// renders a multi-line dialog with options above the footer.
+const maxScanLines = 15
 
-// CheckAttention detects Claude Code's working/idle state from its terminal
-// output.
+// claudePermissionPatterns match inline permission prompts that Claude Code
+// renders when requesting approval for tool use, file edits, or bash commands.
+// These are compiled once at package init and reused for every check.
+var claudePermissionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\(y/n\)`),               // "(y/n)"
+	regexp.MustCompile(`\[y/n\]`),               // "[y/n]"
+	regexp.MustCompile(`\(yes/no\)`),            // "(yes/no)"
+	regexp.MustCompile(`\[yes/no\]`),            // "[yes/no]"
+	regexp.MustCompile(`(?i)\bproceed\?\s*$`),   // "Do you want to proceed?"
+	regexp.MustCompile(`(?i)\ballow\b.*\?\s*$`), // "Allow running bash command: git status?"
+}
+
+// claudeCompletionDuration matches the duration part of a completion summary
+// line. Applied to the text AFTER the symbol prefix (e.g. "Baked for 8m 15s").
+// The verb varies (Worked, Baked, Sock-hopped, etc.) so we only anchor on
+// "for <digit>" which is the constant part.
+var claudeCompletionDuration = regexp.MustCompile(`\bfor \d+[smh]`)
+
+// CheckAttention detects Claude Code's working/idle/permission state from its
+// terminal output.
+//
+// The priority order is:
+//
+//  1. Working (spinner) — highest priority, agent is actively processing.
+//  2. Permission prompt — agent is blocked waiting for y/n approval.
+//  3. Idle (prompt) — agent is waiting for the next user message.
+//  4. No signal — nothing detected.
 //
 // Working: Claude Code shows an animated spinner line like "✦ Sublimating…"
 // or "· Sublimating…" — the prefix alternates between ✦ (U+2726) and ·
 // (U+00B7) while a verb + ellipsis describes the current activity.
 //
-// Idle: When the spinner is absent, Claude Code shows "> " as its input
-// prompt. The absence of a spinner + presence of "> " is a definitive
-// signal that the agent is waiting for input (Certain, not Uncertain).
-// This avoids relying on the L2 classifier for the most common idle case.
+// Permission: Claude Code shows inline permission prompts such as
+// "Do you want to proceed? (y/n)" or "Allow running bash command: git status?"
+// When detected, the agent needs user approval before it can continue.
+//
+// Idle: When neither spinner nor permission is found, Claude Code shows its
+// input prompt ("› " with U+203A, or "> " in some terminal renderings).
+// The absence of a spinner + presence of the prompt is a definitive signal
+// that the agent is waiting for input.
+//
+// Completion: Claude Code also prints "* Worked for <duration>" when it
+// finishes a task. This line is a secondary idle signal — if it appears
+// without an active spinner after it, the agent has completed work.
 func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicResult, *attention.AttentionEvent) {
 	hasSpinner := false
+	hasPermission := false
 	hasPrompt := false
+	hasCompletion := false
+	hasQuestion := false       // AskUserQuestion option-selection dialog
+	hasQuestionReview := false // AskUserQuestion review/submit screen
 	scanned := 0
 
 	for i := len(lastLines) - 1; i >= 0 && scanned < maxScanLines; i-- {
@@ -75,6 +190,9 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 		}
 		scanned++
 
+		// Spinner detection — breaks immediately. If the agent is spinning,
+		// any permission text visible is stale (left over in the vt10x buffer
+		// from a prior prompt that was already answered).
 		if isClaudeCodeSpinner(trimmed) {
 			hasSpinner = true
 			logging.Debug("heuristic: claude-code spinner detected",
@@ -82,65 +200,205 @@ func (a *claudeAdapter) CheckAttention(lastLines []string) (attention.HeuristicR
 			)
 			break
 		}
-		// Claude Code's prompt: line ends with "> " (with the trailing
-		// space) or the trimmed content is exactly ">".
-		if !hasPrompt && (strings.HasSuffix(lastLines[i], "> ") || trimmed == ">") {
+
+		// Completion summary: "✱ Baked for 8m 15s" — the agent finished its
+		// task. Must have a symbol prefix + duration, but no "…" (that's a
+		// spinner, not a completion line).
+		if !hasCompletion {
+			if rest, ok := hasSymbolPrefix(trimmed); ok {
+				if claudeCompletionDuration.MatchString(rest) && !strings.Contains(rest, "…") {
+					hasCompletion = true
+					logging.Debug("heuristic: claude-code completion detected",
+						"line", trimmed,
+					)
+				}
+			}
+		}
+
+		// Permission detection — check every scanned line against all
+		// permission patterns. Does not break; we continue scanning to
+		// also look for prompt signals.
+		if !hasPermission {
+			for _, re := range claudePermissionPatterns {
+				if re.MatchString(trimmed) {
+					hasPermission = true
+					logging.Debug("heuristic: claude-code permission detected",
+						"line", trimmed,
+						"pattern", re.String(),
+					)
+					break
+				}
+			}
+		}
+
+		// Claude Code's prompt: "› " (U+203A single right-pointing angle
+		// quotation mark) or ASCII "> ". The raw line is checked for suffix
+		// patterns; trimmed is used for exact match.
+		if !hasPrompt && isClaudeCodePrompt(lastLines[i], trimmed) {
 			hasPrompt = true
 			logging.Debug("heuristic: claude-code prompt detected",
 				"line", trimmed,
 			)
 		}
+
+		// AskUserQuestion detection — Claude Code renders a selection dialog
+		// with a footer containing keyboard hints. The footer patterns are:
+		//   Single:  "Enter to select · ↑/↓ to navigate · Esc to cancel"
+		//   Multi:   "Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel"
+		//   Review:  "Ready to submit your answers?" + Submit/Cancel selection
+		lower := strings.ToLower(trimmed)
+		if !hasQuestion && isClaudeQuestionFooter(lower) {
+			hasQuestion = true
+			logging.Debug("heuristic: claude-code question detected",
+				"line", trimmed,
+			)
+		}
+		if !hasQuestionReview && isClaudeQuestionReview(lower) {
+			hasQuestionReview = true
+			logging.Debug("heuristic: claude-code question review detected",
+				"line", trimmed,
+			)
+		}
 	}
 
+	// Priority: Spinner > Question > Permission > Prompt > Nothing.
 	if hasSpinner {
-		// Agent is actively working — suppress all generic patterns.
+		// Agent is actively working — suppress everything else.
 		return attention.Working, nil
 	}
 
-	if hasPrompt {
-		// No spinner + prompt visible = agent is idle, waiting for input.
+	if hasQuestion {
+		// AskUserQuestion dialog is visible — agent needs answers.
 		return attention.Certain, &attention.AttentionEvent{
-			Type:   attention.NeedsInput,
-			Detail: "claude code is idle, waiting for prompt",
+			Type:   attention.NeedsAnswer,
+			Detail: "claude code question dialog detected",
 			Source: "heuristic",
 		}
 	}
 
+	if hasQuestionReview {
+		// AskUserQuestion review screen — all questions answered. Auto-submit.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsAnswer,
+			Detail: "claude code question confirm tab",
+			Source: "heuristic",
+		}
+	}
+
+	if hasPermission {
+		// Agent is blocked waiting for permission approval.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsPermission,
+			Detail: "claude code permission prompt detected",
+			Source: "heuristic",
+		}
+	}
+
+	if hasPrompt || hasCompletion {
+		// No spinner, no permission + prompt or completion visible = agent is idle.
+		detail := "claude code is idle, waiting for prompt"
+		if hasCompletion && !hasPrompt {
+			detail = "claude code completed task (Worked for ...)"
+		}
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsInput,
+			Detail: detail,
+			Source: "heuristic",
+		}
+	}
+
+	// Dump the last scanned lines to help diagnose false negatives.
+	var debugLines []string
+	s2 := 0
+	for i := len(lastLines) - 1; i >= 0 && s2 < maxScanLines; i-- {
+		t := strings.TrimSpace(lastLines[i])
+		if t == "" {
+			continue
+		}
+		s2++
+		debugLines = append(debugLines, t)
+	}
 	logging.Debug("heuristic: claude-code no signal",
 		"scanned", scanned,
+		"lines", debugLines,
 	)
 	return attention.No, nil
 }
 
-// isClaudeCodeSpinner returns true if the line matches Claude Code's animated
-// status pattern: a prefix character (✦ or ·) followed by a space and a
-// capitalized verb ending in "…".
+// isClaudeQuestionFooter returns true if the line matches the keyboard hints
+// rendered at the bottom of Claude Code's AskUserQuestion dialog.
+// Patterns:
 //
-// Examples:
-//
-//	"✦ Sublimating…"  → true
-//	"· Thinking…"     → true
-//	"· some output"   → false (no trailing …)
-//	"normal text"     → false (no prefix)
-func isClaudeCodeSpinner(line string) bool {
-	// Check for ✦ (U+2726 four-pointed star) prefix.
-	if rest, ok := strings.CutPrefix(line, "✦ "); ok {
-		return isVerbEllipsis(rest)
+//	"enter to select · ↑/↓ to navigate · esc to cancel"
+//	"enter to select · tab/arrow keys to navigate · esc to cancel"
+func isClaudeQuestionFooter(lower string) bool {
+	return strings.Contains(lower, "enter to select") &&
+		strings.Contains(lower, "to navigate") &&
+		strings.Contains(lower, "esc to cancel")
+}
+
+// isClaudeQuestionReview returns true if the line matches Claude Code's
+// AskUserQuestion review/submit screen. The review screen shows
+// "Ready to submit your answers?" or the "Submit answers" option text.
+func isClaudeQuestionReview(lower string) bool {
+	if strings.Contains(lower, "ready to submit your answers") {
+		return true
 	}
-	// Check for · (U+00B7 middle dot) prefix.
-	if rest, ok := strings.CutPrefix(line, "· "); ok {
-		return isVerbEllipsis(rest)
-	}
-	// Check for * (ASCII asterisk, sometimes seen in plain captures).
-	if rest, ok := strings.CutPrefix(line, "* "); ok {
-		return isVerbEllipsis(rest)
+	if strings.Contains(lower, "submit answers") {
+		return true
 	}
 	return false
 }
 
-// isVerbEllipsis returns true if s starts with an uppercase letter and ends
-// with "…" (U+2026 horizontal ellipsis) or "..." (three ASCII dots).
-func isVerbEllipsis(s string) bool {
+// hasSymbolPrefix checks whether line starts with a non-alphanumeric, non-space
+// Unicode character followed by a space. This matches the prefix pattern used
+// by Claude Code's spinner and completion summary lines, which use animated
+// Unicode symbols (✦, ·, ✱, ✻, ❋, *, etc.) that cycle during processing.
+//
+// Returns the text after "<symbol> " and true if the pattern matches.
+func hasSymbolPrefix(line string) (rest string, ok bool) {
+	r, size := utf8.DecodeRuneInString(line)
+	if r == utf8.RuneError || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) {
+		return "", false
+	}
+	if size >= len(line) || line[size] != ' ' {
+		return "", false
+	}
+	return line[size+1:], true
+}
+
+// isClaudeCodeSpinner returns true if the line matches Claude Code's animated
+// status pattern: any non-alphanumeric symbol followed by a space and a
+// capitalized word ending in "…". The word may be followed by stats in parens.
+//
+// Rather than enumerating specific prefix characters (which change across
+// Claude Code versions and animation frames), we accept any symbol prefix.
+//
+// Examples:
+//
+//	"✦ Sublimating…"                                      → true
+//	"· Thinking…"                                         → true
+//	"✱ Slithering… (49m 25s · ↓ 8.3k tokens)"            → true
+//	"✻ Schlepping… (6m 23s · ↓ 589 tokens)"              → true
+//	"* Worked for 56s"                                    → false (no …)
+//	"● Bash(docker compose...)"                           → false (not a verb…)
+//	"normal text"                                         → false (no prefix)
+func isClaudeCodeSpinner(line string) bool {
+	rest, ok := hasSymbolPrefix(line)
+	if !ok {
+		return false
+	}
+	return isSpinnerVerb(rest)
+}
+
+// isSpinnerVerb returns true if s starts with an uppercase letter and contains
+// a word ending in "…" (U+2026) or "..." before any parenthesized stats.
+// The verb can be multi-word (e.g. "Compacting conversation…").
+//
+// To avoid false positives on tool output like "Bash(python3 -c 'import json…)",
+// only tokens BEFORE the first "(" are checked — the ellipsis inside tool
+// arguments is always after a parenthesis.
+func isSpinnerVerb(s string) bool {
 	if s == "" {
 		return false
 	}
@@ -148,7 +406,43 @@ func isVerbEllipsis(s string) bool {
 	if !unicode.IsUpper(runes[0]) {
 		return false
 	}
-	return strings.HasSuffix(s, "…") || strings.HasSuffix(s, "...")
+	// Only look at the part before any parenthesized stats/args.
+	text := s
+	if idx := strings.IndexByte(s, '('); idx >= 0 {
+		text = s[:idx]
+	}
+	return strings.Contains(text, "…") || strings.Contains(text, "...")
+}
+
+// isClaudeCodePrompt returns true if the line looks like Claude Code's input
+// prompt. Claude Code renders "› " (U+203A single right-pointing angle
+// quotation mark) but some terminals or screen captures may show ASCII "> ".
+// The raw line is checked for suffix patterns; trimmed is used for exact match.
+func isClaudeCodePrompt(raw, trimmed string) bool {
+	// ASCII: "> " suffix or bare ">"
+	if strings.HasSuffix(raw, "> ") || trimmed == ">" {
+		return true
+	}
+	// Unicode: "› " (U+203A) suffix or bare "›"
+	if strings.HasSuffix(raw, "› ") || trimmed == "›" {
+		return true
+	}
+	return false
+}
+
+// QuestionKeystroke returns down-arrow sequences to navigate Claude Code's
+// AskUserQuestion dialog to the given option. Like OpenCode, option 1 is the
+// default selection. For option N, (N-1) down arrows are sent. Enter is
+// appended separately by the handler after SubmitDelay (0 for Claude Code).
+func (a *claudeAdapter) QuestionKeystroke(optionNum int) []byte {
+	if optionNum <= 1 {
+		return nil
+	}
+	ks := make([]byte, 0, (optionNum-1)*3)
+	for i := 1; i < optionNum; i++ {
+		ks = append(ks, '\x1b', '[', 'B') // Down arrow: ESC [ B
+	}
+	return ks
 }
 
 // BootstrapFiles returns a placeholder CLAUDE.md for the repository.
@@ -168,4 +462,327 @@ This file provides context to Claude Code about the project.
 `),
 		},
 	}
+}
+
+// ── OutputFilter ────────────────────────────────────────────────────────────
+
+// NewOutputFilter returns a per-session filter that strips CSI escape sequences
+// containing prefix bytes (>, <, =) that vt10x cannot parse. Without this
+// filter, sequences like CSI > 1 u (kitty keyboard protocol) are misparsed as
+// CSI u (cursor restore), teleporting the cursor to position (0,0).
+//
+// The returned function is stateful — it tracks partial escape sequences that
+// may span PTY read boundaries — and must only be used by a single session.
+func (a *claudeAdapter) NewOutputFilter() func([]byte) []byte {
+	f := &csiFilter{}
+	return f.filter
+}
+
+// csiFilter strips CSI sequences with extended prefix bytes (>, <, =) from
+// raw terminal output. These prefix bytes are part of ECMA-48 but vt10x only
+// handles the ? prefix, causing sequences with other prefixes to be misparsed.
+//
+// CSI sequence format: ESC [ (prefix)? (params)* (intermediate)* (final)
+//   - Prefix bytes:       0x3C-0x3F (includes < = > ?)
+//   - Parameter bytes:    0x30-0x3F (digits, semicolons, etc.)
+//   - Intermediate bytes: 0x20-0x2F
+//   - Final byte:         0x40-0x7E
+type csiFilter struct {
+	state   int    // parser state
+	pending []byte // buffered bytes from an incomplete ESC or ESC [ at chunk end
+}
+
+// Parser states.
+const (
+	csiStateNormal = iota // passing through bytes unchanged
+	csiStateEsc           // saw ESC, waiting for next byte
+	csiStateCSI           // saw ESC [, need to check for prefix byte
+	csiStateSkip          // inside an extended CSI, discarding until final byte
+)
+
+// filter processes a chunk of raw PTY data and returns the data with extended
+// CSI sequences removed. It maintains state across calls to handle sequences
+// that span chunk boundaries.
+func (f *csiFilter) filter(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+
+	// Fast path: if no ESC in the data and we're in normal state, return as-is.
+	if f.state == csiStateNormal && !containsByte(data, 0x1B) {
+		return data
+	}
+
+	out := make([]byte, 0, len(data))
+
+	for _, b := range data {
+		switch f.state {
+		case csiStateNormal:
+			if b == 0x1B {
+				// Start of a potential escape sequence. Buffer the ESC
+				// in case we need to pass it through (normal CSI).
+				f.pending = append(f.pending[:0], b)
+				f.state = csiStateEsc
+			} else {
+				out = append(out, b)
+			}
+
+		case csiStateEsc:
+			if b == '[' {
+				// ESC [ — could be a CSI we need to filter.
+				f.pending = append(f.pending, b)
+				f.state = csiStateCSI
+			} else {
+				// Not a CSI (e.g. ESC O for SS3, ESC ] for OSC).
+				// Flush the buffered ESC and this byte.
+				out = append(out, f.pending...)
+				out = append(out, b)
+				f.pending = f.pending[:0]
+				f.state = csiStateNormal
+			}
+
+		case csiStateCSI:
+			// We've seen ESC [. Check if the next byte is an extended prefix.
+			if b == '>' || b == '<' || b == '=' {
+				// Extended CSI — discard the entire sequence.
+				f.pending = f.pending[:0]
+				f.state = csiStateSkip
+			} else {
+				// Normal CSI (no prefix, or ? prefix which vt10x handles).
+				// Flush the buffered ESC [ and this byte.
+				out = append(out, f.pending...)
+				out = append(out, b)
+				f.pending = f.pending[:0]
+				f.state = csiStateNormal
+			}
+
+		case csiStateSkip:
+			// Inside an extended CSI. Discard bytes until the final byte.
+			if b >= 0x40 && b <= 0x7E {
+				// Final byte — sequence is complete, return to normal.
+				f.state = csiStateNormal
+			}
+			// All bytes (parameter, intermediate, and final) are discarded.
+		}
+	}
+
+	return out
+}
+
+// containsByte returns true if b is present in data. Used for the fast path
+// check to avoid allocation when no filtering is needed.
+func containsByte(data []byte, b byte) bool {
+	for _, v := range data {
+		if v == b {
+			return true
+		}
+	}
+	return false
+}
+
+// ── HistoryProvider ─────────────────────────────────────────────────────────
+
+// LoadHistory reads the most recent Claude Code conversation for the given
+// repo and returns formatted text lines suitable for scrollback display.
+//
+// Claude Code stores conversations in ~/.claude/projects/<encoded-path>/
+// where the encoded path replaces "/" with "-". Each session is a JSONL file
+// named <session-uuid>.jsonl containing one JSON object per message/event.
+func (a *claudeAdapter) LoadHistory(repoPath string) ([]string, error) {
+	dir := claudeProjectDir(repoPath)
+	if dir == "" {
+		return nil, nil
+	}
+
+	sessionFile, err := findLatestSession(dir)
+	if err != nil || sessionFile == "" {
+		return nil, nil
+	}
+
+	return parseSessionMessages(sessionFile)
+}
+
+// claudeProjectDir returns the Claude Code project directory for the given
+// repo path, or "" if it does not exist. Claude Code encodes paths by
+// replacing "/" with "-", e.g. "/Users/amir/foo" → "-Users-amir-foo".
+func claudeProjectDir(repoPath string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	// Resolve symlinks and clean the path for consistent encoding.
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+	absPath = filepath.Clean(absPath)
+
+	encoded := strings.ReplaceAll(absPath, string(filepath.Separator), "-")
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return dir
+}
+
+// findLatestSession returns the path to the most recently modified .jsonl
+// session file in the given directory, or "" if none exist.
+func findLatestSession(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+
+	type candidate struct {
+		path    string
+		modTime int64
+	}
+	var candidates []candidate
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			path:    filepath.Join(dir, e.Name()),
+			modTime: info.ModTime().UnixNano(),
+		})
+	}
+
+	if len(candidates) == 0 {
+		return "", nil
+	}
+
+	// Sort by modification time descending — most recent first.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime > candidates[j].modTime
+	})
+
+	return candidates[0].path, nil
+}
+
+// claudeMessage is the minimal structure needed to parse Claude Code's
+// session JSONL entries for history display.
+type claudeMessage struct {
+	Type    string `json:"type"`
+	Message struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
+}
+
+// claudeContentBlock represents a single block in an assistant message's
+// content array.
+type claudeContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// parseSessionMessages reads a Claude Code session JSONL file and extracts
+// user and assistant messages, formatting them with role headers for
+// scrollback display.
+func parseSessionMessages(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var lines []string
+	seenContent := false
+
+	for _, raw := range strings.Split(string(data), "\n") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+
+		var msg claudeMessage
+		if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+			continue // skip malformed lines
+		}
+
+		switch msg.Type {
+		case "user":
+			text := extractUserContent(msg.Message.Content)
+			if text == "" {
+				continue
+			}
+			if seenContent {
+				lines = append(lines, "")
+			}
+			lines = append(lines, "── You ──")
+			lines = append(lines, text)
+			seenContent = true
+
+		case "assistant":
+			text := extractAssistantText(msg.Message.Content)
+			if text == "" {
+				continue
+			}
+			if seenContent {
+				lines = append(lines, "")
+			}
+			lines = append(lines, "── Assistant ──")
+			lines = append(lines, text)
+			seenContent = true
+		}
+	}
+
+	if len(lines) == 0 {
+		return nil, nil
+	}
+	return lines, nil
+}
+
+// extractUserContent extracts the text from a user message's content field.
+// User messages can have content as either a plain string or an array of
+// tool_result blocks (for tool responses).
+func extractUserContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	// Try as a plain string first (most common for user messages).
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+
+	// Not a string — likely a tool_result array. Skip these for history
+	// display since they are internal plumbing, not user-authored text.
+	return ""
+}
+
+// extractAssistantText extracts displayable text from an assistant message's
+// content array. It concatenates all "text" type blocks, skipping "thinking"
+// and "tool_use" blocks.
+func extractAssistantText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var blocks []claudeContentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		// Content might be a single string (unusual for assistant).
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
+		}
+		return ""
+	}
+
+	var texts []string
+	for _, b := range blocks {
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			texts = append(texts, b.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
 }

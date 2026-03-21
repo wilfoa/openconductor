@@ -108,6 +108,10 @@ type App struct {
 	// Set via SetTelegramChannel before starting the program.
 	telegramCh chan<- telegram.Event
 
+	// onProjectAdded, when non-nil, is called when a project is added
+	// via the sidebar. Used to create a Telegram topic for the new project.
+	onProjectAdded func(projectName string)
+
 	// stateStickUntil records the earliest time each project's attention
 	// state can be downgraded to Working. Prevents flip-flop when
 	// transient signals scroll off screen between ticks.
@@ -164,6 +168,11 @@ type App struct {
 	// tabs were open on exit. Set via SetStatePath before starting the
 	// program.
 	statePath string
+
+	// tabBarHeight is the rendered height of the tab bar in rows. Computed
+	// once in layout() from the actual tab style, rather than hardcoded, so
+	// it adapts to style changes or different terminal environments.
+	tabBarHeight int
 }
 
 // NewApp creates the application model from a loaded configuration.
@@ -226,6 +235,11 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		sidebar.openTabs[name] = true
 	}
 
+	// Compute tab bar height from the actual tab style so mouse coordinate
+	// translation is correct regardless of terminal environment.
+	sampleTab := tabStyle.Render("x")
+	tabBarH := strings.Count(sampleTab, "\n") + 1
+
 	return App{
 		cfg:                  cfg,
 		configPath:           configPath,
@@ -251,6 +265,7 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		scrollOffsets:        make(map[string]int),
 		scrollPinned:         make(map[string]bool),
 		pendingRestoreTabs:   openTabs,
+		tabBarHeight:         tabBarH,
 	}
 }
 
@@ -294,6 +309,13 @@ func (a App) SaveStatePublic() {
 // limiting on the receiving side.
 func (a *App) SetTelegramChannel(ch chan<- telegram.Event) {
 	a.telegramCh = ch
+}
+
+// SetOnProjectAdded registers a callback invoked when a project is added
+// via the sidebar form. The Telegram bot uses this to create a Forum Topic
+// for the newly added project.
+func (a *App) SetOnProjectAdded(fn func(projectName string)) {
+	a.onProjectAdded = fn
 }
 
 // SessionManager returns the underlying session manager. Used by the Telegram
@@ -407,7 +429,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return a, tea.Batch(cmds...)
 
+	case clipboardResultMsg:
+		// Brief status flash handled by statusbar (could add later).
+		return a, nil
+
 	case tea.KeyMsg:
+		// Ctrl+Shift+C: copy visible terminal content to clipboard.
+		// The kitty parser encodes this as KeyCtrlC with Alt=true to
+		// distinguish it from plain Ctrl+C.
+		if msg.Type == tea.KeyCtrlC && msg.Alt {
+			return a, a.copyTerminalContent()
+		}
+
 		// Ctrl+C double-tap: first press forwards to PTY and shows hint,
 		// second press within ctrlCWindow exits OpenConductor.
 		if isKey(msg, keys.Quit) {
@@ -434,6 +467,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.ctrlCHint {
 			a.ctrlCHint = false
 			a.statusbar.ctrlCHint = false
+		}
+
+		// Any keypress clears an active text selection.
+		if a.terminal.hasSelection {
+			a.terminal.ClearSelection()
 		}
 
 		// Ctrl+J / Ctrl+K: switch to prev/next tab.
@@ -511,7 +549,35 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 
-		// Any keyboard input snaps the terminal back to live view.
+		// PageUp/PageDown: for non-alt-screen sessions (Claude Code),
+		// scroll OpenConductor's scrollback buffer instead of forwarding
+		// to the PTY. CLI agents don't handle PageUp/PageDown, so these
+		// keys are more useful for navigating conversation history.
+		// For alt-screen sessions (OpenCode), forward to the child PTY
+		// as the TUI app handles its own scrolling.
+		if isKey(msg, tea.KeyPgUp) || isKey(msg, tea.KeyPgDown) {
+			if !a.terminal.altScreen {
+				a.syncTerminalFromSession()
+				pageSize := a.terminal.height / 2
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				if isKey(msg, tea.KeyPgUp) {
+					a.terminal.ScrollBy(pageSize)
+				} else {
+					a.terminal.ScrollBy(-pageSize)
+				}
+				if sid := a.terminal.sessionID; sid != "" {
+					a.scrollOffsets[sid] = a.terminal.scrollOffset
+					a.scrollPinned[sid] = a.terminal.scrollPinned
+				}
+				return a, nil
+			}
+			// Alt-screen: fall through to forward to PTY below.
+		}
+
+		// Any keyboard input (except scroll keys handled above) snaps
+		// the terminal back to live view.
 		if a.terminal.InScrollMode() {
 			a.terminal.ScrollToBottom()
 			if sid := a.terminal.sessionID; sid != "" {
@@ -560,20 +626,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.X < screenPadding+sbWidth {
-			// Route to sidebar and focus it.
-			if a.focus != focusSidebar {
+			// Route to sidebar.
+			var cmd tea.Cmd
+			a.sidebar, cmd = a.sidebar.Update(msg)
+			if cmd != nil {
+				// Sidebar returned a command (project switch, form open,
+				// etc.) — its handler will set the correct focus. Don't
+				// change focus here to avoid a one-frame gap where
+				// keystrokes go to the sidebar before the cmd is processed.
+				cmds = append(cmds, cmd)
+			} else if a.focus != focusSidebar {
+				// No command — this is a passive click (scroll, navigate).
+				// Focus the sidebar so keyboard shortcuts work.
 				a.focus = focusSidebar
 				a.sidebar.focused = true
 				a.terminal.focused = false
 			}
-			var cmd tea.Cmd
-			a.sidebar, cmd = a.sidebar.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
 		} else {
-			// Right panel: check if click is in the tab bar (first 3 rows).
-			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && msg.Y < 3 {
+			// Right panel: check if click is in the tab bar.
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && msg.Y < a.tabBarHeight {
 				// Click outside a tab while editing → cancel edit.
 				localX := msg.X - screenPadding - sbWidth
 				if tabIdx, isClose := a.tabHitTest(localX); tabIdx >= 0 {
@@ -634,8 +705,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						s.Mu.RUnlock()
 
 						if vtMode&vt10x.ModeMouseMask != 0 {
-							localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
-							localY := msg.Y - 3                           // -3 for tab bar height
+							localX := msg.X - screenPadding - sbWidth - terminalPadLeft
+							localY := msg.Y - a.tabBarHeight
 							termW, termH := a.termDimensions()
 							if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
 								sgrMode := vtMode&vt10x.ModeMouseSgr != 0
@@ -658,6 +729,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Non-alt-screen: use our scrollback buffer.
+				a.terminal.ClearSelection()
 				delta := scrollLinesPerTick
 				if msg.Button == tea.MouseButtonWheelUp {
 					a.terminal.ScrollBy(delta)
@@ -683,15 +755,40 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				s.Mu.RUnlock()
 
+				localX := msg.X - screenPadding - sbWidth - terminalPadLeft
+				localY := msg.Y - a.tabBarHeight
+				termW, termH := a.termDimensions()
+				inBounds := localX >= 0 && localX < termW && localY >= 0 && localY < termH
+
 				if vtMode&vt10x.ModeMouseMask != 0 {
-					localX := msg.X - screenPadding - sbWidth - 1 // -1 for terminal PaddingLeft
-					localY := msg.Y - 3                           // -3 for tab bar height
-					termW, termH := a.termDimensions()
-					if localX >= 0 && localX < termW && localY >= 0 && localY < termH {
+					// Child has mouse tracking — forward events.
+					if inBounds {
 						sgrMode := vtMode&vt10x.ModeMouseSgr != 0
 						motionMode := vtMode&(vt10x.ModeMouseMotion|vt10x.ModeMouseMany) != 0
 						if seq := mouseToBytes(msg, localX, localY, sgrMode, motionMode); seq != nil {
 							s.Write(seq)
+						}
+					}
+				} else if inBounds {
+					// Child has no mouse tracking (e.g. Claude Code) —
+					// handle in-app text selection.
+					switch {
+					case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+						a.terminal.StartSelection(localX, localY)
+					case msg.Action == tea.MouseActionMotion && a.terminal.selActive:
+						a.terminal.ExtendSelection(localX, localY)
+					case msg.Action == tea.MouseActionRelease && a.terminal.selActive:
+						a.terminal.EndSelection()
+						if a.terminal.hasSelection {
+							text := a.terminal.SelectedText()
+							if text != "" {
+								cmds = append(cmds, func() tea.Msg {
+									cmd := exec.Command("pbcopy")
+									cmd.Stdin = strings.NewReader(text)
+									err := cmd.Run()
+									return clipboardResultMsg{Err: err}
+								})
+							}
 						}
 					}
 				}
@@ -789,8 +886,52 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sidebar.focused = false
 		a.terminal.focused = true
 
+		// Create a Telegram topic for the new project (non-blocking).
+		if a.onProjectAdded != nil {
+			go a.onProjectAdded(project.Name)
+		}
+
 		// Save config and start session with --continue to pick up any
 		// prior conversation.
+		cmds = append(cmds, a.saveConfigCmd())
+		cmds = append(cmds, a.startSessionCmd(project, true))
+		return a, tea.Batch(cmds...)
+
+	case FocusTerminalMsg:
+		a.focus = focusTerminal
+		a.sidebar.focused = false
+		a.terminal.focused = true
+		if msg.ForwardEsc {
+			if s := a.mgr.ActiveSession(); s != nil {
+				s.Write([]byte{0x1b}) // Esc
+			}
+		}
+		return a, nil
+
+	case AgentSwitchedMsg:
+		idx := a.projectIndexByName(msg.ProjectName)
+		if idx < 0 {
+			return a, nil
+		}
+		a.cfg.Projects[idx].Agent = msg.NewAgent
+		a.sidebar.projects = a.cfg.Projects
+
+		// Stop all existing sessions for this project and remove their tabs.
+		for _, s := range a.mgr.GetSessionsByProject(msg.ProjectName) {
+			a.removeTab(s.ID)
+			a.mgr.StopSession(s.ID)
+			delete(sessionChannels, s.ID)
+			delete(a.sessionStates, s.ID)
+			delete(a.stateStickUntil, s.ID)
+			delete(a.autoApproveRuns, s.ID)
+			delete(a.statusbar.states, s.ID)
+		}
+
+		// Save config and start a new session with the new agent.
+		project := a.cfg.Projects[idx]
+		a.focus = focusTerminal
+		a.sidebar.focused = false
+		a.terminal.focused = true
 		cmds = append(cmds, a.saveConfigCmd())
 		cmds = append(cmds, a.startSessionCmd(project, true))
 		return a, tea.Batch(cmds...)
@@ -861,6 +1002,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case sessionStartedMsg:
+		logging.Info("session started",
+			"session", msg.SessionID,
+		)
 		a.mgr.SetActive(msg.SessionID)
 		a.statusbar.activeName = msg.SessionID
 		a.addTab(msg.SessionID)
@@ -1054,6 +1198,32 @@ func (a App) innerWidth() int {
 	return a.width - 2*screenPadding
 }
 
+// copyTerminalContent copies the visible terminal panel text to the system
+// clipboard. For scrollback mode, it copies the scrollback view; for live
+// mode, it copies the current VT screen. Lines are trimmed of trailing
+// whitespace and trailing blank lines are removed.
+func (a App) copyTerminalContent() tea.Cmd {
+	// Read the visible content from the terminal model.
+	view := a.terminal.View()
+	lines := strings.Split(view, "\n")
+
+	// Trim trailing whitespace from each line and remove trailing blank lines.
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	text := strings.Join(lines, "\n")
+
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		err := cmd.Run()
+		return clipboardResultMsg{Err: err}
+	}
+}
+
 // View renders the complete TUI.
 func (a App) View() string {
 	if !a.ready {
@@ -1174,7 +1344,7 @@ func (a App) tabBarView() string {
 
 func (a *App) layout() {
 	termW, termH := a.termDimensions()
-	panelHeight := a.height - 1 // -1 for status bar
+	panelHeight := a.height - statusBarRows
 
 	a.sidebar.height = panelHeight
 	a.terminal.SetSize(termW, termH)
@@ -1187,8 +1357,8 @@ func (a *App) layout() {
 func (a *App) termDimensions() (int, int) {
 	inner := a.innerWidth()
 	sbWidth := a.sidebar.Width()
-	termWidth := inner - sbWidth - 1 // -1 for terminal PaddingLeft(1)
-	termHeight := a.height - 4       // -1 status bar, -3 tab bar
+	termWidth := inner - sbWidth - terminalPadLeft
+	termHeight := a.height - a.tabBarHeight - statusBarRows
 
 	if termWidth < 1 {
 		termWidth = 1
@@ -1292,6 +1462,7 @@ func (a *App) readPTYOnce(sessionID string, s *session.Session) tea.Cmd {
 func (a *App) syncTerminalFromSession() {
 	s := a.mgr.ActiveSession()
 	if s == nil {
+		logging.Debug("syncTerminal: no active session")
 		return
 	}
 
@@ -1316,6 +1487,10 @@ func (a *App) syncTerminalFromSession() {
 	a.terminal.active = true
 	a.terminal.altScreen = alt
 	a.terminal.sessionID = s.ID
+
+	// Clear any in-app text selection from the previous session.
+	a.terminal.selActive = false
+	a.terminal.hasSelection = false
 
 	// Restore the incoming session's scroll state.
 	a.terminal.scrollOffset = a.scrollOffsets[s.ID]
@@ -1393,6 +1568,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 
 	w, h := s.Width, s.Height
 	altScreen := s.VT.Mode()&vt10x.ModeAltScreen != 0
+	cursorY := s.VT.Cursor().Y
 
 	// Build current screen snapshot (text + glyphs).
 	curTexts := make([]string, h)
@@ -1416,9 +1592,41 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		return 0
 	}
 
+	// Drain any lines captured by the Session's VT.Write() scroll-off
+	// detection. These are lines that scrolled off the vt10x grid between
+	// snapshot ticks — too fast for our snapshot-based detection to catch.
+	// Filter out agent chrome lines (e.g. Claude Code spinner) to avoid
+	// polluting the scrollback with transient status text.
+	captured := s.DrainScrollCapture()
+	isChrome := agent.GetChromeLineFilter(s.Project.Agent)
+	for _, cl := range captured {
+		if isChrome != nil && isChrome(cl.Text) {
+			continue
+		}
+		sb.Push(scrollbackLine(cl.Glyphs))
+	}
+	pushed := len(captured)
+
 	// Detect scroll shift between last snapshot and current screen.
 	shift := detectScrollShift(oldTexts, curTexts)
-	pushed := 0
+
+	// Count how many rows actually changed between snapshots.
+	changedRows := 0
+	for i := 0; i < len(oldTexts) && i < len(curTexts); i++ {
+		if oldTexts[i] != curTexts[i] {
+			changedRows++
+		}
+	}
+	if changedRows > 3 || shift > 0 {
+		logging.Debug("scrollback: snapshot diff",
+			"session", sessionID,
+			"shift", shift,
+			"changedRows", changedRows,
+			"totalRows", h,
+			"altScreen", altScreen,
+			"cursorY", cursorY,
+		)
+	}
 
 	if shift > 0 && oldGlyphs != nil {
 		// Traditional scroll detected — push scrolled-off rows.
@@ -1434,6 +1642,9 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		}
 
 		for i := firstDiff; i < end; i++ {
+			if isChrome != nil && isChrome(oldTexts[i]) {
+				continue
+			}
 			sb.Push(oldGlyphs[i])
 			pushed++
 		}
@@ -1441,12 +1652,22 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		// Alt-screen TUI app: no traditional scroll, but the screen may have
 		// been fully repainted. Push old non-blank rows that disappeared from
 		// the new screen, so the user can scroll back to see previous content.
-		//
-		// Skip TUI chrome rows configured by the agent adapter (e.g. OpenCode
-		// skips row 0 header and last 2 rows for status bar + footer). These
-		// change frequently and would pollute the scrollback buffer with noise.
 		chromeTop, chromeBottom := agent.ChromeSkipRows(s.Project.Agent)
-		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, chromeTop, chromeBottom)
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, chromeTop, chromeBottom, isChrome)
+	} else if shift == 0 && !altScreen && oldGlyphs != nil {
+		// Non-alt-screen CLI (e.g. Claude Code): large output burst replaced
+		// the entire visible area faster than detectScrollShift's maxShift
+		// (height/2) can track. Push old rows that disappeared, but ONLY
+		// rows above the cursor position — content at/below the cursor is
+		// "active" (spinner, prompt) being updated in-place, not content
+		// that scrolled off. Without this limit, the spinner line gets
+		// pushed to scrollback on every tick because its text changes
+		// (different time counter, animation character).
+		skipBottom := h - cursorY
+		if skipBottom < 0 {
+			skipBottom = 0
+		}
+		pushed = pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, skipBottom, isChrome)
 	}
 
 	// Store current snapshot for next comparison.
@@ -1473,7 +1694,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 //
 // At least minAltDiffRows rows must qualify — small diffs (1-2 rows) are
 // typically just cursor blinks or status updates, not meaningful content loss.
-func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scrollbackLine, curTexts []string, chromeSkipFirst, chromeSkipLast int) int {
+func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scrollbackLine, curTexts []string, chromeSkipFirst, chromeSkipLast int, isChrome func(string) bool) int {
 	const minAltDiffRows = 3
 
 	// Build a set of all current screen text for dedup.
@@ -1506,6 +1727,10 @@ func pushAltScreenDiff(sb *scrollbackBuffer, oldTexts []string, oldGlyphs []scro
 	for i := startRow; i < endRow; i++ {
 		oldText := oldTexts[i]
 		if oldText == "" {
+			continue
+		}
+		// Skip agent chrome lines (spinners, status, completion).
+		if isChrome != nil && isChrome(oldText) {
 			continue
 		}
 		// Skip if the row is unchanged at the same position.
@@ -1590,9 +1815,8 @@ func (a App) tabHitTest(localX int) (int, bool) {
 		}
 
 		if localX >= offset && localX < offset+w {
-			// Check if the click is in the close region
-			// (last 4 columns: space + ✕ + padding).
-			closeRegionStart := offset + w - 4
+			// Check if the click is in the close region.
+			closeRegionStart := offset + w - tabCloseRegion
 			if localX >= closeRegionStart {
 				return i, true
 			}
@@ -1832,6 +2056,27 @@ func (a *App) checkAttention() {
 		if event != nil {
 			// Auto-approve permission requests when the project is configured
 			// to do so and the classifier identifies the category as allowed.
+			// Auto-confirm "Always allow" second-stage dialog. After
+			// selecting "Allow always" on a permission (via auto-approve
+			// or Telegram button), OpenCode shows a confirmation dialog
+			// with "Confirm" already highlighted. Press Enter to proceed.
+			// Must run BEFORE auto-approve — otherwise auto-approve
+			// consumes the NeedsPermission event and sends the wrong
+			// keystroke to the confirm dialog.
+			if event.Type == attention.NeedsPermission && strings.Contains(event.Detail, "auto-confirm") {
+				s.Write([]byte("\r"))
+				a.sessionStates[sessionID] = StateWorking
+				a.statusbar.states[sessionID] = StateWorking
+				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+				delete(a.stateStickUntil, sessionID)
+				delete(a.autoApproveRuns, sessionID)
+				logging.Info("auto-confirm: confirmed always-allow dialog",
+					"project", projectName,
+					"session", sessionID,
+				)
+				continue
+			}
+
 			if event.Type == attention.NeedsPermission && a.autoApprover != nil {
 				adapter, adapterErr := agent.Get(s.Project.Agent)
 				if adapterErr == nil {
@@ -1856,7 +2101,25 @@ func (a *App) checkAttention() {
 						} else {
 							// Send the approval keystroke to the PTY and treat
 							// the session as Working — no notification needed.
+							logging.Info("auto-approve: sending keystroke",
+								"project", projectName,
+								"session", sessionID,
+								"run", a.autoApproveRuns[sessionID],
+								"bytesHex", fmt.Sprintf("%x", result.Keystroke),
+								"bytesLen", len(result.Keystroke),
+							)
 							s.Write(result.Keystroke)
+							// If the keystroke is a navigation sequence (e.g.
+							// Right arrow to "Allow always"), it needs Enter
+							// to confirm the selection. Same logic as the
+							// Telegram handler's writePermKeystroke.
+							ks := result.Keystroke
+							if len(ks) > 0 && ks[len(ks)-1] != '\r' && ks[len(ks)-1] != '\n' {
+								if d := agent.GetSubmitDelay(s.Project.Agent); d > 0 {
+									time.Sleep(d)
+								}
+								s.Write([]byte("\r"))
+							}
 							a.sessionStates[sessionID] = StateWorking
 							a.statusbar.states[sessionID] = StateWorking
 							a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
@@ -1865,6 +2128,23 @@ func (a *App) checkAttention() {
 						}
 					}
 				}
+			}
+
+			// Auto-confirm question series Confirm tab. After the user
+			// answered all questions via Telegram buttons, the dialog
+			// auto-advances to a review screen. Press Enter to submit
+			// the collected answers so the agent can continue.
+			if event.Type == attention.NeedsAnswer && strings.Contains(event.Detail, "confirm tab") {
+				s.Write([]byte("\r"))
+				a.sessionStates[sessionID] = StateWorking
+				a.statusbar.states[sessionID] = StateWorking
+				a.sidebar.states[projectName] = a.aggregateProjectState(projectName)
+				delete(a.stateStickUntil, sessionID)
+				logging.Info("auto-confirm: submitted question series confirm tab",
+					"project", projectName,
+					"session", sessionID,
+				)
+				continue
 			}
 
 			state := attentionEventToState(event)
@@ -1894,6 +2174,13 @@ func (a *App) checkAttention() {
 					// Send Telegram event on attention state transitions.
 					a.sendTelegramEvent(projectName, sessionID, state, event.Detail, lines)
 				}
+			} else if isAttentionState(state) {
+				// Same attention state — re-send to Telegram so question
+				// series (Asking→Asking with different content) deliver
+				// each new question. The bridge dedup drops identical
+				// screens, so only genuinely new content triggers a send.
+				a.stateStickUntil[sessionID] = now.Add(stateStickDuration)
+				a.sendTelegramEvent(projectName, sessionID, state, event.Detail, lines)
 			}
 			a.sessionStates[sessionID] = state
 			a.statusbar.states[sessionID] = state
@@ -1923,6 +2210,8 @@ func (a *App) checkAttention() {
 				delete(a.autoApproveRuns, sessionID)
 			} else if s.State == session.StateRunning && prevState == StateWorking {
 				// Working → Idle (agent finished responding).
+				a.sessionStates[sessionID] = StateIdle
+				a.statusbar.states[sessionID] = StateIdle
 				a.sendTelegramEvent(projectName, sessionID, StateIdle, "", lines)
 			}
 		}

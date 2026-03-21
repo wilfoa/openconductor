@@ -30,6 +30,38 @@ var (
 	defaultSidebarWidth = 26
 	minSidebarWidth     = 20
 	screenPadding       = 1 // horizontal padding on each side of the screen
+	statusBarRows       = 1 // status bar is always 1 row
+)
+
+// Derived layout values — computed from the styles above so that changes
+// to padding, borders, or margins propagate automatically. These are set
+// in init() after the style vars are initialised.
+var (
+	// terminalPadLeft is the left-padding the terminal style applies.
+	// Used to translate screen X to PTY X and to compute terminal width.
+	terminalPadLeft int
+
+	// sidebarHPad is the total horizontal padding of the sidebar style
+	// (left + right). Used to compute the inner width available for
+	// sidebar content.
+	sidebarHPad int
+
+	// sidebarTopPadding is the top padding of the sidebar style. Used
+	// for mouse click hit-testing against sidebar items.
+	sidebarTopPadding int
+
+	// activeProjectBorderW is the horizontal frame size (borders) of
+	// the selected project item style. Used to compute the available
+	// content width inside the accent-bar selection indicator.
+	activeProjectBorderW int
+
+	// tabCloseRegion is the width of the clickable close-button region
+	// at the right end of each tab (right padding + "✕" + space).
+	tabCloseRegion int
+
+	// statusBarHPad is the total horizontal padding of the status bar
+	// style. Used to compute the gap between left and right content.
+	statusBarHPad int
 
 	// Minimum host terminal dimensions below which the app shows a
 	// "terminal too small" overlay instead of the normal UI. These are
@@ -203,3 +235,20 @@ var (
 	emptyHintStyle = lipgloss.NewStyle().Foreground(colorMuted)
 	addButtonStyle = lipgloss.NewStyle().Foreground(colorPrimary)
 )
+
+func init() {
+	// Derive layout values from the styles so that changes to padding,
+	// borders, or margins propagate automatically to coordinate
+	// calculations and hit-testing.
+	terminalPadLeft = terminalStyle.GetPaddingLeft()
+	sidebarHPad = sidebarStyle.GetHorizontalPadding()
+	sidebarTopPadding = sidebarStyle.GetPaddingTop()
+	activeProjectBorderW = projectActiveStyle.GetHorizontalBorderSize()
+	statusBarHPad = statusBarStyle.GetHorizontalPadding()
+
+	// Tab close region: right padding + " ✕" (space + icon).
+	// The close icon "✕" is 1 visual column; the space before it is 1.
+	closeIconWidth := lipgloss.Width(" ✕")
+	tabRightPad := tabStyle.GetPaddingRight()
+	tabCloseRegion = tabRightPad + closeIconWidth
+}

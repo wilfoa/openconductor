@@ -369,7 +369,7 @@ func TestRenderGlyphRowPreservesColor(t *testing.T) {
 	}
 
 	var sb strings.Builder
-	tm.renderGlyphRow(&sb, glyphs)
+	tm.renderGlyphRow(&sb, glyphs, 0)
 	result := sb.String()
 
 	// Should contain an SGR sequence for red foreground.
@@ -392,7 +392,7 @@ func TestRenderGlyphRowPadsShorterLine(t *testing.T) {
 	}
 
 	var sb strings.Builder
-	tm.renderGlyphRow(&sb, glyphs)
+	tm.renderGlyphRow(&sb, glyphs, 0)
 	result := sb.String()
 
 	// Count visible characters (X + spaces for padding).
@@ -789,7 +789,7 @@ func TestPushAltScreenDiff_BasicCapture(t *testing.T) {
 		"footer", // same as old
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// 4 old content rows disappeared (not in curTexts, not at same position).
 	if pushed != 4 {
@@ -833,7 +833,7 @@ func TestPushAltScreenDiff_SkipSmallDiff(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// Only 2 rows changed — below threshold of 3, so nothing pushed.
 	if pushed != 0 {
@@ -869,7 +869,7 @@ func TestPushAltScreenDiff_SkipRowsPresentElsewhere(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// Only "content A" truly disappeared (not anywhere in curTexts).
 	// That's 1 row — below minAltDiffRows, so nothing pushed.
@@ -905,7 +905,7 @@ func TestPushAltScreenDiff_BlankRowsIgnored(t *testing.T) {
 		"footer",
 	}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 0, 0, nil)
 
 	// 3 old content rows disappeared (blank rows skipped).
 	if pushed != 3 {
@@ -1059,7 +1059,7 @@ func TestPushAltScreenDiff_ChromeSkipping(t *testing.T) {
 
 	// With chromeSkipFirst=1, chromeSkipLast=2: skip row 0 and rows 6-7.
 	// Only rows 1-5 are candidates. All 5 old content rows disappeared.
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 1, 2)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 1, 2, nil)
 
 	if pushed != 5 {
 		t.Fatalf("expected 5 pushed rows with chrome skipping, got %d", pushed)
@@ -1085,7 +1085,7 @@ func TestPushAltScreenDiff_ChromeSkipLargerThanScreen(t *testing.T) {
 	oldGlyphs := []scrollbackLine{makeGlyphs("only row")}
 	curTexts := []string{"changed"}
 
-	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 5, 5)
+	pushed := pushAltScreenDiff(sb, oldTexts, oldGlyphs, curTexts, 5, 5, nil)
 	if pushed != 0 {
 		t.Fatalf("expected 0 pushed for oversized skip, got %d", pushed)
 	}
@@ -1209,7 +1209,7 @@ func TestAltScreenScrollNoDuplication(t *testing.T) {
 
 		// Run the same diff logic as checkScrollback for alt-screen.
 		if prevTexts != nil {
-			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 		}
 
 		prevTexts = curTexts
@@ -1372,7 +1372,7 @@ func TestAltScreenScrollHalfPageNoDuplication(t *testing.T) {
 		}
 
 		if prevTexts != nil {
-			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+			pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 		}
 		prevTexts = curTexts
 		prevGlyphs = curGlyphs
@@ -1504,7 +1504,7 @@ func TestAltScreenTraditionalScrollPathNoDuplication(t *testing.T) {
 				t.Logf("frame %d: shift=%d, pushed rows %d-%d", frame, shift, firstDiff, end-1)
 			} else {
 				// Alt-screen diff fallback.
-				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 				if pushed > 0 {
 					t.Logf("frame %d: pushAltScreenDiff pushed %d", frame, pushed)
 				}
@@ -1632,7 +1632,7 @@ func TestAltScreenScrollMixedCapturePaths(t *testing.T) {
 				}
 				shiftCaptures++
 			} else {
-				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom)
+				pushed := pushAltScreenDiff(tm.scrollback, prevTexts, prevGlyphs, curTexts, chromeTop, chromeBottom, nil)
 				if pushed > 0 {
 					diffCaptures++
 				}
@@ -1689,4 +1689,229 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ── PlainText tests ─────────────────────────────────────────────
+
+// TestPlainText_LiveViewport verifies that PlainText returns the raw characters
+// from the vt10x viewport without any ANSI SGR escape sequences.
+func TestPlainText_LiveViewport(t *testing.T) {
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(20, 3))
+	tm.vt = vt
+	tm.width = 20
+	tm.height = 3
+	tm.active = true
+
+	// Write colored text — SGR codes must NOT appear in PlainText.
+	tm.vt.Write([]byte("\x1b[31mhello\x1b[0m world\r\n"))
+	tm.vt.Write([]byte("line two\r\n"))
+
+	got := tm.PlainText()
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("PlainText contains ANSI escape sequence: %q", got)
+	}
+	if !strings.Contains(got, "hello world") {
+		t.Fatalf("PlainText missing expected text, got: %q", got)
+	}
+	if !strings.Contains(got, "line two") {
+		t.Fatalf("PlainText missing 'line two', got: %q", got)
+	}
+}
+
+// TestPlainText_Inactive verifies that PlainText returns "" when not active.
+func TestPlainText_Inactive(t *testing.T) {
+	tm := newTerminalModel()
+	tm.active = false
+	if got := tm.PlainText(); got != "" {
+		t.Fatalf("expected empty string for inactive terminal, got %q", got)
+	}
+}
+
+// TestPlainText_Scrollback verifies that PlainText returns scrollback content
+// as plain text when scrollOffset > 0 (alt-screen mode).
+func TestPlainText_Scrollback(t *testing.T) {
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(20, 3))
+	tm.vt = vt
+	tm.width = 20
+	tm.height = 3
+	tm.active = true
+	tm.altScreen = true
+
+	// Pre-populate scrollback with known lines.
+	tm.scrollback.Push(makeGlyphs("scrollback line 1"))
+	tm.scrollback.Push(makeGlyphs("scrollback line 2"))
+	tm.scrollback.Push(makeGlyphs("scrollback line 3"))
+	tm.scrollOffset = 1
+
+	got := tm.PlainText()
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("PlainText contains ANSI escape sequence in scrollback mode: %q", got)
+	}
+	if !strings.Contains(got, "scrollback line") {
+		t.Fatalf("PlainText missing scrollback content, got: %q", got)
+	}
+}
+
+// ── Selection tests ─────────────────────────────────────────────
+
+func TestIsSelected_SingleLine(t *testing.T) {
+	tm := newTerminalModel()
+	tm.width = 20
+	tm.height = 5
+	tm.StartSelection(3, 1)
+	tm.ExtendSelection(8, 1)
+	tm.EndSelection()
+
+	// Cells 3..8 on row 1 should be selected.
+	for col := 3; col <= 8; col++ {
+		if !tm.IsSelected(col, 1) {
+			t.Errorf("expected (%d, 1) to be selected", col)
+		}
+	}
+	// Cell 2 and 9 on same row should NOT be selected.
+	if tm.IsSelected(2, 1) {
+		t.Error("expected (2, 1) to NOT be selected")
+	}
+	if tm.IsSelected(9, 1) {
+		t.Error("expected (9, 1) to NOT be selected")
+	}
+	// Other rows should not be selected.
+	if tm.IsSelected(5, 0) {
+		t.Error("expected (5, 0) to NOT be selected")
+	}
+}
+
+func TestIsSelected_MultiLine(t *testing.T) {
+	tm := newTerminalModel()
+	tm.width = 20
+	tm.height = 5
+	tm.StartSelection(5, 1)
+	tm.ExtendSelection(3, 3)
+	tm.EndSelection()
+
+	// Row 1: cols 5..19 selected.
+	if tm.IsSelected(4, 1) {
+		t.Error("expected (4, 1) to NOT be selected")
+	}
+	if !tm.IsSelected(5, 1) {
+		t.Error("expected (5, 1) to be selected")
+	}
+	if !tm.IsSelected(19, 1) {
+		t.Error("expected (19, 1) to be selected")
+	}
+
+	// Row 2: entirely selected (middle row).
+	if !tm.IsSelected(0, 2) {
+		t.Error("expected (0, 2) to be selected")
+	}
+	if !tm.IsSelected(19, 2) {
+		t.Error("expected (19, 2) to be selected")
+	}
+
+	// Row 3: cols 0..3 selected.
+	if !tm.IsSelected(0, 3) {
+		t.Error("expected (0, 3) to be selected")
+	}
+	if !tm.IsSelected(3, 3) {
+		t.Error("expected (3, 3) to be selected")
+	}
+	if tm.IsSelected(4, 3) {
+		t.Error("expected (4, 3) to NOT be selected")
+	}
+}
+
+func TestIsSelected_Reversed(t *testing.T) {
+	// Drag from bottom-right to top-left.
+	tm := newTerminalModel()
+	tm.width = 20
+	tm.height = 5
+	tm.StartSelection(8, 2)
+	tm.ExtendSelection(3, 1)
+	tm.EndSelection()
+
+	// Should normalize: start=(3,1), end=(8,2).
+	if !tm.IsSelected(3, 1) {
+		t.Error("expected (3, 1) to be selected (reversed drag)")
+	}
+	if !tm.IsSelected(8, 2) {
+		t.Error("expected (8, 2) to be selected (reversed drag)")
+	}
+	if tm.IsSelected(2, 1) {
+		t.Error("expected (2, 1) to NOT be selected")
+	}
+}
+
+func TestSelectedText_LiveViewport(t *testing.T) {
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(20, 3))
+	tm.vt = vt
+	tm.width = 20
+	tm.height = 3
+	tm.active = true
+
+	tm.vt.Write([]byte("hello world\r\n"))
+	tm.vt.Write([]byte("second line\r\n"))
+	tm.vt.Write([]byte("third line"))
+
+	// Select "world" on line 0 (cols 6..10).
+	tm.StartSelection(6, 0)
+	tm.ExtendSelection(10, 0)
+	tm.EndSelection()
+
+	got := tm.SelectedText()
+	if got != "world" {
+		t.Fatalf("expected 'world', got %q", got)
+	}
+}
+
+func TestSelectedText_MultiLine(t *testing.T) {
+	tm := newTerminalModel()
+	vt := vt10x.New(vt10x.WithSize(20, 3))
+	tm.vt = vt
+	tm.width = 20
+	tm.height = 3
+	tm.active = true
+
+	tm.vt.Write([]byte("hello world\r\n"))
+	tm.vt.Write([]byte("second line\r\n"))
+	tm.vt.Write([]byte("third line"))
+
+	// Select from "world" through "second".
+	tm.StartSelection(6, 0)
+	tm.ExtendSelection(5, 1)
+	tm.EndSelection()
+
+	got := tm.SelectedText()
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), got)
+	}
+	if !strings.HasPrefix(lines[0], "world") {
+		t.Errorf("first line should start with 'world', got %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "second") {
+		t.Errorf("second line should start with 'second', got %q", lines[1])
+	}
+}
+
+func TestClearSelection(t *testing.T) {
+	tm := newTerminalModel()
+	tm.width = 20
+	tm.height = 5
+	tm.StartSelection(3, 1)
+	tm.ExtendSelection(8, 1)
+	tm.EndSelection()
+
+	if !tm.hasSelection {
+		t.Fatal("expected hasSelection to be true")
+	}
+	tm.ClearSelection()
+	if tm.hasSelection {
+		t.Fatal("expected hasSelection to be false after ClearSelection")
+	}
+	if tm.IsSelected(5, 1) {
+		t.Error("expected (5, 1) to NOT be selected after ClearSelection")
+	}
 }

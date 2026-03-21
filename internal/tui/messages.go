@@ -110,9 +110,24 @@ type ProjectAddedMsg struct {
 	Project config.Project
 }
 
+// AgentSwitchedMsg is sent when the user switches a project's agent type
+// via the sidebar (s key). All existing sessions are stopped and a new
+// session is started with the new agent.
+type AgentSwitchedMsg struct {
+	ProjectName string
+	NewAgent    config.AgentType
+}
+
 // ProjectDeletedMsg is sent when a project is deleted.
 type ProjectDeletedMsg struct {
 	Name string
+}
+
+// FocusTerminalMsg is sent when the sidebar wants to return focus to the
+// terminal. When ForwardEsc is true, an Esc keypress is also forwarded to
+// the active session's PTY (e.g. to dismiss a dialog in OpenCode).
+type FocusTerminalMsg struct {
+	ForwardEsc bool
 }
 
 // FormCancelledMsg is sent when the add-project form is cancelled.
@@ -141,4 +156,9 @@ type SystemTabExitedMsg struct {
 type historyLoadedMsg struct {
 	SessionID string
 	Lines     []string
+}
+
+// clipboardResultMsg signals that a clipboard copy operation completed.
+type clipboardResultMsg struct {
+	Err error
 }

@@ -22,10 +22,9 @@ const (
 )
 
 // Layout constants for click hit-testing.
-// Sidebar uses Padding(1,1): 1 line top padding.
+// sidebarTopPaddingding is derived from styles in styles.go init().
 // Title "Projects" with MarginBottom(1): 2 content lines.
 const (
-	sidebarTopPad    = 1
 	sidebarTitleRows = 2 // title + margin
 	projectRows      = 3 // name line + agent line + separator
 )
@@ -108,6 +107,12 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 
 	default: // sidebarNormal
 		switch {
+		case isKey(msg, tea.KeyEscape):
+			// Esc in sidebar → focus terminal. The app handler forwards
+			// the Esc to the PTY so the agent (e.g. OpenCode) can
+			// dismiss dialogs.
+			return m, func() tea.Msg { return FocusTerminalMsg{ForwardEsc: true} }
+
 		case isRuneKey(msg, 'a'):
 			return m.openForm()
 
@@ -126,6 +131,22 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 				p := m.projects[m.selected]
 				return m, func() tea.Msg {
 					return NewInstanceMsg{Project: p}
+				}
+			}
+			return m, nil
+
+		case isRuneKey(msg, 's'):
+			if len(m.projects) > 0 && m.selected < len(m.projects) {
+				p := m.projects[m.selected]
+				newAgent := config.AgentOpenCode
+				if p.Agent == config.AgentOpenCode {
+					newAgent = config.AgentClaudeCode
+				}
+				return m, func() tea.Msg {
+					return AgentSwitchedMsg{
+						ProjectName: p.Name,
+						NewAgent:    newAgent,
+					}
 				}
 			}
 			return m, nil
@@ -186,7 +207,7 @@ func (m sidebarModel) handleClick(x, y int) (sidebarModel, tea.Cmd) {
 	switch m.mode {
 	case sidebarNormal:
 		// Check if a project was clicked.
-		projStart := sidebarTopPad + sidebarTitleRows
+		projStart := sidebarTopPadding + sidebarTitleRows
 		for i := range m.projects {
 			projY := projStart + i*projectRows
 			if y == projY || y == projY+1 {
@@ -210,7 +231,7 @@ func (m sidebarModel) handleClick(x, y int) (sidebarModel, tea.Cmd) {
 		// In form step 3, clicking an agent option selects it.
 		if m.form.step == stepAgent {
 			for i := range agentTypes {
-				optionY := sidebarTopPad + formAgentOptionContentStart + i
+				optionY := sidebarTopPadding + formAgentOptionContentStart + i
 				if y == optionY {
 					m.form.selectAgent(i)
 					return m, nil
@@ -220,7 +241,7 @@ func (m sidebarModel) handleClick(x, y int) (sidebarModel, tea.Cmd) {
 		// In form step 4, clicking an approval level option selects it.
 		if m.form.step == stepAutoApprove {
 			for i := range approvalOptions {
-				optionY := sidebarTopPad + formApprovalOptionContentStart + i
+				optionY := sidebarTopPadding + formApprovalOptionContentStart + i
 				if y == optionY {
 					m.form.selectApproval(i)
 					return m, nil
@@ -247,12 +268,12 @@ func (m sidebarModel) openForm() (sidebarModel, tea.Cmd) {
 func (m sidebarModel) addButtonY() int {
 	if len(m.projects) == 0 {
 		// Empty state: title(2) + 2 hint lines + 1 blank
-		return sidebarTopPad + sidebarTitleRows + 3
+		return sidebarTopPadding + sidebarTitleRows + 3
 	}
 	// Each project occupies projectRows (name + agent + separator), but the
 	// last project has no separator — the blank line before the button fills
 	// that slot.  So total = N * projectRows with no extra +1.
-	return sidebarTopPad + sidebarTitleRows + len(m.projects)*projectRows
+	return sidebarTopPadding + sidebarTitleRows + len(m.projects)*projectRows
 }
 
 func (m sidebarModel) View() string {
@@ -274,8 +295,8 @@ func (m sidebarModel) View() string {
 			b.WriteString(emptyHintStyle.Render("a add  t telegram"))
 			b.WriteString("\n")
 		} else {
-			// Inner content width (container has Padding 1 on each side).
-			innerWidth := m.contentWidth - 2
+			// Inner content width (container padding subtracted).
+			innerWidth := m.contentWidth - sidebarHPad
 			if innerWidth < 0 {
 				innerWidth = 0
 			}
@@ -307,7 +328,7 @@ func (m sidebarModel) View() string {
 					}
 					content := nameLine + "\n" + agentLine
 					b.WriteString(projectActiveStyle.
-						Width(innerWidth - 1).
+						Width(innerWidth - activeProjectBorderW).
 						Render(content))
 				} else {
 					// Aligned: " ● name" — badge at col 1, name at col 3.

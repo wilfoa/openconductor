@@ -728,6 +728,135 @@ func TestOpenCode_QuestionOverridesEscInterrupt(t *testing.T) {
 	}
 }
 
+func TestOpenCode_AlwaysAllowConfirmDialog(t *testing.T) {
+	// Second-stage "Always allow" confirmation dialog — should be auto-confirmed.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"▣  Build · claude-opus-4-6",
+		"",
+		"△ Always allow",
+		"This will allow read until OpenCode is restarted.",
+		"",
+		"Confirm  Cancel                                   ⇆ select  enter confirm",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsPermission {
+		t.Fatalf("expected NeedsPermission, got %v", event)
+	}
+	if !strings.Contains(event.Detail, "auto-confirm") {
+		t.Errorf("expected 'auto-confirm' in detail, got %q", event.Detail)
+	}
+}
+
+func TestOpenCode_AlwaysAllowNotFalsePositive(t *testing.T) {
+	// Conversation content mentioning "always allow" should NOT trigger
+	// the auto-confirm when other permission signals are absent.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"▣  Build · claude-opus-4-6 · interrupted",
+		"",
+		"The system will always allow read access...",
+		"",
+		"· · · · ■ ■  esc interrupt",
+	}
+	result, _ := adapter.CheckAttention(lines)
+	// Should detect Working (esc interrupt), not permission.
+	if result != attention.Working {
+		t.Errorf("expected Working, got %v", result)
+	}
+}
+
+func TestOpenCode_QuestionSeriesIntermediateTab(t *testing.T) {
+	// Multi-question series: intermediate tab has "enter confirm" not "enter submit".
+	// Footer: "⇆ tab  ↑↓ select  enter confirm  esc dismiss"
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"Which wizard buttons?   Price update scope   Child selection",
+		"For items 3-5 should the wizard...",
+		"1. Retro-only in wizard",
+		"2. Keep both in wizard",
+		"⇆ tab  ↑↓ select  enter confirm  esc dismiss",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Fatalf("expected NeedsAnswer, got %v", event)
+	}
+	if strings.Contains(event.Detail, "confirm tab") {
+		t.Error("intermediate tab should NOT be detected as confirm tab")
+	}
+}
+
+func TestOpenCode_QuestionSeriesConfirmTab(t *testing.T) {
+	// Multi-question series: Confirm tab has "enter submit" but NO "select".
+	// Footer: "⇆ tab  enter submit  esc dismiss"
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"Which wizard buttons?   Price update scope   Confirm",
+		"Review",
+		"  Wizard buttons: Price update scope",
+		"  Pricing behavior: Retro-only in wizard",
+		"⇆ tab  enter submit  esc dismiss",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Fatalf("expected NeedsAnswer, got %v", event)
+	}
+	if !strings.Contains(event.Detail, "confirm tab") {
+		t.Errorf("expected 'confirm tab' in detail, got %q", event.Detail)
+	}
+}
+
+func TestOpenCode_QuestionSingleSubmit_NotConfirmTab(t *testing.T) {
+	// Single question: "↑↓ select  enter submit  esc dismiss" has BOTH
+	// "select" AND "enter submit" — should be detected as question dialog,
+	// NOT as confirm tab.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"Which framework?",
+		"1. Jest",
+		"2. Vitest",
+		"↑↓ select  enter submit  esc dismiss",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || event.Type != attention.NeedsAnswer {
+		t.Fatalf("expected NeedsAnswer, got %v", event)
+	}
+	// Question dialog should win over confirm tab because it has "select".
+	if strings.Contains(event.Detail, "confirm tab") {
+		t.Error("single-question submit should NOT be detected as confirm tab")
+	}
+}
+
+func TestOpenCode_ConfirmTabOverridesEscInterrupt(t *testing.T) {
+	// Confirm tab must override "esc interrupt" from underlying buffer.
+	adapter := &opencodeAdapter{}
+	lines := []string{
+		"· · · · ■ ■  esc interrupt",
+		"Review",
+		"  Wizard buttons: Price update scope",
+		"⇆ tab  enter submit  esc dismiss",
+	}
+	result, event := adapter.CheckAttention(lines)
+	if result != attention.Certain {
+		t.Errorf("expected Certain, got %v", result)
+	}
+	if event == nil || !strings.Contains(event.Detail, "confirm tab") {
+		t.Errorf("expected confirm tab event, got %v", event)
+	}
+}
+
 func TestOpenCode_EscInterruptSuppressesGenericError(t *testing.T) {
 	// When OpenCode is working (esc interrupt visible), error content
 	// in the output should be suppressed.
@@ -1423,6 +1552,32 @@ func TestOpenCode_DenyKeystroke_NavigatesRightTwice(t *testing.T) {
 	ks := adapter.DenyKeystroke()
 	if string(ks) != "\x1b[C\x1b[C" {
 		t.Errorf("expected two Right arrows, got %q", ks)
+	}
+}
+
+// ── QuestionKeystroke ────────────────────────────────────────────
+
+func TestOpenCode_QuestionKeystroke_Option1(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	ks := adapter.QuestionKeystroke(1)
+	if ks != nil {
+		t.Errorf("option 1: expected nil (default), got %q", ks)
+	}
+}
+
+func TestOpenCode_QuestionKeystroke_Option3(t *testing.T) {
+	adapter := &opencodeAdapter{}
+	ks := adapter.QuestionKeystroke(3)
+	want := "\x1b[B\x1b[B" // 2 down arrows
+	if string(ks) != want {
+		t.Errorf("option 3: expected %q, got %q", want, ks)
+	}
+}
+
+func TestOpenCode_ImplementsQuestionResponder(t *testing.T) {
+	var adapter AgentAdapter = &opencodeAdapter{}
+	if _, ok := adapter.(QuestionResponder); !ok {
+		t.Error("opencodeAdapter should implement QuestionResponder")
 	}
 }
 

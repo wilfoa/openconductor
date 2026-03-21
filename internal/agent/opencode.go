@@ -38,7 +38,7 @@ func (a *opencodeAdapter) Command(repoPath string, opts LaunchOptions) *exec.Cmd
 		args = append(args, "--continue")
 	}
 	cmd := exec.Command("opencode", args...)
-	cmd.Dir = repoPath
+	cmd.Dir = strings.TrimRight(repoPath, "/")
 	return cmd
 }
 
@@ -57,6 +57,22 @@ func (a *opencodeAdapter) ApproveSessionKeystroke() []byte { return []byte("\x1b
 // Two right arrows move from "Allow once" past "Allow always" to "Reject".
 // Enter is sent separately by the handler after a SubmitDelay pause.
 func (a *opencodeAdapter) DenyKeystroke() []byte { return []byte("\x1b[C\x1b[C") }
+
+// QuestionKeystroke returns down-arrow sequences to navigate OpenCode's
+// vertical question dialog to the given option. Option 1 is already selected
+// by default, so no navigation is needed (returns nil → caller sends Enter).
+// For option N, (N-1) down arrows are sent. Enter is appended separately
+// by the handler after SubmitDelay.
+func (a *opencodeAdapter) QuestionKeystroke(optionNum int) []byte {
+	if optionNum <= 1 {
+		return nil
+	}
+	ks := make([]byte, 0, (optionNum-1)*3)
+	for i := 1; i < optionNum; i++ {
+		ks = append(ks, '\x1b', '[', 'B') // Down arrow: ESC [ B
+	}
+	return ks
+}
 
 // BootstrapFiles returns no bootstrap files for OpenCode.
 func (a *opencodeAdapter) BootstrapFiles() []BootstrapFile {
@@ -170,7 +186,10 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 	hasAllowOnce := false
 	hasReject := false
 	hasQuestionDialog := false
-	hasFullscreen := false // "ctrl+f fullscreen" appears in permission dialog footer
+	hasFullscreen := false      // "ctrl+f fullscreen" appears in permission dialog footer
+	hasConfirmTab := false      // question series "Confirm" review tab
+	hasAlwaysAllowText := false // "Always allow" text in dialog header
+	hasConfirmCancel := false   // "Confirm" + "Cancel" button pair
 
 	// TUI chrome signals (dialog buttons, status bar, keyboard shortcuts)
 	// always appear in the bottom portion of the screen. We restrict most
@@ -247,6 +266,30 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 			strings.Contains(lower, "esc dismiss") {
 			hasQuestionDialog = true
 		}
+		// Question series Confirm tab footer: "⇆ tab  enter submit  esc dismiss".
+		// This appears after all questions in a series have been answered.
+		// Unlike intermediate question tabs, it has NO "select" — the
+		// Confirm tab shows a review screen, not selectable options.
+		if strings.Contains(lower, "tab") &&
+			strings.Contains(lower, "enter submit") &&
+			strings.Contains(lower, "esc dismiss") &&
+			!strings.Contains(lower, "select") {
+			hasConfirmTab = true
+		}
+		// "Always allow" second-stage confirmation dialog. After selecting
+		// "Allow always" on a permission, OpenCode shows:
+		//   △ Always allow
+		//   This will allow read until OpenCode is restarted.
+		//   [Confirm]  Cancel          ⇆ select  enter confirm
+		// "Confirm" is already highlighted — just press Enter.
+		// Require both "always allow" text AND "confirm"+"cancel" buttons
+		// to avoid false positives from conversation content.
+		if strings.Contains(lower, "always allow") {
+			hasAlwaysAllowText = true
+		}
+		if strings.Contains(lower, "confirm") && strings.Contains(lower, "cancel") {
+			hasConfirmCancel = true
+		}
 	}
 
 	logging.Debug("heuristic: opencode scan result",
@@ -257,7 +300,23 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		"reject", hasReject,
 		"fullscreen", hasFullscreen,
 		"questionDialog", hasQuestionDialog,
+		"confirmTab", hasConfirmTab,
+		"alwaysAllowText", hasAlwaysAllowText,
+		"confirmCancel", hasConfirmCancel,
 	)
+
+	// "Always allow" second-stage confirmation — auto-confirm by pressing
+	// Enter. This dialog appears after the user (or auto-approve) selected
+	// "Allow always" on a permission. "Confirm" is already highlighted.
+	// Handled before regular permission detection so it doesn't get stuck
+	// waiting for user input.
+	if hasAlwaysAllowText && hasConfirmCancel {
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsPermission,
+			Detail: "opencode always-allow auto-confirm",
+			Source: "heuristic",
+		}
+	}
 
 	// Permission and question dialogs take priority over the working
 	// signal. When OpenCode renders a modal overlay it only redraws the
@@ -287,6 +346,17 @@ func (a *opencodeAdapter) CheckAttention(lastLines []string) (attention.Heuristi
 		return attention.Certain, &attention.AttentionEvent{
 			Type:   attention.NeedsAnswer,
 			Detail: "opencode question dialog detected",
+			Source: "heuristic",
+		}
+	}
+
+	if hasConfirmTab {
+		// Question series Confirm tab — all questions answered, review screen
+		// is showing. The user already provided answers via Telegram buttons;
+		// the attention loop auto-submits this by pressing Enter.
+		return attention.Certain, &attention.AttentionEvent{
+			Type:   attention.NeedsAnswer,
+			Detail: "opencode question confirm tab",
 			Source: "heuristic",
 		}
 	}
@@ -706,11 +776,12 @@ func (a *opencodeAdapter) LoadHistory(repoPath string) ([]string, error) {
 	}
 
 	// Find the most recent session for this directory.
-	// OpenCode stores absolute paths in session.directory.
+	// OpenCode stores absolute paths without trailing slashes.
 	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
 		absRepo = repoPath
 	}
+	absRepo = strings.TrimRight(absRepo, "/")
 
 	sessionQuery := `SELECT id FROM session WHERE directory = '` +
 		sqliteEscape(absRepo) +

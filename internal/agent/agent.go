@@ -117,6 +117,22 @@ type ChromeLineFilter interface {
 	IsChromeLine(line string) bool
 }
 
+// GetChromeLineFilter returns the agent's IsChromeLine function, or nil if
+// the adapter does not implement ChromeLineFilter. Useful for per-line
+// filtering in hot paths (e.g. scrollback capture) without repeated type
+// assertions.
+func GetChromeLineFilter(agentType config.AgentType) func(string) bool {
+	a, err := Get(agentType)
+	if err != nil {
+		return nil
+	}
+	f, ok := a.(ChromeLineFilter)
+	if !ok {
+		return nil
+	}
+	return f.IsChromeLine
+}
+
 // FilterChromeLines removes lines identified as TUI chrome by the agent's
 // ChromeLineFilter (if implemented). Returns lines unchanged if the adapter
 // does not implement the interface.
@@ -187,6 +203,43 @@ func FormatImageInput(agentType config.AgentType, imagePath string, caption stri
 		return caption + "\n\n[Image saved to " + imagePath + "]"
 	}
 	return "[Image saved to " + imagePath + "]"
+}
+
+// OutputFilter is an optional interface that agents can implement to
+// preprocess raw PTY output before it reaches the vt10x terminal emulator.
+// This allows agents to strip escape sequences that vt10x cannot handle
+// correctly (e.g. kitty keyboard protocol sequences that vt10x misparses
+// as cursor restore, causing the cursor to teleport to (0,0)).
+//
+// NewOutputFilter returns a per-session filter function. Each session gets
+// its own function instance so that cross-chunk state (partial escape
+// sequences spanning two PTY reads) is tracked independently.
+type OutputFilter interface {
+	NewOutputFilter() func(data []byte) []byte
+}
+
+// GetOutputFilter returns the OutputFilter for the given agent type, or nil
+// if the adapter does not implement one.
+func GetOutputFilter(agentType config.AgentType) OutputFilter {
+	a, err := Get(agentType)
+	if err != nil {
+		return nil
+	}
+	if f, ok := a.(OutputFilter); ok {
+		return f
+	}
+	return nil
+}
+
+// QuestionResponder is an optional interface for agents whose question dialogs
+// use selection-based navigation (arrow keys) instead of typed text input.
+// OpenCode's question dialog is a vertical list navigated with ↕ arrows;
+// without this interface, the handler falls back to typing the option number.
+type QuestionResponder interface {
+	// QuestionKeystroke returns the keystroke sequence to select the given
+	// option number (1-based) in a question dialog. Return nil for the
+	// default/first option (only Enter is needed to confirm).
+	QuestionKeystroke(optionNum int) []byte
 }
 
 // HistoryProvider is an optional interface that agents can implement to supply

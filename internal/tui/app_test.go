@@ -2562,9 +2562,9 @@ func TestWheelAltScreen_MouseMode_CoordinatesCorrect(t *testing.T) {
 	sbWidth := app.sidebar.Width()
 	// Screen coordinates: X = screenPadding + sbWidth + 1 (PaddingLeft) + 5
 	// → localX = 5, terminal col = 6 (1-indexed)
-	// Screen Y = 3 + 7 = 10 → localY = 7, terminal row = 8 (1-indexed)
+	// Screen Y = tabBarHeight + 7 → localY = 7, terminal row = 8 (1-indexed)
 	screenX := screenPadding + sbWidth + 1 + 5
-	screenY := 3 + 7
+	screenY := app.tabBarHeight + 7
 
 	msg := tea.MouseMsg{
 		X:      screenX,

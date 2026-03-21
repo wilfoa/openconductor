@@ -46,6 +46,7 @@ func (m statusBarModel) View() string {
 			{"j/k", "navigate"},
 			{"^j/k", "tab"},
 			{"n", "new instance"},
+			{"s", "switch agent"},
 			{"a", "add"},
 			{"d", "delete"},
 			{"Ctrl+C", "exit"},
@@ -108,7 +109,7 @@ func (m statusBarModel) View() string {
 	right := strings.Join(rightParts, statusDimStyle.Render("  "))
 
 	leftStr := left.String()
-	available := m.width - lipgloss.Width(leftStr) - lipgloss.Width(right) - 2
+	available := m.width - lipgloss.Width(leftStr) - lipgloss.Width(right) - statusBarHPad
 	if available < 0 {
 		available = 0
 	}

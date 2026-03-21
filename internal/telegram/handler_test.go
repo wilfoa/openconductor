@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openconductorhq/openconductor/internal/agent"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/session"
 )
@@ -302,26 +303,25 @@ func TestQuestionKeyboard_MatchesOptions(t *testing.T) {
 	options := []string{"1. Create file", "2. Edit file", "3. Delete file"}
 	kb := QuestionKeyboard("proj", options)
 
-	// QuestionKeyboard puts all buttons in one row.
-	if len(kb.InlineKeyboard) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(kb.InlineKeyboard))
-	}
-	row := kb.InlineKeyboard[0]
-	if len(row) != 3 {
-		t.Fatalf("expected 3 buttons, got %d", len(row))
+	// QuestionKeyboard stacks buttons vertically (one per row).
+	if len(kb.InlineKeyboard) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(kb.InlineKeyboard))
 	}
 
 	// Button labels should be the full option text with emoji prefix.
-	for i, btn := range row {
+	for i, row := range kb.InlineKeyboard {
+		if len(row) != 1 {
+			t.Fatalf("row %d: expected 1 button, got %d", i, len(row))
+		}
 		want := "🟣 " + options[i]
-		if btn.Text != want {
-			t.Errorf("button %d: expected label %q, got %q", i, want, btn.Text)
+		if row[0].Text != want {
+			t.Errorf("button %d: expected label %q, got %q", i, want, row[0].Text)
 		}
 	}
 
 	// Callback data should contain just the number.
-	for i, btn := range row {
-		parts := strings.SplitN(*btn.CallbackData, ":", 3)
+	for i, row := range kb.InlineKeyboard {
+		parts := strings.SplitN(*row[0].CallbackData, ":", 3)
 		expectedNum := extractLeadingNumber(options[i])
 		if parts[2] != expectedNum {
 			t.Errorf("button %d: expected action %q, got %q", i, expectedNum, parts[2])
@@ -332,12 +332,11 @@ func TestQuestionKeyboard_MatchesOptions(t *testing.T) {
 func TestQuestionKeyboard_ParenFormat(t *testing.T) {
 	options := []string{"1) Yes", "2) No"}
 	kb := QuestionKeyboard("proj", options)
-	row := kb.InlineKeyboard[0]
-	if len(row) != 2 {
-		t.Fatalf("expected 2 buttons, got %d", len(row))
+	if len(kb.InlineKeyboard) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(kb.InlineKeyboard))
 	}
 	// "1) Yes" → number should be "1".
-	parts := strings.SplitN(*row[0].CallbackData, ":", 3)
+	parts := strings.SplitN(*kb.InlineKeyboard[0][0].CallbackData, ":", 3)
 	if parts[2] != "1" {
 		t.Errorf("expected action '1', got %q", parts[2])
 	}
@@ -594,6 +593,76 @@ func TestWritePermKeystroke_EndsWithCR_NoExtra(t *testing.T) {
 	got := readAll(r)
 	if string(got) != "\r" {
 		t.Errorf("expected %q, got %q", "\r", got)
+	}
+}
+
+// ── QuestionKeystroke (OpenCode) ─────────────────────────────────
+
+func TestQuestionKeystroke_Option1_JustEnter(t *testing.T) {
+	// Option 1 is already selected — QuestionKeystroke returns nil,
+	// writePermKeystroke sends delay + Enter.
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(1))
+	got := readAll(r)
+	if string(got) != "\r" {
+		t.Errorf("option 1: expected %q, got %q", "\r", got)
+	}
+}
+
+func TestQuestionKeystroke_Option2_OneDownArrow(t *testing.T) {
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(2))
+	got := readAll(r)
+	// Expect: 1 down arrow + Enter.
+	want := "\x1b[B\r"
+	if string(got) != want {
+		t.Errorf("option 2: expected %q, got %q", want, got)
+	}
+}
+
+func TestQuestionKeystroke_Option3_TwoDownArrows(t *testing.T) {
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(3))
+	got := readAll(r)
+	// Expect: 2 down arrows + Enter.
+	want := "\x1b[B\x1b[B\r"
+	if string(got) != want {
+		t.Errorf("option 3: expected %q, got %q", want, got)
+	}
+}
+
+func TestQuestionKeystroke_Option0_FallsBackToEnter(t *testing.T) {
+	// Edge case: option 0 (e.g. failed Atoi) → nil → just Enter.
+	s, r := pipeSession(t, "opencode")
+	a, _ := agent.Get("opencode")
+	qr := a.(agent.QuestionResponder)
+	writePermKeystroke(s, qr.QuestionKeystroke(0))
+	got := readAll(r)
+	if string(got) != "\r" {
+		t.Errorf("option 0: expected %q, got %q", "\r", got)
+	}
+}
+
+func TestClaudeCode_ImplementsQuestionResponder(t *testing.T) {
+	// Claude Code implements QuestionResponder for AskUserQuestion dialogs.
+	a, _ := agent.Get("claude-code")
+	qr, ok := a.(agent.QuestionResponder)
+	if !ok {
+		t.Fatal("claude adapter should implement QuestionResponder")
+	}
+	// Option 1 → nil (default, just Enter).
+	if ks := qr.QuestionKeystroke(1); ks != nil {
+		t.Errorf("option 1: expected nil, got %q", ks)
+	}
+	// Option 2 → one down arrow.
+	if ks := qr.QuestionKeystroke(2); string(ks) != "\x1b[B" {
+		t.Errorf("option 2: expected down arrow, got %q", ks)
 	}
 }
 
