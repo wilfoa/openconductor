@@ -3,7 +3,11 @@
 
 package tui
 
-import "github.com/openconductorhq/openconductor/internal/config"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/openconductorhq/openconductor/internal/config"
+)
 
 // SessionState represents the state of an agent session.
 type SessionState int
@@ -161,4 +165,22 @@ type historyLoadedMsg struct {
 // clipboardResultMsg signals that a clipboard copy operation completed.
 type clipboardResultMsg struct {
 	Err error
+}
+
+// telegramSessionRequestMsg is sent by the Telegram handler (via
+// Program.Send) when a message arrives for a project with no active
+// session. The TUI creates a tab + session and signals back on the
+// done channel.
+type telegramSessionRequestMsg struct {
+	ProjectName string
+	Done        chan<- bool
+}
+
+// TelegramSessionRequest creates a telegramSessionRequestMsg for use
+// with Program.Send from main.go.
+func TelegramSessionRequest(projectName string, done chan<- bool) tea.Msg {
+	return telegramSessionRequestMsg{
+		ProjectName: projectName,
+		Done:        done,
+	}
 }

@@ -54,8 +54,12 @@ type Bot struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// SessionNeeded callback — set by TUI to auto-start sessions
+	// when a Telegram message arrives for a project with no tab.
+	sessionNeeded SessionNeededFunc
+
 	// Health tracking (protected by mu).
-	mu              sync.Mutex
+	mu sync.Mutex
 	startedAt       time.Time // when Start() was called
 	lastPollOK      time.Time // last successful getUpdates
 	lastSendOK      time.Time // last successful sendMessage
@@ -96,6 +100,14 @@ func NewBot(cfg config.TelegramConfig, mgr *session.Manager, projects []config.P
 // EventChannel returns the channel for the TUI to send events on.
 func (b *Bot) EventChannel() chan<- Event {
 	return b.br.ch
+}
+
+// SetSessionNeeded registers a callback invoked when a Telegram message
+// arrives for a project that has no active session. The TUI uses this
+// to automatically open a tab and start an agent session on demand.
+func (b *Bot) SetSessionNeeded(fn SessionNeededFunc) {
+	b.sessionNeeded = fn
+	b.hdlr.sessionNeeded = fn
 }
 
 // Start begins the polling and bridge goroutines. It creates Forum Topics
