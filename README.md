@@ -17,11 +17,7 @@ You're running five AI agents across five repos. Each lives in its own terminal 
 
 **OpenConductor fixes this.** Every agent runs in its own real PTY with full VT100 emulation. A two-layer attention system watches them all and tells you exactly when you're needed.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/tagline-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="assets/tagline-light.svg">
-  <img src="assets/tagline-dark.svg" alt="One keyboard. All your agents. Zero wasted time." width="640">
-</picture>
+**One keyboard. &ensp; All your agents. &ensp; Zero wasted time.**
 
 ## How it works
 
@@ -111,8 +107,7 @@ telegram:
 
 </details>
 
-> [!TIP]
-> OpenConductor restores your open tabs on restart. Your workspace persists across sessions.
+OpenConductor restores your open tabs on restart &mdash; your workspace persists across sessions.
 
 ## Features
 
@@ -194,31 +189,23 @@ Press <kbd>s</kbd> to swap a project between Claude Code and OpenCode on the fly
 
 ## Telegram
 
-Bridges every project to a Telegram supergroup with [Forum Topics](https://telegram.org/blog/topics-in-groups-collectible-usernames). Each project gets its own thread. Approve permissions, answer questions, send input &mdash; all from your phone.
+Bridges every project to a Telegram supergroup with [Forum Topics](https://telegram.org/blog/topics-in-groups-collectible-usernames). Each project gets its own thread. The same permission and question flows you see in the TUI work natively through Telegram with inline reply buttons &mdash; approve permissions, pick from numbered options, or send freeform input, all from your phone.
 
 ```bash
 openconductor telegram setup    # interactive wizard
 ```
 
-<details>
-<summary><b>Events & actions</b></summary>
-<br>
+| Event | What you see on Telegram |
+|:---|:---|
+| **Permission request** | Screen snapshot + `[Allow Once]` `[Allow Always]` `[Deny]` inline buttons. One tap approves &mdash; agent continues immediately. |
+| **Question dialog** | Numbered buttons auto-parsed from the agent's screen (e.g. `[1. Jest]` `[2. Vitest]` `[3. Playwright]`). Tap to answer. |
+| **Needs attention** | Quick-reply buttons: `[yes]` `[no]` `[continue]` `[skip]`. |
+| **Error** | `[retry]` `[skip]` `[abort]` buttons with a screen snapshot showing the error. |
+| **Free text** | Send any message in a project's thread &mdash; typed directly into the agent's PTY. |
 
-| Event | Trigger | Inline buttons |
-|:---|:---|:---|
-| Permission request | Agent needs approval | `Allow Once` &middot; `Allow Always` &middot; `Deny` |
-| Question | Agent asks user to choose | Numbered buttons parsed from screen |
-| Needs attention | Agent is stuck or waiting | `yes` &middot; `no` &middot; `continue` &middot; `skip` |
-| Error | Agent hit an error | `retry` &middot; `skip` &middot; `abort` |
-| Response | Agent finishes responding | &mdash; |
-| Task complete | Session finished | &mdash; |
+After every button press, the original message is edited to show what action was taken and by whom.
 
-**Inbound:** Tap inline buttons to approve, answer, or quick-reply. Send any message in a project thread to type directly into the agent's PTY. After every action, the message is edited to show what was done and by whom.
-
-</details>
-
-> [!NOTE]
-> See [docs/TELEGRAM_INTEGRATION.md](docs/TELEGRAM_INTEGRATION.md) for the full setup guide.
+Full setup guide: [docs/TELEGRAM_INTEGRATION.md](docs/TELEGRAM_INTEGRATION.md)
 
 ## Architecture
 
@@ -276,4 +263,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
 
 ---
 
-<sub><a href="LICENSE">MIT License</a> &ensp;&middot;&ensp; Copyright &copy; 2025 The OpenConductor Authors</sub>
+<sub><a href="LICENSE">MIT License</a> &ensp;&middot;&ensp; Copyright &copy; 2026 The OpenConductor Authors</sub>
