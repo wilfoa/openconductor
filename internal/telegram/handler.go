@@ -15,6 +15,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"github.com/openconductorhq/openconductor/internal/agent"
+	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/logging"
 	"github.com/openconductorhq/openconductor/internal/session"
@@ -24,12 +25,19 @@ import (
 // bytes and the server file path (which contains the extension).
 type DownloadFunc func(fileID string) ([]byte, string, error)
 
+// SessionNeededFunc is called when a Telegram message arrives for a project
+// that has no active session. The TUI registers this callback to create
+// a session (open a tab) on demand. It should block until the session is
+// ready, returning true on success.
+type SessionNeededFunc func(projectName string) bool
+
 // handler routes incoming Telegram messages and callback queries to the
 // appropriate agent session.
 type handler struct {
-	mgr      *session.Manager
-	state    *topicState
-	projects []config.Project
+	mgr           *session.Manager
+	state         *topicState
+	projects      []config.Project
+	sessionNeeded SessionNeededFunc
 }
 
 func newHandler(mgr *session.Manager, state *topicState, projects []config.Project) *handler {
@@ -60,13 +68,38 @@ func (h *handler) HandleInbound(text string, threadID int) bool {
 	}
 
 	sessions := h.mgr.GetSessionsByProject(project)
+	newSession := false
 	if len(sessions) == 0 {
-		logging.Debug("telegram: no active session for project", "project", project)
-		return false
+		// No active session — request one from the TUI.
+		if h.sessionNeeded == nil {
+			logging.Debug("telegram: no active session for project (no callback)", "project", project)
+			return false
+		}
+		logging.Info("telegram: no active session, requesting start", "project", project)
+		if !h.sessionNeeded(project) {
+			logging.Warn("telegram: failed to start session for project", "project", project)
+			return false
+		}
+		// Re-check after session creation.
+		sessions = h.mgr.GetSessionsByProject(project)
+		if len(sessions) == 0 {
+			logging.Warn("telegram: session started but not found", "project", project)
+			return false
+		}
+		newSession = true
 	}
 
 	// Route to the most recently created session for this project.
 	s := sessions[len(sessions)-1]
+
+	if newSession {
+		// The agent process was just started. Wait for it to finish
+		// initializing (loading welcome screen, trust prompt, etc.)
+		// before delivering the message. Poll the session state for
+		// up to 30s, looking for the agent to become idle (ready for
+		// input) or blocked on read (waiting at a prompt).
+		waitForReady(s, 30*time.Second)
+	}
 
 	writeWithEnter(s, text)
 	logging.Info("telegram: forwarded message to agent", "project", project, "session", s.ID, "len", len(text))
@@ -92,9 +125,16 @@ func (h *handler) HandleCallback(b *Bot, query *tgbotapi.CallbackQuery) {
 
 	sessions := h.mgr.GetSessionsByProject(project)
 	if len(sessions) == 0 {
-		logging.Debug("telegram: callback for project with no session", "project", project, "kind", kind)
-		b.answerCallbackRaw(query.ID, "No active session")
-		return
+		if h.sessionNeeded != nil {
+			logging.Info("telegram: callback needs session, requesting start", "project", project)
+			h.sessionNeeded(project)
+			sessions = h.mgr.GetSessionsByProject(project)
+		}
+		if len(sessions) == 0 {
+			logging.Debug("telegram: callback for project with no session", "project", project, "kind", kind)
+			b.answerCallbackRaw(query.ID, "No active session")
+			return
+		}
 	}
 	// Route to the most recently created session for this project.
 	s := sessions[len(sessions)-1]
@@ -208,6 +248,33 @@ func (h *handler) getAdapter(project string) agent.AgentAdapter {
 // answerCallback is unused — kept as a comment for reference.
 // Callback answering is now done via Bot.answerCallbackRaw() which uses
 // raw API calls instead of the library's Request method.
+
+// waitForReady polls a newly-created session until the agent process is
+// ready for input. It checks the process state (blocked on stdin read
+// means the prompt is waiting) with a fallback timeout.
+func waitForReady(s *session.Session, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+
+		s.Mu.RLock()
+		cmd := s.Cmd
+		s.Mu.RUnlock()
+
+		if cmd == nil {
+			continue
+		}
+
+		// Check if the agent's child process is blocked on stdin read.
+		// This is the strongest signal that the prompt is ready.
+		ps := attention.CheckProcess(cmd.Pid)
+		if ps == attention.BlockedOnRead {
+			logging.Debug("telegram: agent ready (blocked on read)")
+			return
+		}
+	}
+	logging.Debug("telegram: agent readiness timeout, sending anyway")
+}
 
 // writeWithEnter writes text to the session's PTY, pauses for the agent's
 // configured submit delay, then sends Enter (\r). The delay ensures the TUI's

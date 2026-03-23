@@ -97,6 +97,36 @@ func (b *scrollbackBuffer) Push(glyphs scrollbackLine) {
 	}
 }
 
+// PushForce appends a glyph row unconditionally, without buffer-wide dedup.
+// Used for non-alt-screen sessions (e.g. Claude Code) where duplicate text
+// is legitimate content — repeated table rows, code patterns, etc. The
+// textSet is still maintained for correct eviction when the ring wraps.
+func (b *scrollbackBuffer) PushForce(glyphs scrollbackLine) {
+	text := glyphsToText(glyphs)
+
+	idx := (b.start + b.len) % b.cap
+
+	if b.len == b.cap {
+		old := b.lineTexts[idx]
+		if old != "" {
+			if c := b.textSet[old]; c <= 1 {
+				delete(b.textSet, old)
+			} else {
+				b.textSet[old] = c - 1
+			}
+		}
+		b.start = (b.start + 1) % b.cap
+	} else {
+		b.len++
+	}
+
+	b.lines[idx] = glyphs
+	b.lineTexts[idx] = text
+	if text != "" {
+		b.textSet[text]++
+	}
+}
+
 // Len returns the number of lines currently in the buffer.
 func (b *scrollbackBuffer) Len() int {
 	return b.len

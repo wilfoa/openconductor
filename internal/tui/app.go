@@ -95,6 +95,7 @@ type App struct {
 	sidebarWidth  int                     // content width of sidebar (excludes padding/border)
 	dragging      bool                    // true during separator drag
 	openTabs      []string                // session IDs of opened tabs, in visit order
+	visibleTabs   []int                   // indices into openTabs that are currently rendered (subset when overflow)
 	tabProjects   map[string]string       // session ID → project name (survives mgr.Close)
 	tabLabels     map[string]string       // custom display labels per session ID (empty = use session ID)
 	sessionStates map[string]SessionState // per-session state, keyed by session ID
@@ -397,6 +398,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Re-clamp sidebar width for new terminal size.
 		a.clampAndSetSidebarWidth(a.sidebarWidth)
+
+		// Recalculate tab bar height — the rendered height can change
+		// when the panel width changes (tabs may need more/fewer rows).
+		tabBar := a.tabBarView()
+		a.tabBarHeight = strings.Count(tabBar, "\n") + 1
+
 		a.layout()
 
 		// Resize all existing sessions.
@@ -830,6 +837,47 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.startSessionCmd(project, true)
 		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)
+
+	case telegramSessionRequestMsg:
+		// Telegram handler needs a session for a project that has no open tab.
+		// Find the project in config, create a session, and signal back.
+		var project *config.Project
+		for i := range a.cfg.Projects {
+			if a.cfg.Projects[i].Name == msg.ProjectName {
+				project = &a.cfg.Projects[i]
+				break
+			}
+		}
+		if project == nil {
+			msg.Done <- false
+			return a, nil
+		}
+
+		// If a session already exists (race), just signal success.
+		for _, tabID := range a.openTabs {
+			s := a.mgr.GetSession(tabID)
+			if s != nil && s.Project.Name == project.Name {
+				msg.Done <- true
+				return a, nil
+			}
+		}
+
+		// Start a new session with --continue to resume conversation.
+		cmd := a.startSessionCmd(*project, true)
+		done := msg.Done
+		return a, tea.Batch(cmd, func() tea.Msg {
+			// Wait briefly for the session to register in the manager,
+			// then signal the Telegram handler.
+			for i := 0; i < 50; i++ {
+				time.Sleep(100 * time.Millisecond)
+				if sessions := a.mgr.GetSessionsByProject(project.Name); len(sessions) > 0 {
+					done <- true
+					return nil
+				}
+			}
+			done <- false
+			return nil
+		})
 
 	case NewInstanceMsg:
 		// Always create a new session (new agent process), even if the
@@ -1319,10 +1367,70 @@ func (a App) tabBarView() string {
 		}
 	}
 
-	// Join tabs side by side (aligned at top).
+	// Join tabs side by side (aligned at top). If the total width
+	// exceeds the panel, show only tabs that fit — always including
+	// the active tab. This prevents overflow that breaks layout and
+	// mouse coordinate calculations on terminal resize.
 	var row string
+	a.visibleTabs = nil
 	if len(renderedTabs) > 0 {
-		row = lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
+		totalWidth := 0
+		for _, t := range renderedTabs {
+			totalWidth += lipgloss.Width(t)
+		}
+
+		if totalWidth <= panelWidth {
+			// Everything fits — all tabs visible.
+			row = lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
+			for i := range renderedTabs {
+				a.visibleTabs = append(a.visibleTabs, i)
+			}
+		} else {
+			// Overflow — find the active tab index, then greedily
+			// include tabs around it until the panel is full.
+			activeIdx := 0
+			for i, sid := range a.openTabs {
+				if sid == activeSessionID {
+					activeIdx = i
+					break
+				}
+			}
+
+			visible := []int{activeIdx}
+			usedWidth := lipgloss.Width(renderedTabs[activeIdx])
+
+			// Expand outward from the active tab.
+			lo, hi := activeIdx-1, activeIdx+1
+			for lo >= 0 || hi < len(renderedTabs) {
+				if lo >= 0 {
+					w := lipgloss.Width(renderedTabs[lo])
+					if usedWidth+w <= panelWidth {
+						visible = append([]int{lo}, visible...)
+						usedWidth += w
+						lo--
+					} else {
+						lo = -1
+					}
+				}
+				if hi < len(renderedTabs) {
+					w := lipgloss.Width(renderedTabs[hi])
+					if usedWidth+w <= panelWidth {
+						visible = append(visible, hi)
+						usedWidth += w
+						hi++
+					} else {
+						hi = len(renderedTabs)
+					}
+				}
+			}
+
+			a.visibleTabs = visible
+			var shownTabs []string
+			for _, idx := range visible {
+				shownTabs = append(shownTabs, renderedTabs[idx])
+			}
+			row = lipgloss.JoinHorizontal(lipgloss.Top, shownTabs...)
+		}
 	}
 
 	// Fill remaining width with ─ border (the gap).
@@ -1542,16 +1650,23 @@ func (a *App) runScrollCheck() {
 	}
 }
 
-// checkScrollback compares the current VT screen against the stored snapshot
-// for this project, detects scroll shifts, and pushes scrolled-off rows (as
-// glyph data) to the project's scrollback buffer. Returns the number of
+// checkScrollback detects lines that scrolled off the terminal viewport and
+// pushes them to the session's scrollback buffer. Returns the number of
 // lines pushed.
 //
-// For sessions running in alternate screen mode (TUI apps like OpenCode),
-// traditional scroll-shift detection doesn't work because the app redraws
-// the entire screen on every update. In that case, we fall back to pushing
-// all old non-blank rows that disappeared from the new screen, giving the
-// user access to previous screen content when scrolling back.
+// Two detection strategies are used:
+//
+// 1. Session.captureScrollOff (non-alt-screen only): runs synchronously on
+//    every VT.Write() and reliably catches all scroll events. When captures
+//    are found, they are pushed with PushForce (no buffer-wide dedup) so that
+//    legitimate duplicate content — repeated table rows, code patterns, blank
+//    separator lines — is preserved exactly as it appeared. Snapshot-based
+//    detection is skipped to avoid dual-detection duplicates.
+//
+// 2. Snapshot-based detection (fallback): compares the current VT screen
+//    against the stored snapshot to detect scroll shifts or TUI repaints.
+//    Uses buffer-wide dedup (Push) to prevent flooding from alt-screen TUI
+//    apps that repaint every ~100ms.
 func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 	sb := a.scrollbacks[sessionID]
 	if sb == nil {
@@ -1568,6 +1683,29 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 
 	w, h := s.Width, s.Height
 	altScreen := s.VT.Mode()&vt10x.ModeAltScreen != 0
+	isChrome := agent.GetChromeLineFilter(s.Project.Agent)
+
+	// ── Session-level captures (non-alt-screen only) ────────────────
+	//
+	// captureScrollOff runs per VT.Write() and catches every scroll event
+	// synchronously. When captures exist, use PushForce (no buffer-wide
+	// dedup) to preserve legitimate duplicate content (tables, code blocks,
+	// blank separator lines). Skip snapshot-based detection to avoid
+	// pushing the same lines twice.
+	captured := s.DrainScrollCapture()
+	if !altScreen && len(captured) > 0 {
+		pushed := 0
+		for _, cl := range captured {
+			if isChrome != nil && isChrome(cl.Text) {
+				continue
+			}
+			sb.PushForce(scrollbackLine(cl.Glyphs))
+			pushed++
+		}
+		return pushed
+	}
+
+	// ── Snapshot-based detection (alt-screen or no session captures) ─
 	cursorY := s.VT.Cursor().Y
 
 	// Build current screen snapshot (text + glyphs).
@@ -1592,13 +1730,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		return 0
 	}
 
-	// Drain any lines captured by the Session's VT.Write() scroll-off
-	// detection. These are lines that scrolled off the vt10x grid between
-	// snapshot ticks — too fast for our snapshot-based detection to catch.
-	// Filter out agent chrome lines (e.g. Claude Code spinner) to avoid
-	// polluting the scrollback with transient status text.
-	captured := s.DrainScrollCapture()
-	isChrome := agent.GetChromeLineFilter(s.Project.Agent)
+	// Push any remaining session captures (with dedup for alt-screen safety).
 	for _, cl := range captured {
 		if isChrome != nil && isChrome(cl.Text) {
 			continue
@@ -1791,11 +1923,27 @@ func (a *App) resizeAllSessions() {
 // to the tab bar start (i.e. after screenPadding + sidebar). Returns
 // (tabIndex, isClose). tabIndex is -1 if the click falls outside any tab.
 // isClose is true if the click landed on the close button region (✕) of any tab.
+//
+// Only visible tabs (from visibleTabs) are considered, so clicks map correctly
+// even when the tab bar is truncated due to narrow terminal width.
 func (a App) tabHitTest(localX int) (int, bool) {
 	activeSessionID := a.mgr.ActiveName()
 
+	// Use visibleTabs if set, otherwise fall back to all openTabs.
+	indices := a.visibleTabs
+	if len(indices) == 0 {
+		indices = make([]int, len(a.openTabs))
+		for i := range a.openTabs {
+			indices[i] = i
+		}
+	}
+
 	offset := 0
-	for i, sessionID := range a.openTabs {
+	for _, i := range indices {
+		if i < 0 || i >= len(a.openTabs) {
+			continue
+		}
+		sessionID := a.openTabs[i]
 		state := a.sessionStates[sessionID]
 		char := badgeChar(state, a.animFrame)
 		displayName := a.tabDisplayName(sessionID)
@@ -1815,7 +1963,6 @@ func (a App) tabHitTest(localX int) (int, bool) {
 		}
 
 		if localX >= offset && localX < offset+w {
-			// Check if the click is in the close region.
 			closeRegionStart := offset + w - tabCloseRegion
 			if localX >= closeRegionStart {
 				return i, true

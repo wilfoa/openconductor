@@ -416,12 +416,11 @@ func (s *Session) captureScrollOff(data []byte) {
 		}
 	}
 
-	// Push scrolled-off rows to the capture buffer.
+	// Push scrolled-off rows to the capture buffer. Blank lines are
+	// preserved — they serve as meaningful separators in CLI agent output
+	// (e.g. spacing between Claude Code conversation sections).
 	if scrolled > 0 {
 		for i := 0; i < scrolled; i++ {
-			if preTexts[i] == "" {
-				continue
-			}
 			s.scrollCapture = append(s.scrollCapture, ScrollCapturedLine{
 				Text:   preTexts[i],
 				Glyphs: preGlyphs[i],

@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 320" fill="none">
+  <style>
+    text { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .label { font-size: 13px; fill: #1f2937; font-weight: 600; }
+    .sublabel { font-size: 11px; fill: #6b7280; }
+    .tiny { font-size: 10px; fill: #9ca3af; }
+  </style>
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a3be8c" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#a3be8c" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4a8fa8" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#4a8fa8" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b8860b" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#b8860b" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cb5" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#8b5cb5" stop-opacity="0.04"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#c0c0c0"/>
+    </marker>
+  </defs>
+
+  <text x="420" y="28" text-anchor="middle" font-size="14" fill="#6b7280" font-weight="600" letter-spacing="2">HOW IT WORKS</text>
+
+  <!-- Agent boxes -->
+  <rect x="30" y="55" width="160" height="52" rx="10" fill="url(#g1)" stroke="#5a8a5e" stroke-width="1" stroke-opacity="0.4"/>
+  <circle cx="52" cy="74" r="6" fill="#5a8a5e"/>
+  <text x="66" y="78" class="label">Claude Code</text>
+  <text x="52" y="96" class="sublabel">PTY + vt10x emulation</text>
+
+  <rect x="30" y="120" width="160" height="52" rx="10" fill="url(#g2)" stroke="#4a8fa8" stroke-width="1" stroke-opacity="0.4"/>
+  <circle cx="52" cy="139" r="6" fill="#4a8fa8"/>
+  <text x="66" y="143" class="label">OpenCode</text>
+  <text x="52" y="161" class="sublabel">PTY + vt10x emulation</text>
+
+  <rect x="30" y="185" width="160" height="52" rx="10" fill="url(#g1)" stroke="#5a8a5e" stroke-width="1" stroke-opacity="0.25"/>
+  <circle cx="52" cy="204" r="6" fill="#5a8a5e" opacity="0.5"/>
+  <text x="66" y="208" class="label" opacity="0.6">Agent N...</text>
+  <text x="52" y="226" class="sublabel">PTY + vt10x emulation</text>
+
+  <!-- Arrows -->
+  <path d="M195,81 L280,145" stroke="#c0c0c0" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M195,146 L280,155" stroke="#c0c0c0" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M195,211 L280,165" stroke="#c0c0c0" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Attention Detection -->
+  <rect x="285" y="100" width="200" height="110" rx="12" fill="url(#g3)" stroke="#b8860b" stroke-width="1.2" stroke-opacity="0.5"/>
+  <text x="385" y="126" text-anchor="middle" font-size="13" fill="#b8860b" font-weight="700">ATTENTION DETECTION</text>
+
+  <rect x="300" y="138" width="76" height="30" rx="6" fill="#ffffff" stroke="#d0d0d0" stroke-width="1"/>
+  <text x="338" y="157" text-anchor="middle" font-size="11" fill="#5a8a5e" font-weight="600">L1 heuristics</text>
+
+  <rect x="394" y="138" width="76" height="30" rx="6" fill="#ffffff" stroke="#d0d0d0" stroke-width="1"/>
+  <text x="432" y="157" text-anchor="middle" font-size="11" fill="#4a8fa8" font-weight="600">L2 LLM</text>
+
+  <path d="M378,153 L390,153" stroke="#c0c0c0" stroke-width="1" marker-end="url(#arrow)"/>
+  <text x="385" y="147" text-anchor="middle" class="tiny">?</text>
+  <text x="385" y="195" text-anchor="middle" class="tiny">every 500ms per session</text>
+
+  <!-- Arrows to outputs -->
+  <path d="M490,130 L570,88" stroke="#c0c0c0" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M490,155 L570,155" stroke="#c0c0c0" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M490,180 L570,220" stroke="#c0c0c0" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Output boxes -->
+  <rect x="575" y="62" width="175" height="52" rx="10" fill="url(#g3)" stroke="#b8860b" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="597" y="85" font-size="18" fill="#b8860b">&#9638;</text>
+  <text x="617" y="86" class="label">TUI Sidebar</text>
+  <text x="597" y="104" class="sublabel">Badges, tabs, scrollback</text>
+
+  <rect x="575" y="128" width="175" height="52" rx="10" fill="url(#g4)" stroke="#8b5cb5" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="597" y="151" font-size="18" fill="#8b5cb5">&#9882;</text>
+  <text x="617" y="152" class="label">Desktop</text>
+  <text x="597" y="170" class="sublabel">Notifications + cooldown</text>
+
+  <rect x="575" y="194" width="175" height="52" rx="10" fill="url(#g2)" stroke="#4a8fa8" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="597" y="218" font-size="18" fill="#4a8fa8">&#9993;</text>
+  <text x="617" y="218" class="label">Telegram</text>
+  <text x="597" y="236" class="sublabel">Inline buttons + input</text>
+
+  <!-- State badges bar -->
+  <rect x="120" y="272" width="600" height="36" rx="8" fill="#f5f5f5" stroke="#e0e0e0" stroke-width="1"/>
+
+  <circle cx="160" cy="290" r="5" fill="#5a8a5e">
+    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <text x="172" y="294" font-size="10" fill="#5a8a5e">working</text>
+
+  <circle cx="250" cy="290" r="5" fill="#b8860b"/>
+  <text x="262" y="294" font-size="10" fill="#b8860b">input</text>
+
+  <circle cx="320" cy="290" r="5" fill="#c09020"/>
+  <text x="332" y="294" font-size="10" fill="#c09020">permission</text>
+
+  <circle cx="420" cy="290" r="5" fill="#4a8fa8"/>
+  <text x="432" y="294" font-size="10" fill="#4a8fa8">asking</text>
+
+  <circle cx="500" cy="290" r="5" fill="#c04040"/>
+  <text x="512" y="294" font-size="10" fill="#c04040">error</text>
+
+  <circle cx="570" cy="290" r="5" fill="#6b7280"/>
+  <text x="582" y="294" font-size="10" fill="#6b7280">done</text>
+
+  <text x="680" y="294" font-size="9" fill="#c0c0c0" font-weight="600">6 STATES</text>
+</svg>

@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 320" fill="none">
+  <style>
+    text { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .label { font-size: 13px; fill: #d8dee9; font-weight: 600; }
+    .sublabel { font-size: 11px; fill: #7b88a0; }
+    .tiny { font-size: 10px; fill: #6b7280; }
+  </style>
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a3be8c" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#a3be8c" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#88c0d0" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#88c0d0" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d4a373" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#d4a373" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b48ead" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#b48ead" stop-opacity="0.05"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#4c566a"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="420" y="28" text-anchor="middle" font-size="14" fill="#8892a2" font-weight="600" letter-spacing="2">HOW IT WORKS</text>
+
+  <!-- ═══ Agent boxes (left column) ═══ -->
+  <!-- Agent 1: Claude Code -->
+  <rect x="30" y="55" width="160" height="52" rx="10" fill="url(#g1)" stroke="#a3be8c" stroke-width="1" stroke-opacity="0.5"/>
+  <circle cx="52" cy="74" r="6" fill="#a3be8c"/>
+  <text x="66" y="78" class="label">Claude Code</text>
+  <text x="52" y="96" class="sublabel">PTY + vt10x emulation</text>
+
+  <!-- Agent 2: OpenCode -->
+  <rect x="30" y="120" width="160" height="52" rx="10" fill="url(#g2)" stroke="#88c0d0" stroke-width="1" stroke-opacity="0.5"/>
+  <circle cx="52" cy="139" r="6" fill="#88c0d0"/>
+  <text x="66" y="143" class="label">OpenCode</text>
+  <text x="52" y="161" class="sublabel">PTY + vt10x emulation</text>
+
+  <!-- Agent 3 -->
+  <rect x="30" y="185" width="160" height="52" rx="10" fill="url(#g1)" stroke="#a3be8c" stroke-width="1" stroke-opacity="0.3"/>
+  <circle cx="52" cy="204" r="6" fill="#a3be8c" opacity="0.6"/>
+  <text x="66" y="208" class="label" opacity="0.7">Agent N...</text>
+  <text x="52" y="226" class="sublabel">PTY + vt10x emulation</text>
+
+  <!-- ═══ Arrows: agents → attention ═══ -->
+  <path d="M195,81 L280,145" stroke="#4c566a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M195,146 L280,155" stroke="#4c566a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M195,211 L280,165" stroke="#4c566a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══ Attention Detection (center) ═══ -->
+  <rect x="285" y="100" width="200" height="110" rx="12" fill="url(#g3)" stroke="#d4a373" stroke-width="1.2" stroke-opacity="0.6"/>
+  <text x="385" y="126" text-anchor="middle" font-size="13" fill="#d4a373" font-weight="700">ATTENTION DETECTION</text>
+
+  <!-- L1 box -->
+  <rect x="300" y="138" width="76" height="30" rx="6" fill="#2e3440" stroke="#4c566a" stroke-width="1"/>
+  <text x="338" y="157" text-anchor="middle" font-size="11" fill="#a3be8c" font-weight="600">L1 heuristics</text>
+
+  <!-- L2 box -->
+  <rect x="394" y="138" width="76" height="30" rx="6" fill="#2e3440" stroke="#4c566a" stroke-width="1"/>
+  <text x="432" y="157" text-anchor="middle" font-size="11" fill="#88c0d0" font-weight="600">L2 LLM</text>
+
+  <!-- Arrow L1 → L2 -->
+  <path d="M378,153 L390,153" stroke="#4c566a" stroke-width="1" marker-end="url(#arrow)"/>
+  <text x="385" y="147" text-anchor="middle" class="tiny">?</text>
+
+  <!-- Every 500ms label -->
+  <text x="385" y="195" text-anchor="middle" class="tiny">every 500ms per session</text>
+
+  <!-- ═══ Arrows: attention → outputs ═══ -->
+  <path d="M490,130 L570,88" stroke="#4c566a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M490,155 L570,155" stroke="#4c566a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M490,180 L570,220" stroke="#4c566a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══ Output boxes (right column) ═══ -->
+  <!-- TUI -->
+  <rect x="575" y="62" width="175" height="52" rx="10" fill="url(#g3)" stroke="#d4a373" stroke-width="1" stroke-opacity="0.5"/>
+  <text x="597" y="85" font-size="18" fill="#d4a373">&#9638;</text>
+  <text x="617" y="86" class="label">TUI Sidebar</text>
+  <text x="597" y="104" class="sublabel">Badges, tabs, scrollback</text>
+
+  <!-- Desktop -->
+  <rect x="575" y="128" width="175" height="52" rx="10" fill="url(#g4)" stroke="#b48ead" stroke-width="1" stroke-opacity="0.5"/>
+  <text x="597" y="151" font-size="18" fill="#b48ead">&#9882;</text>
+  <text x="617" y="152" class="label">Desktop</text>
+  <text x="597" y="170" class="sublabel">Notifications + cooldown</text>
+
+  <!-- Telegram -->
+  <rect x="575" y="194" width="175" height="52" rx="10" fill="url(#g2)" stroke="#88c0d0" stroke-width="1" stroke-opacity="0.5"/>
+  <text x="597" y="218" font-size="18" fill="#88c0d0">&#9993;</text>
+  <text x="617" y="218" class="label">Telegram</text>
+  <text x="597" y="236" class="sublabel">Inline buttons + input</text>
+
+  <!-- ═══ Bottom: State badges ═══ -->
+  <rect x="120" y="272" width="600" height="36" rx="8" fill="#2e3440" stroke="#3b4252" stroke-width="1"/>
+
+  <circle cx="160" cy="290" r="5" fill="#a3be8c">
+    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <text x="172" y="294" font-size="10" fill="#a3be8c">working</text>
+
+  <circle cx="250" cy="290" r="5" fill="#d4a373"/>
+  <text x="262" y="294" font-size="10" fill="#d4a373">input</text>
+
+  <circle cx="320" cy="290" r="5" fill="#ebcb8b"/>
+  <text x="332" y="294" font-size="10" fill="#ebcb8b">permission</text>
+
+  <circle cx="420" cy="290" r="5" fill="#88c0d0"/>
+  <text x="432" y="294" font-size="10" fill="#88c0d0">asking</text>
+
+  <circle cx="500" cy="290" r="5" fill="#bf616a"/>
+  <text x="512" y="294" font-size="10" fill="#bf616a">error</text>
+
+  <circle cx="570" cy="290" r="5" fill="#8892a2"/>
+  <text x="582" y="294" font-size="10" fill="#8892a2">done</text>
+
+  <!-- Bottom label -->
+  <text x="680" y="294" font-size="9" fill="#4c566a" font-weight="600">6 STATES</text>
+</svg>

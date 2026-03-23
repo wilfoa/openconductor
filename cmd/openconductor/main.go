@@ -251,6 +251,17 @@ func runTUI(debug bool) {
 		p.Send(tea.Quit())
 	}()
 
+	// Register session-on-demand callback: when a Telegram message
+	// arrives for a project with no active session, inject a request
+	// into the TUI event loop to create one.
+	if tgBot != nil {
+		tgBot.SetSessionNeeded(func(projectName string) bool {
+			done := make(chan bool, 1)
+			p.Send(tui.TelegramSessionRequest(projectName, done))
+			return <-done
+		})
+	}
+
 	// Start Telegram bot (polling + bridge loops).
 	if tgBot != nil {
 		if err := tgBot.Start(); err != nil {

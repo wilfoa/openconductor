@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 120" fill="none">
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="60" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#d4a373"/>
+      <stop offset="100%" stop-color="#e6c9a8"/>
+    </linearGradient>
+    <linearGradient id="bar1" x1="0" y1="0" x2="0" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#a3be8c"/>
+      <stop offset="100%" stop-color="#8fbcbb"/>
+    </linearGradient>
+    <linearGradient id="bar2" x1="0" y1="0" x2="0" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#88c0d0"/>
+      <stop offset="100%" stop-color="#81a1c1"/>
+    </linearGradient>
+    <linearGradient id="bar3" x1="0" y1="0" x2="0" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#d4a373"/>
+      <stop offset="100%" stop-color="#d08770"/>
+    </linearGradient>
+  </defs>
+  <!-- Terminal frame -->
+  <rect x="16" y="16" width="88" height="88" rx="16" fill="#2e3440" stroke="#4c566a" stroke-width="1.5"/>
+  <!-- Terminal dots -->
+  <circle cx="34" cy="32" r="4" fill="#bf616a"/>
+  <circle cx="48" cy="32" r="4" fill="#ebcb8b"/>
+  <circle cx="62" cy="32" r="4" fill="#a3be8c"/>
+  <!-- Conductor bars (representing multiple agents) -->
+  <rect x="30" y="46" width="28" height="6" rx="3" fill="url(#bar1)"/>
+  <rect x="30" y="58" width="42" height="6" rx="3" fill="url(#bar2)"/>
+  <rect x="30" y="70" width="35" height="6" rx="3" fill="url(#bar3)"/>
+  <rect x="30" y="82" width="20" height="6" rx="3" fill="url(#bar1)" opacity="0.6"/>
+  <!-- Sidebar separator -->
+  <line x1="68" y1="42" x2="68" y2="92" stroke="#4c566a" stroke-width="1"/>
+  <!-- Right pane content lines -->
+  <rect x="74" y="46" width="22" height="4" rx="2" fill="#d8dee9" opacity="0.5"/>
+  <rect x="74" y="56" width="18" height="4" rx="2" fill="#d8dee9" opacity="0.3"/>
+  <rect x="74" y="66" width="20" height="4" rx="2" fill="#d8dee9" opacity="0.4"/>
+  <rect x="74" y="76" width="16" height="4" rx="2" fill="url(#glow)" opacity="0.6"/>
+  <!-- Attention dot -->
+  <circle cx="90" cy="48" r="3" fill="#d4a373">
+    <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <!-- Text -->
+  <text x="128" y="68" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="42" font-weight="700" fill="#eceff4" letter-spacing="-1">OpenConductor</text>
+  <text x="128" y="92" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" fill="#8892a2" letter-spacing="0.5">Terminal multiplexer for AI coding agents</text>
+</svg>
