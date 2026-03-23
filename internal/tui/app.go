@@ -1542,16 +1542,23 @@ func (a *App) runScrollCheck() {
 	}
 }
 
-// checkScrollback compares the current VT screen against the stored snapshot
-// for this project, detects scroll shifts, and pushes scrolled-off rows (as
-// glyph data) to the project's scrollback buffer. Returns the number of
+// checkScrollback detects lines that scrolled off the terminal viewport and
+// pushes them to the session's scrollback buffer. Returns the number of
 // lines pushed.
 //
-// For sessions running in alternate screen mode (TUI apps like OpenCode),
-// traditional scroll-shift detection doesn't work because the app redraws
-// the entire screen on every update. In that case, we fall back to pushing
-// all old non-blank rows that disappeared from the new screen, giving the
-// user access to previous screen content when scrolling back.
+// Two detection strategies are used:
+//
+// 1. Session.captureScrollOff (non-alt-screen only): runs synchronously on
+//    every VT.Write() and reliably catches all scroll events. When captures
+//    are found, they are pushed with PushForce (no buffer-wide dedup) so that
+//    legitimate duplicate content — repeated table rows, code patterns, blank
+//    separator lines — is preserved exactly as it appeared. Snapshot-based
+//    detection is skipped to avoid dual-detection duplicates.
+//
+// 2. Snapshot-based detection (fallback): compares the current VT screen
+//    against the stored snapshot to detect scroll shifts or TUI repaints.
+//    Uses buffer-wide dedup (Push) to prevent flooding from alt-screen TUI
+//    apps that repaint every ~100ms.
 func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 	sb := a.scrollbacks[sessionID]
 	if sb == nil {
@@ -1568,6 +1575,29 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 
 	w, h := s.Width, s.Height
 	altScreen := s.VT.Mode()&vt10x.ModeAltScreen != 0
+	isChrome := agent.GetChromeLineFilter(s.Project.Agent)
+
+	// ── Session-level captures (non-alt-screen only) ────────────────
+	//
+	// captureScrollOff runs per VT.Write() and catches every scroll event
+	// synchronously. When captures exist, use PushForce (no buffer-wide
+	// dedup) to preserve legitimate duplicate content (tables, code blocks,
+	// blank separator lines). Skip snapshot-based detection to avoid
+	// pushing the same lines twice.
+	captured := s.DrainScrollCapture()
+	if !altScreen && len(captured) > 0 {
+		pushed := 0
+		for _, cl := range captured {
+			if isChrome != nil && isChrome(cl.Text) {
+				continue
+			}
+			sb.PushForce(scrollbackLine(cl.Glyphs))
+			pushed++
+		}
+		return pushed
+	}
+
+	// ── Snapshot-based detection (alt-screen or no session captures) ─
 	cursorY := s.VT.Cursor().Y
 
 	// Build current screen snapshot (text + glyphs).
@@ -1592,13 +1622,7 @@ func (a *App) checkScrollback(s *session.Session, sessionID string) int {
 		return 0
 	}
 
-	// Drain any lines captured by the Session's VT.Write() scroll-off
-	// detection. These are lines that scrolled off the vt10x grid between
-	// snapshot ticks — too fast for our snapshot-based detection to catch.
-	// Filter out agent chrome lines (e.g. Claude Code spinner) to avoid
-	// polluting the scrollback with transient status text.
-	captured := s.DrainScrollCapture()
-	isChrome := agent.GetChromeLineFilter(s.Project.Agent)
+	// Push any remaining session captures (with dedup for alt-screen safety).
 	for _, cl := range captured {
 		if isChrome != nil && isChrome(cl.Text) {
 			continue

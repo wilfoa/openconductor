@@ -1,111 +1,269 @@
 # OpenConductor demo — run with: vhs demo.tape
-# Requires: openconductor binary built (make build), at least one agent installed.
+# Prerequisites: ./scripts/demo-setup.sh && make build
+# Requires: claude (Pro/Max auth), opencode installed
 
 Output assets/demo.gif
 
 Set Shell bash
-Set FontFamily "JetBrains Mono"
+Set FontFamily "Menlo"
 Set FontSize 14
 Set Width 1400
-Set Height 750
-Set Padding 12
-Set Framerate 24
-Set PlaybackSpeed 1.5
-Set TypingSpeed 50ms
+Set Height 800
+Set Padding 16
+Set Framerate 30
+Set PlaybackSpeed 1.0
+Set TypingSpeed 35ms
 Set WindowBar Colorful
 Set WindowBarSize 40
 Set CursorBlink false
 
-# Pre-create temp project directories so the form path completion works.
+# ── Hidden: setup + launch ───────────────────────────────────────
 Hide
-Type "mkdir -p /tmp/oc-demo-api /tmp/oc-demo-web"
+Type "bash ./scripts/demo-setup.sh"
 Enter
-Sleep 500ms
-Type "clear"
+Sleep 1s
+Type "OC_CONFIG_PATH=/tmp/oc-demo-config.yaml OC_STATE_PATH=/tmp/oc-demo-state.json OC_LOG_DIR=/tmp/oc-demo-logs ./openconductor"
 Enter
-Sleep 300ms
+Sleep 3s
 Show
 
-# ── Launch ────────────────────────────────────────────────────────
-Type "./openconductor"
+# Focus: SIDEBAR
+# Pattern: opencode, claude, opencode, claude
+
+# ══════════════════════════════════════════════════════════════════
+# 1. saas-app — OpenCode + minimax
+# ══════════════════════════════════════════════════════════════════
+
+Type "a"
+Sleep 700ms
+Type "saas-app"
+Sleep 200ms
+Enter
+Sleep 300ms
+Type "/tmp/oc-demo/saas-app"
+Sleep 200ms
 Enter
 Sleep 2s
-
-# ── Add first project ("api" with opencode) ──────────────────────
-# Sidebar is focused on first launch with no projects.
-Type "a"
-Sleep 800ms
-
-# Step 1: project name.
-Type "api"
-Sleep 400ms
+# Agent: opencode (default, just Enter)
 Enter
-Sleep 400ms
-
-# Step 2: repo path.
-Type "/tmp/oc-demo-api"
-Sleep 400ms
+Sleep 2s
+# Auto-approve: Off (default)
 Enter
-Sleep 400ms
-
-# Step 3: agent selection — opencode is index 3 (j j j).
-Down
-Down
-Down
-Sleep 300ms
+Sleep 2s
+# TERMINAL — pick minimax model via Ctrl+P → Switch model
+Ctrl+P
+Sleep 700ms
 Enter
-Sleep 400ms
-
-# Step 4: auto-approve — keep default (Off).
+Sleep 700ms
+Type "minimax"
+Sleep 700ms
 Enter
-Sleep 3s
-
-# ── Add second project ("web" with opencode) ─────────────────────
-# Switch focus back to sidebar.
-Ctrl+S
-Sleep 600ms
-
-Type "a"
-Sleep 800ms
-
-Type "web"
-Sleep 400ms
-Enter
-Sleep 400ms
-
-Type "/tmp/oc-demo-web"
-Sleep 400ms
-Enter
-Sleep 400ms
-
-# Agent: opencode again (j j j).
-Down
-Down
-Down
-Sleep 300ms
-Enter
-Sleep 400ms
-
-# Auto-approve: keep default.
-Enter
-Sleep 3s
-
-# ── Navigate: switch focus to terminal ────────────────────────────
-Ctrl+S
 Sleep 1s
+# → SIDEBAR for next
+Ctrl+S
+Sleep 300ms
 
-# ── Tab switching ─────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 2. home-infra — Claude Code (selected in form with j)
+# ══════════════════════════════════════════════════════════════════
+
+Type "a"
+Sleep 700ms
+Type "home-infra"
+Sleep 200ms
+Enter
+Sleep 300ms
+Type "/tmp/oc-demo/home-infra"
+Sleep 200ms
+Enter
+Sleep 2s
+# Agent: press j to select claude-code
+Down
+Sleep 2s
+Enter
+Sleep 2s
+# Auto-approve: Off
+Enter
+Sleep 4s
+# Trust folder prompt
+Enter
+Sleep 4s
+# TERMINAL (home-infra / claude) → SIDEBAR
+Ctrl+S
+Sleep 300ms
+
+# ══════════════════════════════════════════════════════════════════
+# 3. local-poc — OpenCode + minimax
+# ══════════════════════════════════════════════════════════════════
+
+Type "a"
+Sleep 700ms
+Type "local-poc"
+Sleep 200ms
+Enter
+Sleep 300ms
+Type "/tmp/oc-demo/local-poc"
+Sleep 200ms
+Enter
+Sleep 2s
+# Agent: opencode (default)
+Enter
+Sleep 2s
+# Auto-approve: Off
+Enter
+Sleep 2s
+# TERMINAL — pick minimax
+Ctrl+P
+Sleep 700ms
+Enter
+Sleep 700ms
+Type "minimax"
+Sleep 700ms
+Enter
+Sleep 1s
+# → SIDEBAR
+Ctrl+S
+Sleep 300ms
+
+# ══════════════════════════════════════════════════════════════════
+# 4. billing-api — Claude Code (selected in form with j)
+# ══════════════════════════════════════════════════════════════════
+
+Type "a"
+Sleep 700ms
+Type "billing-api"
+Sleep 200ms
+Enter
+Sleep 300ms
+Type "/tmp/oc-demo/billing-api"
+Sleep 200ms
+Enter
+Sleep 2s
+# Agent: press j to select claude-code
+Down
+Sleep 2s
+Enter
+Sleep 2s
+# Auto-approve: Off
+Enter
+Sleep 4s
+# Trust folder
+Enter
+Sleep 4s
+# TERMINAL (billing-api / claude)
+
+# ══════════════════════════════════════════════════════════════════
+# Send prompts to all 4 agents
+# ══════════════════════════════════════════════════════════════════
+
+# billing-api (claude) — create file to show working state
+Type "Create a Dockerfile for this Go service"
+Enter
+Sleep 3s
+
+# saas-app (opencode + minimax)
+Ctrl+K
+Sleep 1s
+Type "What is the tech stack of this project?"
+Enter
+Sleep 3s
+
+# home-infra (claude)
+Ctrl+K
+Sleep 1s
+Type "Create a main.tf with a VPC and public subnet"
+Enter
+Sleep 3s
+
+# local-poc (opencode + minimax)
+Ctrl+K
+Sleep 1s
+Type "What does the analyze function in main.py do?"
+Enter
+Sleep 3s
+
+# ══════════════════════════════════════════════════════════════════
+# Cycle through tabs — show working/attention badges
+# ══════════════════════════════════════════════════════════════════
+
 Ctrl+J
+Sleep 2s
+Ctrl+J
+Sleep 2s
+Ctrl+J
+Sleep 2s
+Ctrl+J
+Sleep 3s
+
+# Let agents finish
+Sleep 6s
+
+# Show results
+Ctrl+K
+Sleep 2s
+Ctrl+K
 Sleep 2s
 Ctrl+K
 Sleep 2s
 
-# ── Switch back one more time to show responsiveness ──────────────
-Ctrl+J
-Sleep 1.5s
+# ══════════════════════════════════════════════════════════════════
+# Show 's' agent switch on saas-app
+# ══════════════════════════════════════════════════════════════════
 
-# ── Exit ──────────────────────────────────────────────────────────
+# Navigate to saas-app tab
+Ctrl+K
+Sleep 1s
+
+# Switch to sidebar, select saas-app, press s to switch agent
+Ctrl+S
+Sleep 400ms
+Up
+Sleep 300ms
+Up
+Sleep 300ms
+Up
+Sleep 300ms
+Type "s"
+Sleep 4s
+# Trust folder for new claude session
+Enter
+Sleep 4s
+
+# ══════════════════════════════════════════════════════════════════
+# Sidebar navigation + scrollback
+# ══════════════════════════════════════════════════════════════════
+
+Ctrl+S
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Up
+Sleep 400ms
+Up
+Sleep 400ms
+Up
+Sleep 400ms
+Ctrl+S
+Sleep 400ms
+
+PageUp
+Sleep 1s
+PageUp
+Sleep 1s
+PageDown
+Sleep 1s
+PageDown
+Sleep 1s
+
+# ══════════════════════════════════════════════════════════════════
+# Exit
+# ══════════════════════════════════════════════════════════════════
+
 Ctrl+C
-Sleep 600ms
+Sleep 500ms
 Ctrl+C
 Sleep 1s
