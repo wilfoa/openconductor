@@ -145,7 +145,7 @@ func runBootstrap(args []string) {
 
 	if personaFlag != "" {
 		cfg := config.LoadOrDefault(config.DefaultConfigPath())
-		if err := persona.WritePersonaSection(repoPath, config.AgentType(agentType), config.PersonaType(personaFlag), cfg.Personas); err != nil {
+		if err := persona.WritePersonaBundle(repoPath, config.AgentType(agentType), config.PersonaType(personaFlag), cfg.Personas); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not write persona: %v\n", err)
 		}
 	}

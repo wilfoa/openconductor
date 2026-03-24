@@ -1568,7 +1568,7 @@ func (a *App) startSessionCmd(project config.Project, continueConv bool) tea.Cmd
 func (a *App) writePersonaCmd(project config.Project, startSession bool) tea.Cmd {
 	customPersonas := a.cfg.Personas
 	return func() tea.Msg {
-		err := persona.WritePersonaSection(
+		err := persona.WritePersonaBundle(
 			project.Repo,
 			project.Agent,
 			project.Persona,
