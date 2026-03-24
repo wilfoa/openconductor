@@ -70,6 +70,7 @@ go install github.com/wilfoa/openconductor/cmd/openconductor@latest
 ```bash
 openconductor                    # launch the TUI
 openconductor --debug            # with verbose logging
+openconductor persona            # manage custom personas
 openconductor telegram setup     # set up the Telegram bridge
 ```
 
@@ -84,11 +85,23 @@ projects:
   - name: my-api
     repo: ~/code/my-api
     agent: claude-code        # or "opencode"
-    auto_approve: safe        # off | safe | full
+    persona: scale            # vibe | poc | scale | custom name
+    auto_approve: off         # off | safe | full
 
   - name: frontend
     repo: ~/code/frontend
     agent: opencode
+    persona: vibe
+
+# Optional: custom personas
+personas:
+  - name: security-review
+    label: Security Review
+    instructions: |
+      Focus on security vulnerabilities.
+      - Review for OWASP Top 10
+      - Flag hardcoded secrets
+    auto_approve: off
 
 # Optional: LLM classifier for ambiguous attention states
 llm:
@@ -160,6 +173,22 @@ Press <kbd>s</kbd> to swap a project between Claude Code and OpenCode on the fly
 
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+
+### Persona presets
+
+Equip each project with a behavioral persona: **Vibe** (move fast, skip tests), **POC** (working demos, basic quality), or **Scale** (TDD, production-grade). Each persona writes instructions, configures MCPs (context7, playwright, sequential-thinking), installs skills (TDD, code review), and enables plugins &mdash; all automatically. Press <kbd>p</kbd> to change, <kbd>P</kbd> to manage custom personas.
+
+</td>
+<td width="50%" valign="top">
+
+### Custom personas
+
+Create your own personas with the built-in wizard (<kbd>P</kbd> in sidebar or `openconductor persona`). Define a name, instructions, and default auto-approve level. Custom personas appear alongside built-in ones in the project form and persona picker.
+
+</td>
+</tr>
 </table>
 
 ## Keyboard shortcuts
@@ -179,6 +208,8 @@ Press <kbd>s</kbd> to swap a project between Claude Code and OpenCode on the fly
 <tr><td><kbd>s</kbd></td><td>Switch agent</td></tr>
 <tr><td><kbd>a</kbd></td><td>Add project</td></tr>
 <tr><td><kbd>d</kbd></td><td>Delete project</td></tr>
+<tr><td><kbd>p</kbd></td><td>Change persona</td></tr>
+<tr><td><kbd>P</kbd></td><td>Manage custom personas</td></tr>
 <tr><td><kbd>t</kbd></td><td>Telegram setup</td></tr>
 <tr><th colspan="2" align="left">Mouse</th></tr>
 <tr><td>Click</td><td>Select tabs, sidebar items</td></tr>
@@ -222,6 +253,7 @@ openconductor
     ├── llm/                  Multi-provider LLM client (Anthropic, OpenAI, Google)
     ├── permission/           Permission classification (L1 patterns + L2 LLM)
     ├── telegram/             Bidirectional Telegram bot bridge
+    ├── persona/              Persona presets (instructions, MCPs, skills, plugins)
     ├── config/               YAML config + app state (tab restoration)
     ├── notification/         Desktop notifications
     ├── bootstrap/            Repo scaffolding with Go templates
