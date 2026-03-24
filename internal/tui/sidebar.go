@@ -68,16 +68,21 @@ func newSidebarModel(projects []config.Project, contentWidth int, customPersonas
 }
 
 func (m sidebarModel) Update(msg tea.Msg) (sidebarModel, tea.Cmd) {
-	if !m.focused {
-		return m, nil
-	}
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if !m.focused {
+			return m, nil
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
+		// Mouse events are always handled regardless of focus state —
+		// clicking a project should work even when the terminal is focused.
 		return m.handleMouse(msg)
+	}
+
+	if !m.focused {
+		return m, nil
 	}
 
 	// Forward to form if active.

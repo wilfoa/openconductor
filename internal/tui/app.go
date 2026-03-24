@@ -634,18 +634,28 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.X < screenPadding+sbWidth {
-			// Route to sidebar.
+			// Route to sidebar with Y adjusted for the tab bar offset.
+			// The sidebar's click handler uses absolute Y coordinates that
+			// assume Y=0 is the top of the sidebar, but the global mouse Y
+			// includes the tab bar above it.
+			adjustedMsg := msg
+			adjustedMsg.Y = msg.Y - a.tabBarHeight
 			var cmd tea.Cmd
-			a.sidebar, cmd = a.sidebar.Update(msg)
+			a.sidebar, cmd = a.sidebar.Update(adjustedMsg)
 			if cmd != nil {
-				// Sidebar returned a command (project switch, form open,
-				// etc.) — its handler will set the correct focus. Don't
-				// change focus here to avoid a one-frame gap where
-				// keystrokes go to the sidebar before the cmd is processed.
+				// Sidebar returned a command — process it. If it's a
+				// project switch, focus the terminal immediately so the
+				// user can start typing without waiting for the next cycle.
 				cmds = append(cmds, cmd)
-			} else if a.focus != focusSidebar {
-				// No command — this is a passive click (scroll, navigate).
-				// Focus the sidebar so keyboard shortcuts work.
+				if msg.Action == tea.MouseActionPress {
+					a.focus = focusTerminal
+					a.sidebar.focused = false
+					a.terminal.focused = true
+				}
+			} else if a.focus != focusSidebar && msg.Action == tea.MouseActionPress {
+				// No command on a press event — this is a passive click
+				// (scroll, navigate). Focus the sidebar so keyboard
+				// shortcuts work.
 				a.focus = focusSidebar
 				a.sidebar.focused = true
 				a.terminal.focused = false
