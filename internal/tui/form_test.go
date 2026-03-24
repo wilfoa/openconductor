@@ -21,7 +21,7 @@ func sendRune(t *testing.T, m formModel, r rune) (formModel, tea.Cmd) {
 }
 
 func newTestForm(existingNames ...string) formModel {
-	m, _ := newFormModel(existingNames)
+	m, _ := newFormModel(existingNames, nil)
 	return m
 }
 
@@ -148,14 +148,28 @@ func TestFormEscapeCancels(t *testing.T) {
 	}
 }
 
-func TestFormAdvanceToAutoApprove(t *testing.T) {
+func TestFormAdvanceToPersona(t *testing.T) {
 	m := newTestForm()
 	m.step = stepAgent
 	m.agentIndex = 0
 
 	m, cmd := sendKey(t, m, tea.KeyEnter)
 	if cmd != nil {
-		t.Fatal("expected no command on stepAgent→stepAutoApprove transition")
+		t.Fatal("expected no command on stepAgent→stepPersona transition")
+	}
+	if m.step != stepPersona {
+		t.Fatalf("expected stepPersona, got %d", m.step)
+	}
+}
+
+func TestFormAdvanceToAutoApprove(t *testing.T) {
+	m := newTestForm()
+	m.step = stepPersona
+	m.personaIndex = 0
+
+	m, cmd := sendKey(t, m, tea.KeyEnter)
+	if cmd != nil {
+		t.Fatal("expected no command on stepPersona→stepAutoApprove transition")
 	}
 	if m.step != stepAutoApprove {
 		t.Fatalf("expected stepAutoApprove, got %d", m.step)

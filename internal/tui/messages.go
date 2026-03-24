@@ -184,3 +184,20 @@ func TelegramSessionRequest(projectName string, done chan<- bool) tea.Msg {
 		Done:        done,
 	}
 }
+
+// PersonaChangeRequestMsg is sent when the user selects a new persona
+// for an existing project via the 'p' keybinding.
+type PersonaChangeRequestMsg struct {
+	ProjectName string
+	NewPersona  config.PersonaType
+}
+
+// PersonaWrittenMsg signals that the persona instruction file was written
+// (or an error occurred). StartSession indicates whether a session should
+// be started after the write (true when triggered by project add, false
+// when triggered by persona change with no active sessions).
+type PersonaWrittenMsg struct {
+	ProjectName  string
+	StartSession bool
+	Err          error
+}

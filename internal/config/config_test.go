@@ -249,3 +249,189 @@ func TestSaveState_CreatesDirectories(t *testing.T) {
 		t.Fatalf("round-trip failed: %+v", loaded)
 	}
 }
+
+// ── Persona-related tests ───────────────────────────────────────
+
+func TestValidateAcceptsPersonaField(t *testing.T) {
+	cfg := &Config{Projects: []Project{
+		{Name: "proj", Repo: "/tmp", Agent: AgentClaudeCode, Persona: PersonaVibe},
+	}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("expected no error for project with persona 'vibe', got %v", err)
+	}
+}
+
+func TestValidateAcceptsEmptyPersona(t *testing.T) {
+	cfg := &Config{Projects: []Project{
+		{Name: "proj", Repo: "/tmp", Agent: AgentClaudeCode, Persona: ""},
+	}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("expected no error for project with empty persona, got %v", err)
+	}
+}
+
+func TestValidatePersonaRefBuiltin(t *testing.T) {
+	cfg := &Config{}
+	for _, p := range []PersonaType{PersonaVibe, PersonaPOC, PersonaScale} {
+		if err := cfg.ValidatePersonaRef(p); err != nil {
+			t.Fatalf("expected builtin persona %q to be accepted, got %v", p, err)
+		}
+	}
+}
+
+func TestValidatePersonaRefNone(t *testing.T) {
+	cfg := &Config{}
+	if err := cfg.ValidatePersonaRef(PersonaNone); err != nil {
+		t.Fatalf("expected empty persona ref to be accepted, got %v", err)
+	}
+}
+
+func TestValidatePersonaRefCustom(t *testing.T) {
+	cfg := &Config{
+		Personas: []CustomPersona{
+			{Name: "my-custom", Label: "My Custom", Instructions: "do stuff"},
+		},
+	}
+	if err := cfg.ValidatePersonaRef(PersonaType("my-custom")); err != nil {
+		t.Fatalf("expected custom persona 'my-custom' to be accepted, got %v", err)
+	}
+}
+
+func TestValidatePersonaRefUnknown(t *testing.T) {
+	cfg := &Config{}
+	if err := cfg.ValidatePersonaRef(PersonaType("nonexistent")); err == nil {
+		t.Fatal("expected error for unknown persona ref 'nonexistent'")
+	}
+}
+
+func TestValidateCustomPersonaMissingName(t *testing.T) {
+	cfg := &Config{
+		Personas: []CustomPersona{
+			{Name: "", Label: "Bad", Instructions: "text"},
+		},
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for custom persona with empty name")
+	}
+}
+
+func TestValidateCustomPersonaDuplicateName(t *testing.T) {
+	cfg := &Config{
+		Personas: []CustomPersona{
+			{Name: "dupe", Label: "First", Instructions: "text1"},
+			{Name: "dupe", Label: "Second", Instructions: "text2"},
+		},
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for duplicate custom persona name")
+	}
+}
+
+func TestValidateCustomPersonaMissingLabel(t *testing.T) {
+	cfg := &Config{
+		Personas: []CustomPersona{
+			{Name: "nolabel", Label: "", Instructions: "text"},
+		},
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for custom persona with empty label")
+	}
+}
+
+func TestValidateCustomPersonaMissingInstructions(t *testing.T) {
+	cfg := &Config{
+		Personas: []CustomPersona{
+			{Name: "noinstr", Label: "No Instr", Instructions: ""},
+		},
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for custom persona with empty instructions")
+	}
+}
+
+func TestValidateCustomPersonaInvalidApproval(t *testing.T) {
+	cfg := &Config{
+		Personas: []CustomPersona{
+			{Name: "badapproval", Label: "Bad", Instructions: "text", AutoApprove: ApprovalLevel("yolo")},
+		},
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for custom persona with invalid auto_approve")
+	}
+}
+
+func TestSaveLoadRoundTripWithPersona(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	original := &Config{
+		Projects: []Project{
+			{Name: "proj1", Repo: "/tmp/proj1", Agent: AgentClaudeCode, Persona: PersonaVibe},
+			{Name: "proj2", Repo: "/tmp/proj2", Agent: AgentOpenCode, Persona: PersonaType("my-custom")},
+		},
+		Personas: []CustomPersona{
+			{Name: "my-custom", Label: "My Custom Persona", Instructions: "be creative", AutoApprove: ApprovalSafe},
+		},
+	}
+
+	if err := original.Save(path); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(loaded.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(loaded.Projects))
+	}
+	if loaded.Projects[0].Persona != PersonaVibe {
+		t.Fatalf("project 0 persona: got %q, want %q", loaded.Projects[0].Persona, PersonaVibe)
+	}
+	if loaded.Projects[1].Persona != PersonaType("my-custom") {
+		t.Fatalf("project 1 persona: got %q, want %q", loaded.Projects[1].Persona, "my-custom")
+	}
+
+	if len(loaded.Personas) != 1 {
+		t.Fatalf("expected 1 custom persona, got %d", len(loaded.Personas))
+	}
+	cp := loaded.Personas[0]
+	if cp.Name != "my-custom" {
+		t.Errorf("custom persona name: got %q, want %q", cp.Name, "my-custom")
+	}
+	if cp.Label != "My Custom Persona" {
+		t.Errorf("custom persona label: got %q, want %q", cp.Label, "My Custom Persona")
+	}
+	if cp.Instructions != "be creative" {
+		t.Errorf("custom persona instructions: got %q, want %q", cp.Instructions, "be creative")
+	}
+	if cp.AutoApprove != ApprovalSafe {
+		t.Errorf("custom persona auto_approve: got %q, want %q", cp.AutoApprove, ApprovalSafe)
+	}
+}
+
+func TestLoadConfigWithoutPersonaField(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := `projects:
+  - name: legacy
+    repo: /tmp/legacy
+    agent: claude-code
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed for YAML without persona field: %v", err)
+	}
+	if cfg.Projects[0].Persona != PersonaNone {
+		t.Fatalf("expected empty persona for legacy config, got %q", cfg.Projects[0].Persona)
+	}
+	if len(cfg.Personas) != 0 {
+		t.Fatalf("expected 0 custom personas for legacy config, got %d", len(cfg.Personas))
+	}
+}

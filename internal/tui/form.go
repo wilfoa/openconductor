@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/persona"
 )
 
 // approvalOption pairs a display label with a description and the config value.
@@ -45,6 +46,7 @@ const (
 	stepName formStep = iota
 	stepRepo
 	stepAgent
+	stepPersona
 	stepAutoApprove
 )
 
@@ -54,17 +56,20 @@ var agentTypes = []config.AgentType{
 }
 
 type formModel struct {
-	step          formStep
-	nameInput     textinput.Model
-	repoInput     textinput.Model
-	agentIndex    int
-	approvalIndex int // index into approvalOptions
-	err           string
-	existingNames map[string]bool
-	completion    completionModel
+	step           formStep
+	nameInput      textinput.Model
+	repoInput      textinput.Model
+	agentIndex     int
+	personaIndex   int // index into personaOptions
+	approvalIndex  int // index into approvalOptions
+	err            string
+	existingNames  map[string]bool
+	completion     completionModel
+	personaOptions []persona.PersonaOption
+	customPersonas []config.CustomPersona
 }
 
-func newFormModel(existingNames []string) (formModel, tea.Cmd) {
+func newFormModel(existingNames []string, customPersonas []config.CustomPersona) (formModel, tea.Cmd) {
 	ni := textinput.New()
 	ni.Placeholder = "my-project"
 	ni.CharLimit = 64
@@ -81,11 +86,13 @@ func newFormModel(existingNames []string) (formModel, tea.Cmd) {
 	cmd := ni.Focus()
 
 	return formModel{
-		step:          stepName,
-		nameInput:     ni,
-		repoInput:     ri,
-		agentIndex:    0,
-		existingNames: names,
+		step:           stepName,
+		nameInput:      ni,
+		repoInput:      ri,
+		agentIndex:     0,
+		existingNames:  names,
+		personaOptions: persona.AllPersonaOptions(customPersonas),
+		customPersonas: customPersonas,
 	}, cmd
 }
 
@@ -155,6 +162,30 @@ func (m formModel) Update(msg tea.Msg) (formModel, tea.Cmd) {
 		case msg.Type == tea.KeyUp && m.step == stepAgent:
 			if m.agentIndex > 0 {
 				m.agentIndex--
+			}
+			return m, nil
+
+		case isRuneKey(msg, 'j') && m.step == stepPersona:
+			if m.personaIndex < len(m.personaOptions)-1 {
+				m.personaIndex++
+			}
+			return m, nil
+
+		case isRuneKey(msg, 'k') && m.step == stepPersona:
+			if m.personaIndex > 0 {
+				m.personaIndex--
+			}
+			return m, nil
+
+		case msg.Type == tea.KeyDown && m.step == stepPersona:
+			if m.personaIndex < len(m.personaOptions)-1 {
+				m.personaIndex++
+			}
+			return m, nil
+
+		case msg.Type == tea.KeyUp && m.step == stepPersona:
+			if m.personaIndex > 0 {
+				m.personaIndex--
 			}
 			return m, nil
 
@@ -247,8 +278,22 @@ func (m formModel) advance() (formModel, tea.Cmd) {
 		return m, nil
 
 	case stepAgent:
-		m.step = stepAutoApprove
+		m.step = stepPersona
 		m.repoInput.Blur()
+		return m, nil
+
+	case stepPersona:
+		selected := m.personaOptions[m.personaIndex]
+		m.step = stepAutoApprove
+		result := persona.Resolve(selected.Name, m.customPersonas)
+		if result.Found && result.Approval != "" {
+			for i, opt := range approvalOptions {
+				if opt.level == result.Approval {
+					m.approvalIndex = i
+					break
+				}
+			}
+		}
 		return m, nil
 
 	case stepAutoApprove:
@@ -256,6 +301,7 @@ func (m formModel) advance() (formModel, tea.Cmd) {
 			Name:        strings.TrimSpace(m.nameInput.Value()),
 			Repo:        strings.TrimSpace(m.repoInput.Value()),
 			Agent:       agentTypes[m.agentIndex],
+			Persona:     m.personaOptions[m.personaIndex].Name,
 			AutoApprove: approvalOptions[m.approvalIndex].level,
 		}
 		return m, func() tea.Msg { return ProjectAddedMsg{Project: project} }
@@ -266,7 +312,7 @@ func (m formModel) advance() (formModel, tea.Cmd) {
 
 func (m formModel) stepIndicator() string {
 	step := int(m.step) + 1
-	return formStepStyle.Render(fmt.Sprintf("%d/4", step))
+	return formStepStyle.Render(fmt.Sprintf("%d/5", step))
 }
 
 func (m formModel) View() string {
@@ -328,12 +374,37 @@ func (m formModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(formHintStyle.Render("  Esc cancel"))
 
+	case stepPersona:
+		b.WriteString(formDoneStyle.Render("Name   " + m.nameInput.Value()))
+		b.WriteString("\n")
+		b.WriteString(formDoneStyle.Render("Repo   " + m.repoInput.Value()))
+		b.WriteString("\n")
+		b.WriteString(formDoneStyle.Render("Agent  " + string(agentTypes[m.agentIndex])))
+		b.WriteString("\n\n")
+		b.WriteString(formLabelStyle.Render("Persona"))
+		b.WriteString("\n")
+		for i, opt := range m.personaOptions {
+			line := fmt.Sprintf("%-8s  %s", opt.Label, opt.Description)
+			if i == m.personaIndex {
+				b.WriteString(formSelectedStyle.Render("▸ " + line))
+			} else {
+				b.WriteString(formOptionStyle.Render("  " + line))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString(formHintStyle.Render("  j/k to select, Enter to confirm"))
+		b.WriteString("\n")
+		b.WriteString(formHintStyle.Render("  Esc cancel"))
+
 	case stepAutoApprove:
 		b.WriteString(formDoneStyle.Render("Name   " + m.nameInput.Value()))
 		b.WriteString("\n")
 		b.WriteString(formDoneStyle.Render("Repo   " + m.repoInput.Value()))
 		b.WriteString("\n")
 		b.WriteString(formDoneStyle.Render("Agent  " + string(agentTypes[m.agentIndex])))
+		b.WriteString("\n")
+		personaLabel := persona.Label(m.personaOptions[m.personaIndex].Name, m.customPersonas)
+		b.WriteString(formDoneStyle.Render("Persona  " + personaLabel))
 		b.WriteString("\n\n")
 		b.WriteString(formLabelStyle.Render("Auto-approve permissions"))
 		b.WriteString("\n")
@@ -385,6 +456,19 @@ func (m *formModel) selectApproval(idx int) {
 //	line 6+i: agent option i
 const formAgentOptionContentStart = 6
 
+// formPersonaOptionContentStart is the screen Y offset of the first persona
+// option within the sidebar for stepPersona:
+//
+//	line 0: "Add Project"
+//	line 1: (blank)
+//	line 2: "Name   ..."
+//	line 3: "Repo   ..."
+//	line 4: "Agent  ..."
+//	line 5: (blank)
+//	line 6: "Persona"
+//	line 7+i: persona option i
+const formPersonaOptionContentStart = 7
+
 // formApprovalOptionContentStart is the screen Y offset of the first approval
 // option within the sidebar for stepAutoApprove:
 //
@@ -393,7 +477,15 @@ const formAgentOptionContentStart = 6
 //	line 2: "Name   ..."
 //	line 3: "Repo   ..."
 //	line 4: "Agent  ..."
-//	line 5: (blank)
-//	line 6: "Auto-approve permissions"
-//	line 7+i: approval option i
-const formApprovalOptionContentStart = 7
+//	line 5: "Persona  ..."
+//	line 6: (blank)
+//	line 7: "Auto-approve permissions"
+//	line 8+i: approval option i
+const formApprovalOptionContentStart = 8
+
+// selectPersona sets the persona selection by index (used for mouse clicks).
+func (m *formModel) selectPersona(idx int) {
+	if idx >= 0 && idx < len(m.personaOptions) {
+		m.personaIndex = idx
+	}
+}

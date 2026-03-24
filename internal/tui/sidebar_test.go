@@ -35,7 +35,7 @@ func testProjects() []config.Project {
 }
 
 func TestSidebarIgnoresWhenUnfocused(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = false
 	m.selected = 0
 
@@ -49,7 +49,7 @@ func TestSidebarIgnoresWhenUnfocused(t *testing.T) {
 }
 
 func TestSidebarJKNavigation(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 
 	m, _ = sidebarSendRune(t, m, 'j')
@@ -82,7 +82,7 @@ func TestSidebarJKNavigation(t *testing.T) {
 }
 
 func TestSidebarEnterEmitsProjectSwitched(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 	m.selected = 1
 
@@ -104,7 +104,7 @@ func TestSidebarEnterEmitsProjectSwitched(t *testing.T) {
 }
 
 func TestSidebarAOpensForm(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 
 	m, _ = sidebarSendRune(t, m, 'a')
@@ -114,7 +114,7 @@ func TestSidebarAOpensForm(t *testing.T) {
 }
 
 func TestSidebarDStartsConfirmDelete(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 	m.selected = 0
 
@@ -125,7 +125,7 @@ func TestSidebarDStartsConfirmDelete(t *testing.T) {
 }
 
 func TestSidebarConfirmDeleteY(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 	m.selected = 1
 	m.mode = sidebarConfirmDelete
@@ -145,7 +145,7 @@ func TestSidebarConfirmDeleteY(t *testing.T) {
 }
 
 func TestSidebarConfirmDeleteEscape(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 	m.mode = sidebarConfirmDelete
 
@@ -156,7 +156,7 @@ func TestSidebarConfirmDeleteEscape(t *testing.T) {
 }
 
 func TestSidebarMouseClickProject(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 
 	// Project 1 starts at Y = sidebarTopPadding + sidebarTitleRows + 1*projectRows
@@ -176,7 +176,7 @@ func TestSidebarMouseClickProject(t *testing.T) {
 }
 
 func TestSidebarMouseClickAddButton(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 
 	addY := m.addButtonY()
@@ -187,7 +187,7 @@ func TestSidebarMouseClickAddButton(t *testing.T) {
 }
 
 func TestSidebarMouseWheelScroll(t *testing.T) {
-	m := newSidebarModel(testProjects(), defaultSidebarWidth)
+	m := newSidebarModel(testProjects(), defaultSidebarWidth, nil)
 	m.focused = true
 	m.selected = 1
 
@@ -202,7 +202,7 @@ func TestSidebarMouseWheelScroll(t *testing.T) {
 }
 
 func TestSidebarEmptyStateView(t *testing.T) {
-	m := newSidebarModel(nil, defaultSidebarWidth)
+	m := newSidebarModel(nil, defaultSidebarWidth, nil)
 	m.focused = true
 	m.height = 20
 
@@ -220,7 +220,7 @@ func TestSidebarEmptyStateView(t *testing.T) {
 // Projects without an open tab show just the agent name.
 func TestSidebarStateLabelOnlyWithOpenTab(t *testing.T) {
 	projects := testProjects()
-	m := newSidebarModel(projects, defaultSidebarWidth)
+	m := newSidebarModel(projects, defaultSidebarWidth, nil)
 	m.focused = true
 	m.height = 30
 	m.selected = 0 // alpha is selected

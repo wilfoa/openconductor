@@ -18,6 +18,7 @@ import (
 	"github.com/openconductorhq/openconductor/internal/attention"
 	"github.com/openconductorhq/openconductor/internal/config"
 	"github.com/openconductorhq/openconductor/internal/logging"
+	"github.com/openconductorhq/openconductor/internal/persona"
 	"github.com/openconductorhq/openconductor/internal/session"
 	"github.com/openconductorhq/openconductor/internal/telegram"
 )
@@ -229,7 +230,7 @@ func NewApp(cfg *config.Config, configPath string, restoredState *config.AppStat
 		}
 	}
 
-	sidebar := newSidebarModel(cfg.Projects, defaultSidebarWidth)
+	sidebar := newSidebarModel(cfg.Projects, defaultSidebarWidth, cfg.Personas)
 	sidebar.selected = activeIdx
 	// Sync sidebar's openTabs map with the initial open tabs.
 	for _, name := range openTabs {
@@ -939,10 +940,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go a.onProjectAdded(project.Name)
 		}
 
-		// Save config and start session with --continue to pick up any
-		// prior conversation.
+		// Save config. If persona is set, write persona file first and
+		// start session after PersonaWrittenMsg arrives. Otherwise start
+		// session immediately.
 		cmds = append(cmds, a.saveConfigCmd())
-		cmds = append(cmds, a.startSessionCmd(project, true))
+		if project.Persona != config.PersonaNone {
+			cmds = append(cmds, a.writePersonaCmd(project, true))
+		} else {
+			cmds = append(cmds, a.startSessionCmd(project, true))
+		}
 		return a, tea.Batch(cmds...)
 
 	case FocusTerminalMsg:
@@ -1223,7 +1229,63 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		configPath := config.DefaultConfigPath()
 		freshCfg := config.LoadOrDefault(configPath)
 		a.cfg.Telegram = freshCfg.Telegram
+		a.cfg.Personas = freshCfg.Personas
+		a.sidebar.customPersonas = freshCfg.Personas
 		return a, nil
+
+	case PersonaWrittenMsg:
+		if msg.Err != nil {
+			logging.Error("persona write failed",
+				"project", msg.ProjectName,
+				"err", msg.Err,
+			)
+		} else {
+			logging.Info("persona written",
+				"project", msg.ProjectName,
+			)
+		}
+		// Start session if this was triggered by project add.
+		if msg.StartSession {
+			for _, p := range a.cfg.Projects {
+				if p.Name == msg.ProjectName {
+					cmds = append(cmds, a.startSessionCmd(p, true))
+					return a, tea.Batch(cmds...)
+				}
+			}
+		}
+		return a, nil
+
+	case PersonaChangeRequestMsg:
+		// Update project persona in config.
+		for i := range a.cfg.Projects {
+			if a.cfg.Projects[i].Name == msg.ProjectName {
+				a.cfg.Projects[i].Persona = msg.NewPersona
+				break
+			}
+		}
+		a.sidebar.projects = a.cfg.Projects
+		cmds = append(cmds, a.saveConfigCmd())
+
+		// Write persona file (handles both set and removal).
+		for _, p := range a.cfg.Projects {
+			if p.Name == msg.ProjectName {
+				cmds = append(cmds, a.writePersonaCmd(p, false))
+				break
+			}
+		}
+
+		// If sessions are open, stop them and start a fresh one after write.
+		sessions := a.mgr.GetSessionsByProject(msg.ProjectName)
+		if len(sessions) > 0 {
+			for _, s := range sessions {
+				a.removeTab(s.ID)
+				a.mgr.StopSession(s.ID)
+				delete(a.sessionStates, s.ID)
+				delete(a.sidebar.states, s.Project.Name)
+			}
+		}
+
+		return a, tea.Batch(cmds...)
 
 	case TickMsg:
 		// Run attention detection on the active session.
@@ -1497,6 +1559,26 @@ func (a *App) startSessionCmd(project config.Project, continueConv bool) tea.Cmd
 			}
 		}
 		return sessionStartedMsg{SessionID: s.ID}
+	}
+}
+
+// writePersonaCmd returns a tea.Cmd that writes the persona instruction file
+// into the project's repo. startSession controls whether a session should be
+// started after the write completes (via PersonaWrittenMsg).
+func (a *App) writePersonaCmd(project config.Project, startSession bool) tea.Cmd {
+	customPersonas := a.cfg.Personas
+	return func() tea.Msg {
+		err := persona.WritePersonaSection(
+			project.Repo,
+			project.Agent,
+			project.Persona,
+			customPersonas,
+		)
+		return PersonaWrittenMsg{
+			ProjectName:  project.Name,
+			StartSession: startSession,
+			Err:          err,
+		}
 	}
 }
 

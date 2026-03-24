@@ -18,6 +18,7 @@ import (
 	"github.com/openconductorhq/openconductor/internal/logging"
 	"github.com/openconductorhq/openconductor/internal/notification"
 	"github.com/openconductorhq/openconductor/internal/permission"
+	"github.com/openconductorhq/openconductor/internal/persona"
 	"github.com/openconductorhq/openconductor/internal/telegram"
 	"github.com/openconductorhq/openconductor/internal/tui"
 )
@@ -38,6 +39,9 @@ func main() {
 		switch args[0] {
 		case "bootstrap":
 			runBootstrap(args[1:])
+			return
+		case "persona":
+			runPersona()
 			return
 		case "telegram":
 			runTelegram(args[1:])
@@ -61,16 +65,18 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  (no command)       Launch the TUI")
 	fmt.Println("  bootstrap          Bootstrap agent config files for a repository")
+	fmt.Println("  persona            Interactive persona setup wizard")
 	fmt.Println("  telegram setup     Set up Telegram bot integration")
 	fmt.Println()
 	fmt.Println("Global flags:")
 	fmt.Println("  --debug    Enable verbose debug logging to ~/.openconductor/openconductor.log")
 	fmt.Println()
 	fmt.Println("Bootstrap usage:")
-	fmt.Println("  openconductor bootstrap <repo-path> [--agent <type>]")
+	fmt.Println("  openconductor bootstrap <repo-path> [--agent <type>] [--persona <name>]")
 	fmt.Println()
 	fmt.Println("Flags:")
-	fmt.Println("  --agent    Agent type: opencode (default), claude-code")
+	fmt.Println("  --agent      Agent type: opencode (default), claude-code")
+	fmt.Println("  --persona    Persona to apply (e.g. senior-go-engineer)")
 }
 
 func runTelegram(args []string) {
@@ -91,15 +97,22 @@ func runTelegram(args []string) {
 	}
 }
 
+func runPersona() {
+	if err := persona.RunSetup(); err != nil {
+		os.Exit(1)
+	}
+}
+
 func runBootstrap(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: missing repository path")
-		fmt.Fprintln(os.Stderr, "Usage: openconductor bootstrap <repo-path> [--agent <type>]")
+		fmt.Fprintln(os.Stderr, "Usage: openconductor bootstrap <repo-path> [--agent <type>] [--persona <name>]")
 		os.Exit(1)
 	}
 
 	repoPath := args[0]
 	agentType := "claude-code"
+	personaFlag := ""
 
 	// Parse remaining flags.
 	for i := 1; i < len(args); i++ {
@@ -111,6 +124,13 @@ func runBootstrap(args []string) {
 			}
 			i++
 			agentType = args[i]
+		case "--persona":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --persona requires a value")
+				os.Exit(1)
+			}
+			i++
+			personaFlag = args[i]
 		default:
 			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", args[i])
 			os.Exit(1)
@@ -122,6 +142,14 @@ func runBootstrap(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	if personaFlag != "" {
+		cfg := config.LoadOrDefault(config.DefaultConfigPath())
+		if err := persona.WritePersonaSection(repoPath, config.AgentType(agentType), config.PersonaType(personaFlag), cfg.Personas); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not write persona: %v\n", err)
+		}
+	}
+
 	fmt.Println("Done.")
 }
 

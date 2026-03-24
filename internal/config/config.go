@@ -33,10 +33,51 @@ const (
 	ApprovalFull ApprovalLevel = "full"
 )
 
+// PersonaType identifies a behavioral preset that writes agent-specific
+// instructions into the project's instruction file. Built-in personas
+// use well-known slugs; custom personas reference names from Config.Personas.
+type PersonaType string
+
+const (
+	// PersonaNone is the zero value -- no persona instructions are written.
+	PersonaNone PersonaType = ""
+	// PersonaVibe optimises for velocity: skip tests, auto-approve, move fast.
+	PersonaVibe PersonaType = "vibe"
+	// PersonaPOC builds working prototypes with reasonable quality.
+	PersonaPOC PersonaType = "poc"
+	// PersonaScale targets production-grade engineering with TDD and thorough review.
+	PersonaScale PersonaType = "scale"
+)
+
+// BuiltinPersonaNames is the set of built-in persona slugs. Exported so
+// the persona package can check for name collisions during custom persona
+// creation without importing a list of constants.
+var BuiltinPersonaNames = map[PersonaType]bool{
+	PersonaVibe:  true,
+	PersonaPOC:   true,
+	PersonaScale: true,
+}
+
+// CustomPersona defines a user-created persona stored in the top-level
+// config under the "personas" key.
+type CustomPersona struct {
+	// Name is a slug identifier used in Project.Persona.
+	Name string `yaml:"name"`
+	// Label is a human-readable display name shown in the TUI.
+	Label string `yaml:"label"`
+	// Instructions is the markdown text injected into the agent's
+	// instruction file between the persona markers.
+	Instructions string `yaml:"instructions"`
+	// AutoApprove is the suggested default approval level when this
+	// persona is selected.
+	AutoApprove ApprovalLevel `yaml:"auto_approve,omitempty"`
+}
+
 type Project struct {
 	Name        string        `yaml:"name"`
 	Repo        string        `yaml:"repo"`
 	Agent       AgentType     `yaml:"agent"`
+	Persona     PersonaType   `yaml:"persona,omitempty"`
 	AutoApprove ApprovalLevel `yaml:"auto_approve,omitempty"`
 }
 
@@ -61,6 +102,7 @@ type TelegramConfig struct {
 
 type Config struct {
 	Projects      []Project          `yaml:"projects"`
+	Personas      []CustomPersona    `yaml:"personas,omitempty"`
 	LLM           LLMConfig          `yaml:"llm"`
 	Notifications NotificationConfig `yaml:"notifications"`
 	Telegram      TelegramConfig     `yaml:"telegram"`
@@ -117,7 +159,52 @@ func (c *Config) validate() error {
 			return fmt.Errorf("project %q: unknown auto_approve level %q", p.Name, p.AutoApprove)
 		}
 	}
+
+	// Validate custom persona definitions.
+	personaNames := make(map[string]bool)
+	for i, cp := range c.Personas {
+		if cp.Name == "" {
+			return fmt.Errorf("persona %d: missing name", i)
+		}
+		if personaNames[cp.Name] {
+			return fmt.Errorf("persona %q: duplicate name", cp.Name)
+		}
+		personaNames[cp.Name] = true
+		if cp.Label == "" {
+			return fmt.Errorf("persona %q: missing label", cp.Name)
+		}
+		if cp.Instructions == "" {
+			return fmt.Errorf("persona %q: missing instructions", cp.Name)
+		}
+		switch cp.AutoApprove {
+		case ApprovalOff, ApprovalSafe, ApprovalFull, "":
+			// valid
+		default:
+			return fmt.Errorf("persona %q: unknown auto_approve level %q",
+				cp.Name, cp.AutoApprove)
+		}
+	}
+
 	return nil
+}
+
+// ValidatePersonaRef checks whether a persona reference is valid against
+// the built-in names and the config's custom personas. This is NOT called
+// from validate()/Load() so that a deleted custom persona does not prevent
+// config loading.
+func (c *Config) ValidatePersonaRef(persona PersonaType) error {
+	if persona == PersonaNone {
+		return nil
+	}
+	if BuiltinPersonaNames[persona] {
+		return nil
+	}
+	for _, cp := range c.Personas {
+		if PersonaType(cp.Name) == persona {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown persona %q", persona)
 }
 
 func LoadOrDefault(path string) *Config {
