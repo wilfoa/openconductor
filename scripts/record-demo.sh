@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/opt/homebrew/bin/bash
 # record-demo.sh — Scripted demo for asciinema recording.
 #
 # Usage:
@@ -20,6 +20,7 @@ simtype() {
 }
 
 # Send a keystroke to the openconductor process via its PTY.
+# We'll use the file descriptor from the coprocess.
 sendkey() {
     printf '%s' "$1" >&"${OC[1]}"
 }
@@ -43,77 +44,59 @@ OC_PID=$!
 # Give it time to start and render.
 sleep 2
 
-# ── Add first project ("api" with Scale persona) ──────────────────
+# ── Add first project ────────────────────────────────────────────
 sendkey "a"                    # Open add-project form
 pause 0.8
-simtype "api" 0.06 >&"${OC[1]}"   # Step 1: Project name
+simtype "api" 0.06 >&"${OC[1]}"   # Project name
 pause 0.3
-sendkey $'\r'                  # Enter → step 2
+sendkey $'\r'                  # Enter → next step
 pause 0.3
-simtype "/tmp/oc-demo-api" 0.03 >&"${OC[1]}"  # Step 2: Repo path
+simtype "/tmp/oc-demo-api" 0.03 >&"${OC[1]}"  # Repo path
 pause 0.3
-sendkey $'\r'                  # Enter → step 3 (agent)
+sendkey $'\r'                  # Enter → agent step
 pause 0.3
-# Agent: claude-code (Down once)
+# Navigate to opencode (index 3): Down Down Down
+sendkey $'\x1b[B'             # Down
+sendkey $'\x1b[B'             # Down
 sendkey $'\x1b[B'             # Down
 pause 0.3
-sendkey $'\r'                  # Enter → step 4 (persona)
+sendkey $'\r'                  # Enter → persona step
 pause 0.3
-# Persona: browse to Scale (Down Down Down)
-sendkey $'\x1b[B'             # Down → Vibe
-pause 0.5
-sendkey $'\x1b[B'             # Down → POC
-pause 0.5
-sendkey $'\x1b[B'             # Down → Scale
-pause 0.5
-sendkey $'\r'                  # Enter → step 5 (auto-approve)
+# Persona: Vibe (Down 1)
+sendkey $'\x1b[B'
 pause 0.3
-# Auto-approve: Scale defaults to Off. Accept.
+sendkey $'\r'                  # Enter → auto-approve (Vibe defaults to Full)
+pause 0.3
 sendkey $'\r'                  # Enter → confirm
 pause 3
 
-# ── Add second project ("web" with Vibe persona) ──────────────────
+# ── Add second project ───────────────────────────────────────────
 sendkey $'\x13'               # Ctrl+S → focus sidebar
 pause 0.6
 sendkey "a"                    # Open form
 pause 0.8
-simtype "web" 0.06 >&"${OC[1]}"   # Step 1: name
+simtype "web" 0.06 >&"${OC[1]}"
 pause 0.3
 sendkey $'\r'
 pause 0.3
-simtype "/tmp/oc-demo-web" 0.03 >&"${OC[1]}"  # Step 2: path
+simtype "/tmp/oc-demo-web" 0.03 >&"${OC[1]}"
 pause 0.3
 sendkey $'\r'
 pause 0.3
-# Agent: claude-code
+sendkey $'\x1b[B'
+sendkey $'\x1b[B'
 sendkey $'\x1b[B'
 pause 0.3
 sendkey $'\r'                  # Enter → persona step
 pause 0.3
-# Persona: Vibe (Down once)
-sendkey $'\x1b[B'             # Down → Vibe
-pause 0.5
-sendkey $'\r'                  # Enter → auto-approve
+# Persona: POC (Down 2)
+sendkey $'\x1b[B'
+sendkey $'\x1b[B'
 pause 0.3
-# Auto-approve: Vibe defaults to Full. Accept.
-sendkey $'\r'
+sendkey $'\r'                  # Enter → auto-approve (POC defaults to Safe)
+pause 0.3
+sendkey $'\r'                  # Enter → confirm
 pause 3
-
-# ── Show persona labels in sidebar ─────────────────────────────────
-sendkey $'\x13'               # Ctrl+S → focus sidebar
-pause 1.5
-
-# ── Change persona on selected project ─────────────────────────────
-sendkey "p"                    # Open persona picker
-pause 0.8
-sendkey $'\x1b[B'             # Down → Vibe
-pause 0.4
-sendkey $'\x1b[B'             # Down → POC
-pause 0.4
-sendkey $'\r'                  # Select POC
-pause 1
-sendkey "y"                    # Confirm session restart
-pause 2
 
 # ── Navigate ─────────────────────────────────────────────────────
 sendkey $'\x13'               # Ctrl+S → focus terminal

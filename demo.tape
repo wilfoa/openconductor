@@ -30,7 +30,7 @@ Show
 # Ctrl+K = forward (1→2→3→4→1), Ctrl+J = backward
 
 # ══════════════════════════════════════════════════════════════════
-# ADD PROJECTS: OC, CC, OC, CC — each with a persona
+# ADD PROJECTS: OC, CC, OC, CC
 # ══════════════════════════════════════════════════════════════════
 
 # 1. saas-app — OpenCode + Vibe persona + minimax
@@ -46,12 +46,12 @@ Enter
 Sleep 2s
 Enter
 Sleep 2s
-# Step 4/5: Persona — pick Vibe (Down 1)
+# Persona: Vibe (Down 1)
 Down
 Sleep 500ms
 Enter
 Sleep 2s
-# Step 5/5: Auto-approve — Vibe defaults to Full, accept it
+# Auto-approve: Vibe defaults to Full
 Enter
 Sleep 2s
 Ctrl+P
@@ -80,7 +80,7 @@ Down
 Sleep 2s
 Enter
 Sleep 2s
-# Step 4/5: Persona — pick Scale (Down 3)
+# Persona: Scale (Down 3)
 Down
 Sleep 400ms
 Down
@@ -89,7 +89,7 @@ Down
 Sleep 400ms
 Enter
 Sleep 2s
-# Step 5/5: Auto-approve — Scale defaults to Off, accept it
+# Auto-approve: Scale defaults to Off
 Enter
 Sleep 4s
 Enter
@@ -110,14 +110,14 @@ Enter
 Sleep 2s
 Enter
 Sleep 2s
-# Step 4/5: Persona — pick POC (Down 2)
+# Persona: POC (Down 2)
 Down
 Sleep 400ms
 Down
 Sleep 400ms
 Enter
 Sleep 2s
-# Step 5/5: Auto-approve — POC defaults to Safe, accept it
+# Auto-approve: POC defaults to Safe
 Enter
 Sleep 2s
 Ctrl+P
@@ -146,7 +146,7 @@ Down
 Sleep 2s
 Enter
 Sleep 2s
-# Step 4/5: Persona — pick Scale (Down 3)
+# Persona: Scale (Down 3)
 Down
 Sleep 400ms
 Down
@@ -155,12 +155,12 @@ Down
 Sleep 400ms
 Enter
 Sleep 2s
-# Step 5/5: Auto-approve — Scale defaults to Off, accept it
+# Auto-approve: Scale defaults to Off
 Enter
 Sleep 4s
 Enter
 Sleep 4s
-# Active: billing-api (4) / Claude Code / Scale
+# Active: billing-api (4) / Claude Code
 
 # ══════════════════════════════════════════════════════════════════
 # TRIGGER: Claude Code question (billing-api) + answer it
@@ -235,7 +235,7 @@ Enter
 Sleep 10s
 
 # ══════════════════════════════════════════════════════════════════
-# Cycle all tabs to show results + persona labels in sidebar
+# Cycle all tabs to show results
 # ══════════════════════════════════════════════════════════════════
 
 Ctrl+J
@@ -248,7 +248,7 @@ Ctrl+K
 Sleep 3s
 
 # ══════════════════════════════════════════════════════════════════
-# Change persona: switch saas-app from Vibe to POC
+# Agent switch with 's' on saas-app
 # From billing-api(4), Ctrl+J×3 → saas-app(1)
 # ══════════════════════════════════════════════════════════════════
 
@@ -267,25 +267,6 @@ Up
 Sleep 300ms
 Up
 Sleep 300ms
-
-# Press 'p' to open persona picker
-Type "p"
-Sleep 800ms
-# Navigate to POC (Down twice: None → Vibe → POC)
-Down
-Sleep 400ms
-Down
-Sleep 400ms
-Enter
-Sleep 1s
-# Confirm session restart
-Type "y"
-Sleep 3s
-
-# ══════════════════════════════════════════════════════════════════
-# Agent switch with 's' on saas-app
-# ══════════════════════════════════════════════════════════════════
-
 Type "s"
 Sleep 4s
 Enter
