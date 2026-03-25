@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/openconductorhq/openconductor/internal/config"
+	"github.com/openconductorhq/openconductor/internal/persona"
 )
 
 type sidebarMode int
@@ -19,6 +20,8 @@ const (
 	sidebarNormal sidebarMode = iota
 	sidebarForm
 	sidebarConfirmDelete
+	sidebarPersonaSelect  // inline persona picker for existing project
+	sidebarConfirmReset   // confirmation before restarting sessions
 )
 
 // Layout constants for click hit-testing.
@@ -30,46 +33,56 @@ const (
 )
 
 type sidebarModel struct {
-	projects     []config.Project
-	states       map[string]SessionState
-	openTabs     map[string]bool // tracks which projects have open tabs
-	selected     int
-	focused      bool
-	height       int
-	contentWidth int
-	dragging     bool
-	mode         sidebarMode
-	form         formModel
-	animFrame    int // cycles 0..animFrameCount-1 for working badge breathing
+	projects       []config.Project
+	states         map[string]SessionState
+	openTabs       map[string]bool // tracks which projects have open tabs
+	selected       int
+	focused        bool
+	height         int
+	contentWidth   int
+	dragging       bool
+	mode           sidebarMode
+	form           formModel
+	animFrame            int // cycles 0..animFrameCount-1 for working badge breathing
+	customPersonas       []config.CustomPersona
+	personaPickerOptions []persona.PersonaOption // populated when entering sidebarPersonaSelect
+	personaPickerIndex   int                     // currently highlighted persona in picker
+	pendingPersona       config.PersonaType      // chosen persona awaiting reset confirmation
 }
 
-func newSidebarModel(projects []config.Project, contentWidth int) sidebarModel {
+func newSidebarModel(projects []config.Project, contentWidth int, customPersonas []config.CustomPersona) sidebarModel {
 	states := make(map[string]SessionState)
 	for _, p := range projects {
 		states[p.Name] = StateIdle
 	}
 	return sidebarModel{
-		projects:     projects,
-		states:       states,
-		openTabs:     make(map[string]bool),
-		selected:     0,
-		focused:      false,
-		contentWidth: contentWidth,
-		mode:         sidebarNormal,
+		projects:       projects,
+		states:         states,
+		openTabs:       make(map[string]bool),
+		selected:       0,
+		focused:        false,
+		contentWidth:   contentWidth,
+		mode:           sidebarNormal,
+		customPersonas: customPersonas,
 	}
 }
 
 func (m sidebarModel) Update(msg tea.Msg) (sidebarModel, tea.Cmd) {
-	if !m.focused {
-		return m, nil
-	}
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if !m.focused {
+			return m, nil
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
+		// Mouse events are always handled regardless of focus state —
+		// clicking a project should work even when the terminal is focused.
 		return m.handleMouse(msg)
+	}
+
+	if !m.focused {
+		return m, nil
 	}
 
 	// Forward to form if active.
@@ -98,6 +111,73 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 				return m, func() tea.Msg { return ProjectDeletedMsg{Name: name} }
 			}
 			m.mode = sidebarNormal
+			return m, nil
+		case isRuneKey(msg, 'n'), msg.Type == tea.KeyEscape:
+			m.mode = sidebarNormal
+			return m, nil
+		}
+		return m, nil
+
+	case sidebarPersonaSelect:
+		switch {
+		case msg.Type == tea.KeyEscape:
+			m.mode = sidebarNormal
+			return m, nil
+		case isRuneKey(msg, 'j'), msg.Type == tea.KeyDown:
+			if m.personaPickerIndex < len(m.personaPickerOptions)-1 {
+				m.personaPickerIndex++
+			}
+			return m, nil
+		case isRuneKey(msg, 'k'), msg.Type == tea.KeyUp:
+			if m.personaPickerIndex > 0 {
+				m.personaPickerIndex--
+			}
+			return m, nil
+		case msg.Type == tea.KeyEnter:
+			selected := m.personaPickerOptions[m.personaPickerIndex]
+			if m.selected < len(m.projects) {
+				current := m.projects[m.selected].Persona
+				if selected.Name == current {
+					// Same persona — no-op.
+					m.mode = sidebarNormal
+					return m, nil
+				}
+				// Check if sessions are open — if so, confirm reset.
+				if m.openTabs[m.projects[m.selected].Name] {
+					m.pendingPersona = selected.Name
+					m.mode = sidebarConfirmReset
+					return m, nil
+				}
+				// No sessions — change directly.
+				m.mode = sidebarNormal
+				p := m.projects[m.selected]
+				newPersona := selected.Name
+				return m, func() tea.Msg {
+					return PersonaChangeRequestMsg{
+						ProjectName: p.Name,
+						NewPersona:  newPersona,
+					}
+				}
+			}
+			m.mode = sidebarNormal
+			return m, nil
+		}
+		return m, nil
+
+	case sidebarConfirmReset:
+		switch {
+		case isRuneKey(msg, 'y'):
+			m.mode = sidebarNormal
+			if m.selected < len(m.projects) {
+				p := m.projects[m.selected]
+				newPersona := m.pendingPersona
+				return m, func() tea.Msg {
+					return PersonaChangeRequestMsg{
+						ProjectName: p.Name,
+						NewPersona:  newPersona,
+					}
+				}
+			}
 			return m, nil
 		case isRuneKey(msg, 'n'), msg.Type == tea.KeyEscape:
 			m.mode = sidebarNormal
@@ -150,6 +230,32 @@ func (m sidebarModel) handleKey(msg tea.KeyMsg) (sidebarModel, tea.Cmd) {
 				}
 			}
 			return m, nil
+
+		case isRuneKey(msg, 'p'):
+			// Change persona for selected project.
+			if len(m.projects) > 0 && m.selected < len(m.projects) {
+				p := m.projects[m.selected]
+				m.mode = sidebarPersonaSelect
+				m.personaPickerOptions = persona.AllPersonaOptions(m.customPersonas)
+				// Pre-select current persona.
+				m.personaPickerIndex = 0
+				for i, opt := range m.personaPickerOptions {
+					if opt.Name == p.Persona {
+						m.personaPickerIndex = i
+						break
+					}
+				}
+			}
+			return m, nil
+
+		case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'P':
+			// Open Persona Manager as system tab.
+			return m, func() tea.Msg {
+				return SystemTabRequestMsg{
+					Name: "Persona Manager",
+					Args: []string{"persona"},
+				}
+			}
 
 		case isRuneKey(msg, 'd'), isRuneKey(msg, 'x'):
 			if len(m.projects) > 0 && m.selected < len(m.projects) {
@@ -238,7 +344,17 @@ func (m sidebarModel) handleClick(x, y int) (sidebarModel, tea.Cmd) {
 				}
 			}
 		}
-		// In form step 4, clicking an approval level option selects it.
+		// In form step 4, clicking a persona option selects it.
+		if m.form.step == stepPersona {
+			for i := range m.form.personaOptions {
+				optionY := sidebarTopPadding + formPersonaOptionContentStart + i
+				if y == optionY {
+					m.form.selectPersona(i)
+					return m, nil
+				}
+			}
+		}
+		// In form step 5, clicking an approval level option selects it.
 		if m.form.step == stepAutoApprove {
 			for i := range approvalOptions {
 				optionY := sidebarTopPadding + formApprovalOptionContentStart + i
@@ -258,7 +374,7 @@ func (m sidebarModel) openForm() (sidebarModel, tea.Cmd) {
 	for i, p := range m.projects {
 		names[i] = p.Name
 	}
-	form, cmd := newFormModel(names)
+	form, cmd := newFormModel(names, m.customPersonas)
 	m.form = form
 	m.mode = sidebarForm
 	return m, cmd
@@ -321,10 +437,17 @@ func (m sidebarModel) View() string {
 						badgeFG := rawFG(stateBadgeColor(state, m.animFrame))
 						restoreFG := rawFG(colorFg)
 						nameLine = badgeFG + char + restoreFG + " " + name
-						agentLine = "  " + agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
+						agentLine = "  " + agentDisplayName(p.Agent)
+						if p.Persona != config.PersonaNone {
+							agentLine += " · " + personaDisplayLabel(p.Persona, m.customPersonas)
+						}
+						agentLine += " · " + m.stateLabel(p.Name)
 					} else {
 						nameLine = "  " + name // space for alignment (no badge)
 						agentLine = "  " + agentDisplayName(p.Agent)
+						if p.Persona != config.PersonaNone {
+							agentLine += " · " + personaDisplayLabel(p.Persona, m.customPersonas)
+						}
 					}
 					content := nameLine + "\n" + agentLine
 					b.WriteString(projectActiveStyle.
@@ -340,9 +463,16 @@ func (m sidebarModel) View() string {
 					b.WriteString("\n")
 					var agentLine string
 					if m.openTabs[p.Name] {
-						agentLine = agentDisplayName(p.Agent) + " · " + m.stateLabel(p.Name)
+						agentLine = agentDisplayName(p.Agent)
+						if p.Persona != config.PersonaNone {
+							agentLine += " · " + personaDisplayLabel(p.Persona, m.customPersonas)
+						}
+						agentLine += " · " + m.stateLabel(p.Name)
 					} else {
 						agentLine = agentDisplayName(p.Agent)
+						if p.Persona != config.PersonaNone {
+							agentLine += " · " + personaDisplayLabel(p.Persona, m.customPersonas)
+						}
 					}
 					b.WriteString(projectAgentStyle.Render(agentLine))
 				}
@@ -354,11 +484,34 @@ func (m sidebarModel) View() string {
 			}
 		}
 
-		if m.mode == sidebarConfirmDelete && m.selected < len(m.projects) {
+		switch {
+		case m.mode == sidebarConfirmDelete && m.selected < len(m.projects):
 			b.WriteString("\n")
 			name := m.projects[m.selected].Name
 			b.WriteString(confirmStyle.Render(fmt.Sprintf("Delete %s? (y/n)", name)))
-		} else {
+
+		case m.mode == sidebarPersonaSelect:
+			b.WriteString("\n")
+			b.WriteString(formLabelStyle.Render("Change persona"))
+			b.WriteString("\n")
+			for i, opt := range m.personaPickerOptions {
+				line := fmt.Sprintf("%-8s %s", opt.Label, opt.Description)
+				if i == m.personaPickerIndex {
+					b.WriteString(formSelectedStyle.Render("▸ " + line))
+				} else {
+					b.WriteString(formOptionStyle.Render("  " + line))
+				}
+				b.WriteString("\n")
+			}
+			b.WriteString(formHintStyle.Render("  j/k Enter Esc"))
+
+		case m.mode == sidebarConfirmReset && m.selected < len(m.projects):
+			b.WriteString("\n")
+			label := persona.Label(m.pendingPersona, m.customPersonas)
+			b.WriteString(confirmStyle.Render(
+				fmt.Sprintf("Change to %s?\nSession will restart. (y/n)", label)))
+
+		default:
 			b.WriteString("\n")
 			b.WriteString(addButtonStyle.Render("+ new project"))
 		}
@@ -487,6 +640,16 @@ func agentDisplayName(agent config.AgentType) string {
 		return "claude"
 	}
 	return string(agent)
+}
+
+// personaDisplayLabel returns a short label for a persona, truncating to
+// 8 chars with ellipsis if needed to fit sidebar width.
+func personaDisplayLabel(p config.PersonaType, customPersonas []config.CustomPersona) string {
+	label := persona.Label(p, customPersonas)
+	if len(label) > 8 {
+		return label[:7] + "…"
+	}
+	return label
 }
 
 func (m sidebarModel) Width() int {

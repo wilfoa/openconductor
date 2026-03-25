@@ -49,6 +49,8 @@ func (m statusBarModel) View() string {
 			{"s", "switch agent"},
 			{"a", "add"},
 			{"d", "delete"},
+			{"p", "persona"},
+			{"P", "manage"},
 			{"Ctrl+C", "exit"},
 		}
 	} else {

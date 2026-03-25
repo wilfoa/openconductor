@@ -602,7 +602,7 @@ func TestAppProjectAddedReturnsStartCmd(t *testing.T) {
 }
 
 func TestSidebarDynamicWidth(t *testing.T) {
-	m := newSidebarModel(testProjects(), 30)
+	m := newSidebarModel(testProjects(), 30, nil)
 	// Width = contentWidth + border(1). Padding is inside contentWidth.
 	expected := 30 + 1
 	if m.Width() != expected {

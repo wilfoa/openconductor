@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/opt/homebrew/bin/bash
 # record-demo.sh — Scripted demo for asciinema recording.
 #
 # Usage:
@@ -60,9 +60,14 @@ sendkey $'\x1b[B'             # Down
 sendkey $'\x1b[B'             # Down
 sendkey $'\x1b[B'             # Down
 pause 0.3
-sendkey $'\r'                  # Enter → auto-approve step
+sendkey $'\r'                  # Enter → persona step
 pause 0.3
-sendkey $'\r'                  # Enter → confirm (Off)
+# Persona: Vibe (Down 1)
+sendkey $'\x1b[B'
+pause 0.3
+sendkey $'\r'                  # Enter → auto-approve (Vibe defaults to Full)
+pause 0.3
+sendkey $'\r'                  # Enter → confirm
 pause 3
 
 # ── Add second project ───────────────────────────────────────────
@@ -82,9 +87,15 @@ sendkey $'\x1b[B'
 sendkey $'\x1b[B'
 sendkey $'\x1b[B'
 pause 0.3
-sendkey $'\r'
+sendkey $'\r'                  # Enter → persona step
 pause 0.3
-sendkey $'\r'
+# Persona: POC (Down 2)
+sendkey $'\x1b[B'
+sendkey $'\x1b[B'
+pause 0.3
+sendkey $'\r'                  # Enter → auto-approve (POC defaults to Safe)
+pause 0.3
+sendkey $'\r'                  # Enter → confirm
 pause 3
 
 # ── Navigate ─────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ Show
 # ADD PROJECTS: OC, CC, OC, CC
 # ══════════════════════════════════════════════════════════════════
 
-# 1. saas-app — OpenCode + minimax
+# 1. saas-app — OpenCode + Vibe persona
 Type "a"
 Sleep 700ms
 Type "saas-app"
@@ -46,20 +46,18 @@ Enter
 Sleep 2s
 Enter
 Sleep 2s
+# Persona: Vibe (Down 1)
+Down
+Sleep 500ms
 Enter
 Sleep 2s
-Ctrl+P
-Sleep 1500ms
+# Auto-approve: Vibe defaults to Full
 Enter
-Sleep 1500ms
-Type "minimax"
-Sleep 1s
-Enter
-Sleep 1s
+Sleep 2s
 Ctrl+S
 Sleep 300ms
 
-# 2. home-infra — Claude Code
+# 2. home-infra — Claude Code + Scale persona
 Type "a"
 Sleep 700ms
 Type "home-infra"
@@ -74,6 +72,16 @@ Down
 Sleep 2s
 Enter
 Sleep 2s
+# Persona: Scale (Down 3)
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Enter
+Sleep 2s
+# Auto-approve: Scale defaults to Off
 Enter
 Sleep 4s
 Enter
@@ -81,7 +89,7 @@ Sleep 4s
 Ctrl+S
 Sleep 300ms
 
-# 3. local-poc — OpenCode + minimax
+# 3. local-poc — OpenCode + POC persona
 Type "a"
 Sleep 700ms
 Type "local-poc"
@@ -94,20 +102,20 @@ Enter
 Sleep 2s
 Enter
 Sleep 2s
+# Persona: POC (Down 2)
+Down
+Sleep 400ms
+Down
+Sleep 400ms
 Enter
 Sleep 2s
-Ctrl+P
-Sleep 1500ms
+# Auto-approve: POC defaults to Safe
 Enter
-Sleep 1500ms
-Type "minimax"
-Sleep 1s
-Enter
-Sleep 1s
+Sleep 2s
 Ctrl+S
 Sleep 300ms
 
-# 4. billing-api — Claude Code
+# 4. billing-api — Claude Code + Scale persona
 Type "a"
 Sleep 700ms
 Type "billing-api"
@@ -122,6 +130,16 @@ Down
 Sleep 2s
 Enter
 Sleep 2s
+# Persona: Scale (Down 3)
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Enter
+Sleep 2s
+# Auto-approve: Scale defaults to Off
 Enter
 Sleep 4s
 Enter
