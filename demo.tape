@@ -33,7 +33,7 @@ Show
 # ADD PROJECTS: OC, CC, OC, CC
 # ══════════════════════════════════════════════════════════════════
 
-# 1. saas-app — OpenCode + Vibe persona + minimax
+# 1. saas-app — OpenCode + Vibe persona
 Type "a"
 Sleep 700ms
 Type "saas-app"
@@ -54,14 +54,6 @@ Sleep 2s
 # Auto-approve: Vibe defaults to Full
 Enter
 Sleep 2s
-Ctrl+P
-Sleep 1500ms
-Enter
-Sleep 1500ms
-Type "minimax"
-Sleep 1s
-Enter
-Sleep 1s
 Ctrl+S
 Sleep 300ms
 
@@ -97,7 +89,7 @@ Sleep 4s
 Ctrl+S
 Sleep 300ms
 
-# 3. local-poc — OpenCode + POC persona + minimax
+# 3. local-poc — OpenCode + POC persona
 Type "a"
 Sleep 700ms
 Type "local-poc"
@@ -120,14 +112,6 @@ Sleep 2s
 # Auto-approve: POC defaults to Safe
 Enter
 Sleep 2s
-Ctrl+P
-Sleep 1500ms
-Enter
-Sleep 1500ms
-Type "minimax"
-Sleep 1s
-Enter
-Sleep 1s
 Ctrl+S
 Sleep 300ms
 
