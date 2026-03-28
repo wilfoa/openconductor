@@ -40,3 +40,9 @@ Thumbs.db
 # VHS (keep demo.tape tracked; ignore other tapes)
 !demo.tape
 .opencode-telegram
+
+# TUI test artifacts
+.tui-test/
+
+# Persona temp files
+.persona-*
