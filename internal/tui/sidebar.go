@@ -525,7 +525,25 @@ func (m sidebarModel) View() string {
 	}
 
 	content := b.String()
-	return style.Width(m.contentWidth).Height(m.height).Render(content)
+
+	// Truncate content to fit the available height. Lipgloss Height()
+	// only pads — it does NOT truncate. Without this, a tall sidebar
+	// (many projects) pushes the tab bar and terminal off-screen.
+	// We use MaxHeight instead of Height to avoid adding padding that
+	// would stretch the sidebar beyond what's needed for its content.
+	if m.height > 0 {
+		lines := strings.Split(content, "\n")
+		maxLines := m.height - style.GetVerticalPadding()
+		if maxLines < 1 {
+			maxLines = 1
+		}
+		if len(lines) > maxLines {
+			lines = lines[:maxLines]
+		}
+		content = strings.Join(lines, "\n")
+	}
+
+	return style.Width(m.contentWidth).MaxHeight(m.height).Render(content)
 }
 
 func (m sidebarModel) statusBadge(projectName string) string {
