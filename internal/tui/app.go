@@ -634,14 +634,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.X < screenPadding+sbWidth {
-			// Route to sidebar with Y adjusted for the tab bar offset.
-			// The sidebar's click handler uses absolute Y coordinates that
-			// assume Y=0 is the top of the sidebar, but the global mouse Y
-			// includes the tab bar above it.
-			adjustedMsg := msg
-			adjustedMsg.Y = msg.Y - a.tabBarHeight
+			// Route to sidebar. No Y adjustment — the sidebar spans the
+			// full height from Y=0 (tab bar only exists in the right panel).
 			var cmd tea.Cmd
-			a.sidebar, cmd = a.sidebar.Update(adjustedMsg)
+			a.sidebar, cmd = a.sidebar.Update(msg)
 			if cmd != nil {
 				// Sidebar returned a command — process it. If it's a
 				// project switch, focus the terminal immediately so the
