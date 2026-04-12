@@ -51,15 +51,24 @@ func NewClassifier(client llm.Client) *Classifier {
 	}
 }
 
+// ClassifyResult holds the parsed output from the LLM classifier.
+type ClassifyResult struct {
+	// State is the agent state classification (WAITING_INPUT, WORKING, etc.).
+	State string
+	// ImagePaths are file paths to images the agent created or referenced,
+	// extracted by the LLM from natural language output. May be empty.
+	ImagePaths []string
+}
+
 // Classify sends the terminal text to the LLM and parses the response.
-// It returns one of: "WAITING_INPUT", "NEEDS_PERMISSION", "DONE", "ERROR",
-// "WORKING", or "STUCK".
+// The result includes the agent state classification and any image file paths
+// the LLM detected in the output.
 //
 // Throttling rules:
 //   - Skips if called sooner than minInterval since the last call for this session.
 //   - Skips if the buffer content has not changed since the last call.
 //   - Applies a longer backoff when the previous result was WORKING.
-func (c *Classifier) Classify(ctx context.Context, sessionName string, lastLines []string) (string, error) {
+func (c *Classifier) Classify(ctx context.Context, sessionName string, lastLines []string) (ClassifyResult, error) {
 	c.mu.Lock()
 
 	now := time.Now()
@@ -69,7 +78,7 @@ func (c *Classifier) Classify(ctx context.Context, sessionName string, lastLines
 	if prev, ok := c.lastBuffer[sessionName]; ok && prev == bufferKey {
 		result := c.lastResult[sessionName]
 		c.mu.Unlock()
-		return result, nil
+		return ClassifyResult{State: result}, nil
 	}
 
 	// Apply throttling: minimum interval between calls.
@@ -82,7 +91,7 @@ func (c *Classifier) Classify(ctx context.Context, sessionName string, lastLines
 		if now.Sub(last) < interval {
 			result := c.lastResult[sessionName]
 			c.mu.Unlock()
-			return result, nil
+			return ClassifyResult{State: result}, nil
 		}
 	}
 
@@ -95,16 +104,17 @@ func (c *Classifier) Classify(ctx context.Context, sessionName string, lastLines
 
 	result, err := c.client.Classify(ctx, prompt)
 	if err != nil {
-		return "", fmt.Errorf("attention classify %q: %w", sessionName, err)
+		return ClassifyResult{}, fmt.Errorf("attention classify %q: %w", sessionName, err)
 	}
 
 	state := parseState(result)
+	imagePaths := parseImagePaths(result)
 
 	c.mu.Lock()
 	c.lastResult[sessionName] = state
 	c.mu.Unlock()
 
-	return state, nil
+	return ClassifyResult{State: state, ImagePaths: imagePaths}, nil
 }
 
 // buildPrompt constructs the classification prompt from terminal lines.
@@ -121,12 +131,16 @@ Reply with exactly one of:
 - WORKING: Agent is still actively working
 - STUCK: Agent appears to be looping or making no progress
 
+Also, if the agent created or references any image files (.png, .jpg, .jpeg, .gif, .webp, .svg), list their file paths. If none, write "Images: none".
+
 Terminal output:
 ---
 ` + joined + `
 ---
 
-Classification:`
+Classification:
+
+Images:`
 }
 
 // parseState extracts and validates the classification label from the LLM
@@ -152,4 +166,47 @@ func parseState(response string) string {
 
 	// Default to WORKING if we cannot parse the response.
 	return "WORKING"
+}
+
+// parseImagePaths extracts image file paths from the LLM response.
+// Looks for lines after "Images:" that contain file paths with image extensions.
+func parseImagePaths(response string) []string {
+	// Find the "Images:" section in the response.
+	idx := strings.Index(strings.ToLower(response), "images:")
+	if idx < 0 {
+		return nil
+	}
+
+	section := response[idx+len("images:"):]
+	trimmed := strings.TrimSpace(section)
+
+	// "none" means no images detected.
+	if strings.HasPrefix(strings.ToLower(trimmed), "none") {
+		return nil
+	}
+
+	// Split remaining lines and collect paths.
+	var paths []string
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.TrimPrefix(line, "* ")
+		line = strings.Trim(line, "`\"'")
+		line = strings.TrimSpace(line)
+
+		if line == "" || strings.HasPrefix(strings.ToLower(line), "none") {
+			continue
+		}
+
+		// Only keep lines that look like file paths with image extensions.
+		lower := strings.ToLower(line)
+		for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"} {
+			if strings.HasSuffix(lower, ext) {
+				paths = append(paths, line)
+				break
+			}
+		}
+	}
+
+	return paths
 }

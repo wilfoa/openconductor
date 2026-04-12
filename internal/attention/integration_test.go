@@ -116,28 +116,28 @@ func runProviderIntegration(t *testing.T, client llm.Client, providerName string
 	for _, sc := range terminalScenarios() {
 		t.Run(sc.name, func(t *testing.T) {
 			sessionName := providerName + "_" + sc.name
-			result, err := classifier.Classify(ctx, sessionName, sc.lines)
+			cr, err := classifier.Classify(ctx, sessionName, sc.lines)
 			if err != nil {
 				t.Fatalf("%s classify error: %v", providerName, err)
 			}
 
-			t.Logf("%s returned: %q", providerName, result)
+			t.Logf("%s returned: %q", providerName, cr.State)
 
 			// Check result is in wantAny.
 			found := false
 			for _, want := range sc.wantAny {
-				if result == want {
+				if cr.State == want {
 					found = true
 					break
 				}
 			}
 			if !found {
-				t.Errorf("%s: got %q, want one of %v", providerName, result, sc.wantAny)
+				t.Errorf("%s: got %q, want one of %v", providerName, cr.State, sc.wantAny)
 			}
 
 			// Check result is not in wantNone.
 			for _, bad := range sc.wantNone {
-				if result == bad {
+				if cr.State == bad {
 					t.Errorf("%s: got unwanted state %q", providerName, bad)
 				}
 			}

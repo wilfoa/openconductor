@@ -98,4 +98,7 @@ type AttentionEvent struct {
 	Detail string
 	// Source indicates how the event was detected: "heuristic" or "llm".
 	Source string
+	// ImagePaths contains file paths to images the agent created or referenced,
+	// extracted by the L2 LLM classifier. Empty for L1 heuristic events.
+	ImagePaths []string
 }

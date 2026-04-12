@@ -96,24 +96,24 @@ func TestClassifierThrottleUnchangedBuffer(t *testing.T) {
 	lines := []string{"Task completed."}
 
 	// First call — hits the LLM.
-	result, err := c.Classify(ctx, "proj1", lines)
+	cr, err := c.Classify(ctx, "proj1", lines)
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	if result != "DONE" {
-		t.Fatalf("first call: got %q, want DONE", result)
+	if cr.State != "DONE" {
+		t.Fatalf("first call: got %q, want DONE", cr.State)
 	}
 	if mock.calls != 1 {
 		t.Fatalf("expected 1 LLM call, got %d", mock.calls)
 	}
 
 	// Second call with same buffer — should return cached, no new LLM call.
-	result, err = c.Classify(ctx, "proj1", lines)
+	cr, err = c.Classify(ctx, "proj1", lines)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
-	if result != "DONE" {
-		t.Fatalf("second call: got %q, want DONE", result)
+	if cr.State != "DONE" {
+		t.Fatalf("second call: got %q, want DONE", cr.State)
 	}
 	if mock.calls != 1 {
 		t.Fatalf("expected still 1 LLM call after unchanged buffer, got %d", mock.calls)
@@ -157,9 +157,9 @@ func TestClassifierWorkingBackoff(t *testing.T) {
 	ctx := context.Background()
 
 	// First call — returns WORKING.
-	result, _ := c.Classify(ctx, "proj1", []string{"line A"})
-	if result != "WORKING" {
-		t.Fatalf("expected WORKING, got %q", result)
+	cr, _ := c.Classify(ctx, "proj1", []string{"line A"})
+	if cr.State != "WORKING" {
+		t.Fatalf("expected WORKING, got %q", cr.State)
 	}
 	if mock.calls != 1 {
 		t.Fatalf("expected 1 call, got %d", mock.calls)

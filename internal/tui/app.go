@@ -110,6 +110,10 @@ type App struct {
 	// Set via SetTelegramChannel before starting the program.
 	telegramCh chan<- telegram.Event
 
+	// imageDedup tracks which image files have been sent to Telegram to
+	// prevent re-sending the same file on consecutive attention ticks.
+	imageDedup *telegram.ImageDedup
+
 	// onProjectAdded, when non-nil, is called when a project is added
 	// via the sidebar. Used to create a Telegram topic for the new project.
 	onProjectAdded func(projectName string)
@@ -2490,6 +2494,15 @@ func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, d
 		lines = agent.FilterChromeLines(s.Project.Agent, lines)
 	}
 
+	// Detect image file paths in the screen content for auto-forwarding.
+	var images []telegram.ImageRef
+	if s := a.mgr.GetSession(sessionID); s != nil {
+		if a.imageDedup == nil {
+			a.imageDedup = telegram.NewImageDedup(telegram.DefaultImageDedupTTL)
+		}
+		images = telegram.DetectImagePaths(lines, s.Project.Repo, a.imageDedup, project)
+	}
+
 	select {
 	case a.telegramCh <- telegram.Event{
 		Project:   project,
@@ -2497,6 +2510,7 @@ func (a *App) sendTelegramEvent(project, sessionID string, state SessionState, d
 		Kind:      kind,
 		Detail:    detail,
 		Screen:    lines,
+		Images:    images,
 	}:
 	default:
 		// Channel full — drop the event (bridge dedup will cover next tick).
