@@ -11,6 +11,25 @@ import (
 	"github.com/openconductorhq/openconductor/internal/logging"
 )
 
+// SendMode controls how an image is uploaded to Telegram.
+type SendMode int
+
+const (
+	// SendAsPhoto uploads via sendPhoto (compressed, inline preview).
+	SendAsPhoto SendMode = iota
+	// SendAsDocument uploads via sendDocument (original quality, no preview).
+	SendAsDocument
+)
+
+// ImageRef describes a local image file to send to Telegram before the
+// text message. The TUI populates these when an agent produces or references
+// image output (screenshots, diagrams, etc.).
+type ImageRef struct {
+	AbsPath  string   // absolute path to the image file on disk
+	Caption  string   // optional caption (HTML parse mode)
+	SendMode SendMode // photo vs document
+}
+
 // EventKind categorizes what happened in an agent session.
 type EventKind int
 
@@ -29,8 +48,9 @@ type Event struct {
 	Project   string // project name (used for topic lookup)
 	SessionID string // session ID (e.g. "proj" or "proj (2)")
 	Kind      EventKind
-	Detail    string   // human-readable description from attention detection
-	Screen    []string // current visible terminal lines
+	Detail    string     // human-readable description from attention detection
+	Screen    []string   // current visible terminal lines
+	Images    []ImageRef // detected image files to send before text
 }
 
 // bridge manages the outbound event flow from the TUI to Telegram, including

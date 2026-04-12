@@ -87,13 +87,17 @@ func (d *Detector) Check(ctx context.Context, projectName string, lastLines []st
 // classifyUncertain calls the L2 LLM classifier and maps its response
 // to an AttentionEvent. Returns nil if the LLM says WORKING or on error.
 func (d *Detector) classifyUncertain(ctx context.Context, projectName string, lastLines []string) *AttentionEvent {
-	state, err := d.classifier.Classify(ctx, projectName, lastLines)
+	result, err := d.classifier.Classify(ctx, projectName, lastLines)
 	if err != nil {
 		// On LLM error, treat as no event (fail open).
 		return nil
 	}
 
-	return classifierStateToEvent(projectName, state)
+	event := classifierStateToEvent(projectName, result.State)
+	if event != nil && len(result.ImagePaths) > 0 {
+		event.ImagePaths = result.ImagePaths
+	}
+	return event
 }
 
 // classifierStateToEvent maps a Classifier string result to an

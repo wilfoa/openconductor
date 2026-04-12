@@ -12,10 +12,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -538,6 +541,32 @@ func (b *Bot) sendEvent(e Event) {
 		return
 	}
 
+	// Send images before the text message so users see visual context first.
+	for _, img := range e.Images {
+		imgTopicID := b.state.Get(e.Project)
+		if imgTopicID == 0 {
+			continue
+		}
+
+		var err error
+		switch img.SendMode {
+		case SendAsPhoto:
+			err = b.sendPhotoToTopic(imgTopicID, img.AbsPath, img.Caption)
+			// 413 fallback: photo too large, try as document.
+			if err != nil && (strings.Contains(err.Error(), "413") || strings.Contains(err.Error(), "too large")) {
+				logging.Info("telegram: photo too large, falling back to document", "path", img.AbsPath)
+				err = b.sendDocumentToTopic(imgTopicID, img.AbsPath, img.Caption)
+			}
+		case SendAsDocument:
+			err = b.sendDocumentToTopic(imgTopicID, img.AbsPath, img.Caption)
+		}
+
+		if err != nil {
+			logging.Error("telegram: failed to send image", "path", img.AbsPath, "err", err)
+			// Per-image error isolation: continue with next image and text.
+		}
+	}
+
 	var messages []string
 	var keyboard *tgbotapi.InlineKeyboardMarkup
 
@@ -762,6 +791,88 @@ func (b *Bot) rawAPICall(method string, payload map[string]interface{}) error {
 	}
 
 	return nil
+}
+
+// rawMultipartCall sends a multipart/form-data request to the Telegram Bot API.
+// Used for sendPhoto and sendDocument which require file uploads.
+func (b *Bot) rawMultipartCall(method string, fields map[string]string, fileField string, filePath string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open file %s: %w", filePath, err)
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Write all string fields.
+	for k, v := range fields {
+		if err := writer.WriteField(k, v); err != nil {
+			return fmt.Errorf("write field %s: %w", k, err)
+		}
+	}
+
+	// Create the file part using the file's basename.
+	part, err := writer.CreateFormFile(fileField, filepath.Base(filePath))
+	if err != nil {
+		return fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return fmt.Errorf("copy file data: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/%s", url.PathEscape(b.token), method)
+	resp, err := http.Post(apiURL, writer.FormDataContentType(), &buf) //nolint:gosec // URL is constructed from trusted token
+	if err != nil {
+		return fmt.Errorf("API %s: %w", method, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("API %s: read body: %w", method, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API %s returned %d: %s", method, resp.StatusCode, string(respBody))
+	}
+
+	// Telegram can return HTTP 200 with {"ok": false} for some errors.
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(respBody, &result); err == nil && !result.OK {
+		return fmt.Errorf("API %s: %s", method, result.Description)
+	}
+
+	return nil
+}
+
+// sendPhotoToTopic uploads a photo to a Forum Topic via sendPhoto.
+func (b *Bot) sendPhotoToTopic(topicID int, filePath string, caption string) error {
+	fields := map[string]string{
+		"chat_id":           intToStr(int(b.cfg.ChatID)),
+		"message_thread_id": intToStr(topicID),
+		"caption":           caption,
+		"parse_mode":        "HTML",
+	}
+	return b.rawMultipartCall("sendPhoto", fields, "photo", filePath)
+}
+
+// sendDocumentToTopic uploads a document to a Forum Topic via sendDocument.
+func (b *Bot) sendDocumentToTopic(topicID int, filePath string, caption string) error {
+	fields := map[string]string{
+		"chat_id":           intToStr(int(b.cfg.ChatID)),
+		"message_thread_id": intToStr(topicID),
+		"caption":           caption,
+		"parse_mode":        "HTML",
+	}
+	return b.rawMultipartCall("sendDocument", fields, "document", filePath)
 }
 
 // handleCallback processes a callback query using the handler for routing
