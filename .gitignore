@@ -46,3 +46,4 @@ Thumbs.db
 
 # Persona temp files
 .persona-*
+.claude*
